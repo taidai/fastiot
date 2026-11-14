@@ -1,0 +1,60 @@
+{
+  "ticket": "01: configuration saves and copies do not write devices or fabricate observations",
+  "verified_on": "2026-11-15",
+  "baseline_commit": "600bbcef4528b502d980f322693e50840a5b7f32",
+  "scope": "Modbus IO creation/edit, CSV import/update, template application, and Bridge baseline for an initially absent target",
+  "environment": {
+    "go": "golang:1.27.3 container; CGO_ENABLED=0",
+    "test_store": "temporary isolated Simple IoT store with real HTTP API and product Bridge",
+    "protocol": "in-memory fake Bus; no real device connection",
+    "ui": "built product frontend served by a temporary API/runtime fixture; protocol I/O always routed to the fake Bus",
+    "credentials": "ephemeral local test account; no password or token recorded here",
+    "cleanup": "preview stopped, fixture container removed, launch configuration restored"
+  },
+  "red_evidence": [
+    {
+      "test": "TestPointConfigurationSaveDoesNotWriteDevice",
+      "observed": "Explicit write 73 followed by configuration-only save produced writes [73, 0]; existing observation 37 and target 73 were overwritten with zero and new timestamps."
+    },
+    {
+      "test": "TestPointCreationDoesNotInventObservation",
+      "observed": "A point with no successful reads acquired value=0, valueSet=0 and one fabricated observation-history entry."
+    }
+  ],
+  "automated_verification": [
+    {
+      "command": "go test -count=1 -run '^TestPoint(ConfigurationSaveDoesNotWriteDevice|CreationDoesNotInventObservation|TemplateAndCSVOnlyCopyConfiguration)$' ./internal/appapi",
+      "result": "passed",
+      "coverage": "Configuration preserves observed/target values and times; explicit writes still reach fake Bus; unobserved creation, template copies and CSV import have no value/valueSet or observation history; CSV update preserves runtime values; observation-field injection via configuration is rejected."
+    },
+    {
+      "command": "go test -count=1 ./internal/ems/bridge",
+      "result": "passed",
+      "coverage": "Existing Bridge tests including stored-target startup suppression."
+    },
+    {
+      "command": "go test -count=1 ./...",
+      "result": "passed",
+      "isolation": "read-only repository mount; no external container network; temporary test state only"
+    },
+    {
+      "command": "npm --prefix frontend run build",
+      "result": "passed",
+      "note": "TypeScript check and Vite build passed; existing bundle-size warning remains."
+    }
+  ],
+  "browser_verification": [
+    "Created a port and unobserved holding-register point through the real product UI: value and update time displayed as em dash; snapshot contained neither value nor valueSet; fake Bus writes remained empty.",
+    "Edited the point to writable through the UI while the fake source was unavailable: no observation, target, or device write was generated.",
+    "Enabled the fake observation source and obtained value 37; then disabled reads, explicitly entered 73 and confirmed dispatch through the UI: fake Bus recorded [73].",
+    "Edited and saved the point name through the UI: runtime value/valueSet records were byte-for-byte unchanged in the snapshot; fake Bus still recorded only [73].",
+    "Saved a model template from the sampled source, created a second port, selected it and applied the template through the UI: copied point had a distinct identity, no value/valueSet and displayed em dash; source retained 37 and target 73; no additional writes occurred.",
+    "No browser console errors were reported at the final check. Retained recent network requests had no failures; the browser buffer had discarded earlier requests, so this is not a full-session network audit."
+  ],
+  "not_claimed": [
+    "Real Modbus TCP or RTU framing, serial hardware, production credentials or target-device sign-off",
+    "The complete associated-configuration draft/apply contract or migration of already-persisted fabricated values",
+    "Unified command lifecycle, independent physical feedback, retry/authorization improvements assigned to later work",
+    "Completion of tickets 02 through 07 or the whole product specification"
+  ]
+}

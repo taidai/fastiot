@@ -147,22 +147,10 @@ func (h *Handler) createModbusIO(w http.ResponseWriter, r *http.Request, identit
 }
 
 func newModbusIONode(busID string, input ModbusIOInput) (data.NodeEdge, error) {
-	if input.Scale == 0 {
-		input.Scale = 1
-	}
-	encoded, err := data.Encode(client.ModbusIo{
-		ID: data.NewID(), Parent: busID, Description: input.Description,
-		ServerID: input.ServerID, Address: input.Address,
-		ModbusIOType: input.IOType, DataFormat: input.DataFormat,
-		ReadOnly: input.ReadOnly, Scale: input.Scale, Offset: input.Offset, Disabled: input.Disabled,
-	})
-	if err != nil {
-		return data.NodeEdge{}, err
-	}
-	encoded.Points = append(encoded.Points,
-		data.NewPointString("businessId", "", data.NewID()),
-		data.NewPointString(data.PointTypeUnits, "", input.Units))
-	return encoded, nil
+	return data.NodeEdge{
+		ID: data.NewID(), Parent: busID, Type: data.NodeTypeModbusIO,
+		Points: append(modbusIOConfigPoints(input), data.NewPointString("businessId", "", data.NewID())),
+	}, nil
 }
 
 func (h *Handler) importModbusCSV(w http.ResponseWriter, r *http.Request, identity Identity, busID string) {
@@ -613,24 +601,32 @@ func (h *Handler) updateModbusIO(w http.ResponseWriter, r *http.Request, identit
 	writeJSON(w, map[string]bool{"saved": true})
 }
 
-func (h *Handler) updateModbusIOFields(id, parent string, input ModbusIOInput, origin string) error {
+// modbusIOConfigPoints lists only editable configuration. Encoding ModbusIo
+// would also publish zero value/valueSet and reset runtime counters.
+func modbusIOConfigPoints(input ModbusIOInput) data.Points {
 	if input.Scale == 0 {
 		input.Scale = 1
 	}
-	encoded, err := data.Encode(client.ModbusIo{
-		ID: id, Parent: parent, Description: input.Description,
-		ServerID: input.ServerID, Address: input.Address,
-		ModbusIOType: input.IOType, DataFormat: input.DataFormat,
-		ReadOnly: input.ReadOnly, Scale: input.Scale, Offset: input.Offset, Disabled: input.Disabled,
-	})
-	if err != nil {
-		return err
+	return data.Points{
+		data.NewPointString(data.PointTypeDescription, "", input.Description),
+		data.NewPointFloat(data.PointTypeID, "", float64(input.ServerID)),
+		data.NewPointFloat(data.PointTypeAddress, "", float64(input.Address)),
+		data.NewPointString(data.PointTypeModbusIOType, "", input.IOType),
+		data.NewPointString(data.PointTypeDataFormat, "", input.DataFormat),
+		data.NewPointFloat(data.PointTypeReadOnly, "", data.BoolToFloat(input.ReadOnly)),
+		data.NewPointFloat(data.PointTypeScale, "", input.Scale),
+		data.NewPointFloat(data.PointTypeOffset, "", input.Offset),
+		data.NewPointFloat(data.PointTypeDisabled, "", data.BoolToFloat(input.Disabled)),
+		data.NewPointString(data.PointTypeUnits, "", input.Units),
 	}
-	encoded.Points = append(encoded.Points, data.NewPointString(data.PointTypeUnits, "", input.Units))
-	for i := range encoded.Points {
-		encoded.Points[i].Origin = origin
+}
+
+func (h *Handler) updateModbusIOFields(id, parent string, input ModbusIOInput, origin string) error {
+	points := modbusIOConfigPoints(input)
+	for i := range points {
+		points[i].Origin = origin
 	}
-	return client.SendNodePoints(h.nc, id, encoded.Points, true)
+	return client.SendNodePoints(h.nc, id, points, true)
 }
 
 func (h *Handler) exportModbusCSV(w http.ResponseWriter, identity Identity, busID string) {

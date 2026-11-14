@@ -183,6 +183,17 @@ func (b *Bridge) Sync(now time.Time) error {
 	if err != nil {
 		return err
 	}
+	// Discover an absent target too, so the first explicit write afterwards is
+	// not mistaken for a pre-existing startup valueSet.
+	b.mu.Lock()
+	for ioID := range owners {
+		if _, seen := b.lastSet[ioID]; !seen {
+			if _, hasTarget := sets[ioID]; !hasTarget {
+				b.lastSet[ioID] = now
+			}
+		}
+	}
+	b.mu.Unlock()
 	for ioID, set := range sets {
 		b.mu.Lock()
 		last, seen := b.lastSet[ioID]
