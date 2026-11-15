@@ -106,8 +106,7 @@ type Stats struct {
 	LatencyLastMS       float64
 }
 
-// Result describes one point read: Error/Invalid carries a failed attempt,
-// not a new value. SourceTime and TimeSource identify successful observations.
+// Result failures are attempts, not observations; never publish their zero Value.
 type Result struct {
 	DeviceID   string
 	PointID    string

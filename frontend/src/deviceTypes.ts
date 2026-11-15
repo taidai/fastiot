@@ -1,3 +1,5 @@
+import type { EmsStateValue } from "./api"
+
 export type LedgerDevice = {
   channel_id: string
   channel_name: string
@@ -94,14 +96,7 @@ export type UnitModel = {
   missing?: string[]
 }
 
-export type StateValue = {
-  device_id: string
-  point_id: string
-  value: { kind: string; number?: number; bool?: boolean; enum?: string }
-  quality: string
-  source_time: string
-  received_time: string
-}
+export type StateValue = EmsStateValue
 
 export type CommandOutcome = {
   request_id: string

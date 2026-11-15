@@ -1,0 +1,72 @@
+{
+  "ticket": "02-two-device-observation-quality",
+  "status": "verification_complete_review_pending",
+  "date": "2026-11-16",
+  "branch": "fix/ticket02-observation-quality",
+  "baseline": "d9e1d284936af07709368e5f2ff62836a4e20d26",
+  "scope": "Existing read-only Modbus acquisition, accepted observation state, public HTTP API, PointsView and DeviceDetail",
+  "environment": {
+    "protocol_boundary": "In-process, read-only fake channel.Bus; real Channel.RunOnce, Bridge, runtime, temporary SIOT/NATS store and authenticated product HTTP API",
+    "browser": "Preview tools: initial old UI reproduction, Vite-backed verification, then final compiled/embedded product UI",
+    "device_sources": "One isolated channel, independent station IDs 1 and 2; separate read blocks at station 1 addresses 10, 20 and 30",
+    "values": "Station 1/address 10 = 110 kPa; station 1/address 20 = 120 kPa; station 2/address 10 = 210 kPa; address 30 configured to fail before its first observation",
+    "fixture_max_age_seconds": 60,
+    "writes_observed": 0,
+    "credentials": "Random temporary local account credentials; no credentials or tokens included in this evidence"
+  },
+  "red_green": [
+    "Older/duplicate observations previously replaced 37 with 12 or renewed receipt time; public state regression now passes.",
+    "Future/missing/conflicting observation time previously poisoned recovery or stayed good; trusted baseline is now retained with an invalid reason.",
+    "Rejected samples previously produced four publications/history entries instead of one; runtime now forwards accepted observations only.",
+    "Public node snapshots previously replaced the observation timestamp with publication time; Bridge now preserves source time.",
+    "Failed reads and short-response decode failures previously disappeared; channel regressions now expose point-local failed attempts.",
+    "Aggregate device offline status previously invalidated a healthy neighboring point; point-level state regressions now pass.",
+    "Never-observed failed points previously emitted numeric zero and zero timestamps through the state API; API now omits numeric/source/receipt fields.",
+    "Old PointsView showed all three points offline while the API and DeviceDetail showed A/110 good; both pages now use one query/presentation path.",
+    "Old DeviceDetail included the other station's empty row; it now filters model points by station and queries observation identity by device plus point.",
+    "A first-read failure initially claimed to retain a previous observation; a failing presentation check led to the explicit no-valid-observation wording.",
+    "Cached good state initially remained good after expiry; API and presentation red tests now verify server evaluation/expiry bounds and monotonic cache aging."
+  ],
+  "browser_observations": [
+    "Created the channel and all read-only points through actual product forms, not a fabricated UI.",
+    "A/110 stayed normal while A/120 and the whole B/210 source failed; failed rows retained their original source and receipt times with read_failed explanations.",
+    "A/110 remained numerically constant while its accepted source time advanced; constant values were not treated as duplicates.",
+    "Injected older value 999 and an exact duplicate after pausing collection: both source and receipt time remained unchanged and current value stayed 110.",
+    "Injected a future timestamp: current value stayed 110 with invalid/future_source_time, and the page displayed a time anomaly. A later reliable observation of 111 restored good quality and declared device_observation provenance.",
+    "Paused observations became stale with their original times rather than being renewed by page polling.",
+    "Injected HTTP 503 for state queries: DeviceDetail retained cached values only with explicit query-failure labels; a newly opened PointsView displayed dashes rather than falling back to node values.",
+    "Restored the state endpoint and source reads: distinct values and normal quality recovered.",
+    "In the final compiled UI, a point failing before its first read displayed a dash, no source/receipt timestamp, and '尚无有效观测'; no zero was invented.",
+    "Delayed a real state HTTP response in a temporary browser test wrapper, switched from station 1 to station 2, then released it: station 2 still showed only B/210. The wrapper was restored in finally.",
+    "Final compiled API returned evaluated_at and expires_at; for a valid source at 2026-11-15T22:11:57.690682877Z, expiry was 2026-11-15T22:12:57.690682877Z. No-observation entries omitted expiry.",
+    "Verified DeviceDetail at 1280x1000 and 375x812; the 375px document width remained 375px. Viewport emulation was cleared afterwards.",
+    "Final compiled-page console reported no errors; the inspected recent network buffer had no failed requests. Intentional 503 tests occurred in the earlier verification run."
+  ],
+  "verification": {
+    "go": "PASS: go test -count=1 ./... in golang:1.27.3 with repository read-only and container networking disabled",
+    "frontend_observations": "PASS: npm --prefix frontend run check:observations",
+    "frontend_navigation": "PASS: npm --prefix frontend run check:navigation",
+    "frontend_consistency": "PASS: npm --prefix frontend run check:consistency",
+    "frontend_build": "PASS: npm --prefix frontend run build (tsc --noEmit and Vite)",
+    "warning": "Existing Vite bundle-size warning remains; no bundle-splitting work was included."
+  },
+  "rulings": [
+    {"decision":"Dedicated branch in the existing checkout, no implicit worktree", "why":"No worktree was requested; host instructions prohibit creating one implicitly", "cost_if_wrong":"Shared filesystem requires avoiding concurrent writers"},
+    {"decision":"Leave legacy Engine.Cycle unchanged", "why":"It uses State.Apply but has no normal-history or OnResults forwarding", "cost_if_wrong":"An overlooked downstream consumer could still publish rejected data"},
+    {"decision":"No trusted timestamp means no numeric observation in the public DTO", "why":"signal.Value's zero value is a legitimate numeric zero, not absence", "cost_if_wrong":"Consumers ignoring quality/time could still mistake an internal zero for a reading"},
+    {"decision":"Do not invent provenance for undeclared producers", "why":"Only the existing Modbus success path can explicitly declare platform_collection here", "cost_if_wrong":"Other adapters need their own provenance work before claiming this contract"},
+    {"decision":"Share query lifecycle and presentation, and key by device plus point", "why":"The browser reproduction exposed parent-health inference and cross-station rows", "cost_if_wrong":"A differently identified adapter needs an explicit identity mapping, not a guessed fallback"},
+    {"decision":"Expose server evaluation/expiry bounds and use monotonic request elapsed time in the UI", "why":"An outstanding query must not freeze an old normal label; the browser must not invent sensor TTLs", "cost_if_wrong":"Slow transport can conservatively mark data expired earlier, not later"},
+    {"decision":"Do not infer physical clock-reset epochs from indistinguishable old packets", "why":"Without independent ordering evidence an old packet could simply be delayed; it must not refresh current state", "cost_if_wrong":"An actual device clock reset may remain unusable until trustworthy time is restored; automatic epoch-reset recovery is not claimed"}
+  ],
+  "review": {"standards":"pending", "spec":"pending"},
+  "cleanup": "pending final review",
+  "limits": [
+    "The UI fixture exercises an in-process fake Bus, not a TCP wire simulator, RTU framing, physical serial/RS485 or real hardware.",
+    "M5 and real-device sign-off remain pending.",
+    "No production devices were connected and no automatic control was exercised.",
+    "No new protocol, general Device/Unit rewrite, history backfill, replacement identity migration or platform-wide timer redesign was included.",
+    "Existing OPC-UA direct publication and other adapters are not claimed as fully covered by this Modbus-focused slice.",
+    "No push or GitHub issue/PR publication was performed. Tickets 03–07 are not started by this work."
+  ]
+}

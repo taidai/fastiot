@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { IonCardContent } from "@ionic/react"
 import { fetchHistory, Node, point, request } from "./api"
 import SafetyModal from "./SafetyModal"
+import { describeObservation, observationKey, observationTimeLabel } from "./observations"
+import { useObservations } from "./useObservations"
 import { BatchActionBar, EmsButton, EmsCard, EmsInput, EmsOverlay, EmsRecordList, EmsSelect, EmsSelectOption, EmptyState, FilterToolbar, InlineNotice, MetricStrip, StatusBadge, type EmsTone } from "./components/ems"
 
 type Run = (action: () => Promise<unknown>) => Promise<boolean>
@@ -30,6 +32,7 @@ type PointRow = {
   command: string
   manual: boolean
   quality: Quality
+  observation: ReturnType<typeof describeObservation>
   role: PointRole
 }
 
@@ -39,7 +42,6 @@ const ioTypeNames: Record<string, string> = {
   modbusHoldingRegister: "保持寄存器",
   modbusInputRegister: "输入寄存器",
 }
-const qualityNames: Record<Quality, string> = { normal: "正常", stale: "过期", offline: "离线", unknown: "无值" }
 const qualityTones: Record<Quality, EmsTone> = { normal: "success", stale: "warning", offline: "danger", unknown: "neutral" }
 const qualityValueColors: Record<Quality, string> = { normal: "text-ems-ink", stale: "text-ems-amber", offline: "text-ems-danger", unknown: "text-ems-faint" }
 const formatOptions = ["uint16", "int16", "uint32", "int32", "float32"]
@@ -59,14 +61,10 @@ function roleLabel(role: PointRole) { return roleNames[role] || role }
 
 const savedViewsKey = "fastems-point-views"
 type SavedPointView = { name: string; query: string; bus: string; quality: string; access: string; role: string }
-const qualityFilterNames: Record<string, string> = { attention: "需处理", normal: "正常", stale: "过期", offline: "离线", unknown: "无值", disabled: "已停用" }
+const qualityFilterNames: Record<string, string> = { attention: "需处理", normal: "正常", stale: "过期", offline: "异常", unknown: "无值", disabled: "已停用" }
 
-function qualityReason(row: { disabled: boolean; quality: Quality; valueTime: string; errorCount: number }) {
-  if (row.disabled) return "已停用"
-  if (row.quality === "offline") return "通道或设备离线"
-  if (row.quality === "stale") return row.valueTime ? "数据已过期" : "尚未采集"
-  if (row.quality === "unknown") return row.errorCount > 0 ? "最近采集失败" : "无有效数据"
-  return "数据有效"
+function qualityReason(row: PointRow) {
+  return row.disabled ? "已停用" : row.observation.reason
 }
 
 function text(node: Node | undefined, type: string) {
@@ -86,42 +84,17 @@ function commandStatus(node: Node) {
     return ""
   }
 }
-function timeLabel(iso: string) {
-  if (!iso) return "—"
-  const date = new Date(iso)
-  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleTimeString("zh-CN", { hour12: false })
-}
 function ageLabel(iso: string) {
   if (!iso) return "无时间戳"
-  const age = Math.max(0, Date.now() - new Date(iso).getTime())
+  const age = Date.now() - new Date(iso).getTime()
   if (!Number.isFinite(age)) return "无时间戳"
+  if (age < 0) return "观测时间晚于本机时钟"
   if (age < 1000) return "刚刚"
   return `${Math.round(age / 1000)} 秒前`
 }
-function busState(bus?: Node): "online" | "degraded" | "offline" | "unknown" {
-  if (!bus) return "unknown"
-  const last = numberValue(bus, "lastGoodPoll", 0)
-  if (!last) return "offline"
-  const poll = numberValue(bus, "pollPeriod", 1000)
-  const timeout = numberValue(bus, "timeout", 1000)
-  const maxAge = Math.max(5, (poll * 5) / 1000, (timeout * 3) / 1000)
-  if (Date.now() / 1000 - last > maxAge) return "offline"
-  if (numberValue(bus, "errorCount", 0) > 0) return "degraded"
-  return "online"
-}
-function pointQuality(row: Pick<PointRow, "disabled" | "bus" | "value" | "valueTime" | "errorCount">): Quality {
-  if (row.disabled) return "unknown"
-  const state = busState(row.bus)
-  if (state === "offline" || state === "unknown") return "offline"
-  if (row.value === undefined || !row.valueTime) return "unknown"
-  const age = Date.now() - new Date(row.valueTime).getTime()
-  if (!Number.isFinite(age) || age > 15000) return "stale"
-  if (state === "degraded" || row.errorCount > 0) return "stale"
-  return "normal"
-}
 function displayValue(row: PointRow) {
-  if (row.value === undefined) return "—"
-  return `${row.value}${row.units ? ` ${row.units}` : ""}`
+  if (row.observation.text === "—") return "—"
+  return `${row.observation.text}${row.units ? ` ${row.units}` : ""}`
 }
 function csvCell(value: string | number) {
   const text = String(value)
@@ -172,6 +145,7 @@ export default function PointsView({ token, nodes, isAdmin, canOperate, busy, ru
   openHistory: (nodeID: string) => void
   goChannels: () => void
 }) {
+  const observations = useObservations(token)
   const [query, setQuery] = useState("")
   const [busFilter, setBusFilter] = useState("")
   const [qualityFilter, setQualityFilter] = useState("all")
@@ -229,6 +203,8 @@ export default function PointsView({ token, nodes, isAdmin, canOperate, busy, ru
   const busMap = useMemo(() => new Map(buses.map((bus) => [bus.id, bus])), [buses])
   const rows = useMemo(() => nodes.filter((node) => node.type === "modbusIo").map((node) => {
     const bus = busMap.get(node.parent)
+    const deviceID = `${node.parent}/${numberValue(node, "id", 1)}`
+    const observation = describeObservation(observations.values[observationKey(deviceID, node.id)], observations)
     const base = {
       node,
       name: text(node, "description") || node.id,
@@ -244,15 +220,17 @@ export default function PointsView({ token, nodes, isAdmin, canOperate, busy, ru
       units: text(node, "units"),
       readOnly: boolValue(node, "readOnly"),
       disabled: boolValue(node, "disabled"),
-      value: point(node, "value")?.value,
+      value: observation.numericValue,
       valueSet: point(node, "valueSet")?.value,
-      valueTime: point(node, "value")?.time || "",
+      valueTime: observation.sourceTime,
+      observation,
       errorCount: numberValue(node, "errorCount", 0),
       command: commandStatus(node),
       manual: boolValue(node, "easyemsManual"),
     }
-    return { ...base, quality: pointQuality(base), role: pointRole(base) }
-  }).sort((a, b) => a.busName.localeCompare(b.busName, "zh-CN") || a.serverID - b.serverID || a.address - b.address), [nodes, busMap])
+    const quality: Quality = base.disabled ? "unknown" : observation.quality === "good" ? "normal" : observation.quality === "stale" ? "stale" : observation.quality === "invalid" ? "offline" : "unknown"
+    return { ...base, quality, role: pointRole(base) }
+  }).sort((a, b) => a.busName.localeCompare(b.busName, "zh-CN") || a.serverID - b.serverID || a.address - b.address), [nodes, busMap, observations.values, observations.error, observations.loading, observations.evaluatedAt, observations.elapsedMs])
 
   const visible = useMemo(() => rows.filter((row) => {
     if (busFilter && row.node.parent !== busFilter) return false
@@ -567,11 +545,12 @@ export default function PointsView({ token, nodes, isAdmin, canOperate, busy, ru
   }
 
   return <section className="points-page grid min-w-0 gap-4">
+    {observations.error && <InlineNotice tone="danger">观测状态读取失败：{observations.error}。以下数值仅为上次查询结果。</InlineNotice>}
     <MetricStrip items={[
       { label: "全部点位", value: counts.total, note: "实时值每 2 秒刷新" },
       { label: "正常", value: counts.normal, tone: "success" },
       { label: "过期", value: counts.stale, tone: counts.stale ? "warning" : "neutral" },
-      { label: "离线", value: counts.offline, tone: counts.offline ? "danger" : "neutral" },
+      { label: "异常", value: counts.offline, tone: counts.offline ? "danger" : "neutral" },
       { label: "可写", value: counts.writable, tone: "info" },
       { label: "已选", value: selected.size },
     ]} />
@@ -646,8 +625,8 @@ export default function PointsView({ token, nodes, isAdmin, canOperate, busy, ru
             { key: "format", label: "格式", render: (row) => row.format },
             { key: "scale", label: "缩放 / 单位", render: (row) => `${row.scale} / ${row.units || "—"}` },
             { key: "value", label: "当前值", render: (row) => <strong className={`whitespace-nowrap tabular-nums ${qualityValueColors[row.quality]}`}>{displayValue(row)}</strong> },
-            { key: "quality", label: "质量", render: (row) => <><StatusBadge tone={row.disabled ? "neutral" : qualityTones[row.quality]}>{row.disabled ? "已停用" : qualityNames[row.quality]}</StatusBadge><small className="mt-1 block text-ems-muted">{qualityReason(row)}</small></> },
-            { key: "time", label: "更新时间", render: (row) => <><span title={row.valueTime}>{timeLabel(row.valueTime)}</span><small className="block text-ems-muted">{ageLabel(row.valueTime)}</small></> },
+            { key: "quality", label: "质量", render: (row) => <><StatusBadge tone={row.disabled ? "neutral" : qualityTones[row.quality]}>{row.disabled ? "已停用" : row.observation.label}</StatusBadge><small className="mt-1 block text-ems-muted">{qualityReason(row)}</small></> },
+            { key: "time", label: "观测 / 接收时间", render: (row) => <><span title={row.valueTime}>{observationTimeLabel(row.valueTime)}</span><small className="block text-ems-muted">{row.observation.timeSource} · {ageLabel(row.valueTime)}</small><small className="block text-ems-muted">接收：{observationTimeLabel(row.observation.receivedTime)}</small></> },
             { key: "action", label: "操作", render: (row) => <EmsButton variant="quiet" size="small" onClick={(event) => { event.stopPropagation(); showDetail(row) }}>详情</EmsButton> },
           ]}
           mobileCard={(row) => <div className="grid min-w-0 gap-3">
@@ -658,7 +637,7 @@ export default function PointsView({ token, nodes, isAdmin, canOperate, busy, ru
               </div>
               <div className="shrink-0 text-right"><span className="block text-[10px] text-ems-muted">当前值</span><strong className={`text-lg tabular-nums ${qualityValueColors[row.quality]}`}>{displayValue(row)}</strong></div>
             </div>
-            <div className="flex flex-wrap items-center justify-between gap-2"><StatusBadge tone={row.disabled ? "neutral" : qualityTones[row.quality]}>{row.disabled ? "已停用" : qualityNames[row.quality]}</StatusBadge><span className="text-xs text-ems-muted">{qualityReason(row)} · {ageLabel(row.valueTime)}</span></div>
+            <div className="flex flex-wrap items-center justify-between gap-2"><StatusBadge tone={row.disabled ? "neutral" : qualityTones[row.quality]}>{row.disabled ? "已停用" : row.observation.label}</StatusBadge><span className="text-xs text-ems-muted">{qualityReason(row)} · {ageLabel(row.valueTime)}</span></div>
             <div className="min-w-0 text-xs text-ems-muted"><span className="block">{row.busName} · 站号 {row.serverID} / 地址 {row.address}</span><span className="block break-all">{row.busAddress || "—"}</span></div>
             <div className="flex items-center justify-between gap-2"><StatusBadge tone="info" dot={false}>{roleLabel(row.role)}</StatusBadge><EmsButton variant="secondary" size="small" onClick={(event) => { event.stopPropagation(); showDetail(row) }}>详情</EmsButton></div>
           </div>}
@@ -725,7 +704,7 @@ export default function PointsView({ token, nodes, isAdmin, canOperate, busy, ru
         <div className="grid gap-2 rounded-xl border border-ems-line bg-white/65 p-4">
           <span className="text-xs text-ems-muted">当前值</span>
           <strong className={`text-3xl tabular-nums ${qualityValueColors[openRow.quality]}`}>{displayValue(openRow)}</strong>
-          <div className="flex flex-wrap items-center gap-2"><StatusBadge tone={openRow.disabled ? "neutral" : qualityTones[openRow.quality]}>{openRow.disabled ? "已停用" : qualityNames[openRow.quality]}</StatusBadge><span className="text-xs text-ems-muted">{ageLabel(openRow.valueTime)} · {qualityReason(openRow)}</span></div>
+          <div className="flex flex-wrap items-center gap-2"><StatusBadge tone={openRow.disabled ? "neutral" : qualityTones[openRow.quality]}>{openRow.disabled ? "已停用" : openRow.observation.label}</StatusBadge><span className="text-xs text-ems-muted">{ageLabel(openRow.valueTime)} · {qualityReason(openRow)}</span></div>
         </div>
         <PointSparkline token={token} nodeId={openRow.node.id} />
         {openRow.command && <InlineNotice>最近命令：{({ accepted: "已接受", confirmed: "已回读", unknown: "结果未知", failed: "失败" } as Record<string, string>)[openRow.command] || openRow.command}</InlineNotice>}
@@ -762,6 +741,10 @@ export default function PointsView({ token, nodes, isAdmin, canOperate, busy, ru
           <div className="flex justify-end gap-2"><EmsButton variant="secondary" onClick={() => { setEditing(false); setDraft(null) }}>取消</EmsButton><EmsButton busy={busy} onClick={saveEdit}>保存点位</EmsButton></div>
         </div> : <dl className="grid gap-3">
           {[
+            ["观测时间", observationTimeLabel(openRow.observation.sourceTime)],
+            ["接收时间", observationTimeLabel(openRow.observation.receivedTime)],
+            ["时间来源", openRow.observation.timeSource],
+            ["最近尝试", observationTimeLabel(openRow.observation.lastAttemptTime)],
             ["通道", `${openRow.busName} · ${openRow.busAddress}`],
             ["站号 / 地址", `${openRow.serverID} / ${openRow.address}`],
             ["类型 / 格式", `${ioTypeNames[openRow.ioType] || openRow.ioType} · ${openRow.format}`],

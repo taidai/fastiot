@@ -3,12 +3,13 @@ import { createPortal } from "react-dom"
 import { EmsButton, EmsOverlay, InlineNotice } from "./components/ems"
 import { ackAlarm, closeAlarm, downloadCSV, EmsAlarm, HistoryResponse, request } from "./api"
 import AckDialog from "./AckDialog"
+import { describeObservation, observationTimeLabel } from "./observations"
+import { useObservations } from "./useObservations"
 import type { CommandOutcome, LedgerDevice, StateValue, UnitCommand, UnitModel } from "./deviceTypes"
 
 type Tab = "overview" | "points" | "commands" | "history" | "alarms" | "verify"
 
 const healthNames: Record<string, string> = { healthy: "在线", degraded: "不稳定", offline: "离线", unknown: "未知" }
-const qualityNames: Record<string, string> = { good: "正常", stale: "过期", invalid: "无效", uninitialized: "无值" }
 const stateNames: Record<string, string> = {
   queued: "排队", running: "执行中", confirmed: "已确认", failed: "失败", timeout: "超时", unknown: "结果未知",
 }
@@ -21,11 +22,7 @@ function formatNumber(value?: number) {
 }
 
 function formatValue(value?: StateValue) {
-  if (!value) return "—"
-  if (value.value.kind === "number") return formatNumber(value.value.number)
-  if (value.value.kind === "bool") return value.value.bool ? "合" : "分"
-  if (value.value.kind === "enum") return value.value.enum || "—"
-  return "—"
+  return describeObservation(value).text
 }
 
 function timeText(value?: string) {
@@ -52,7 +49,9 @@ export default function DeviceDetail({ token, device, canConfigure, canOperate, 
   const deviceID = `${device.channel_id}/${device.server_id}`
   const [tab, setTab] = useState<Tab>("overview")
   const [model, setModel] = useState<UnitModel | null>(null)
-  const [values, setValues] = useState<Record<string, StateValue>>({})
+  const observations = useObservations(token)
+  const values = useMemo(() => Object.fromEntries(Object.values(observations.values)
+    .filter(value => value.device_id === deviceID).map(value => [value.point_id, value])), [observations.values, deviceID])
   const [alarms, setAlarms] = useState<EmsAlarm[]>([])
   const [outcomes, setOutcomes] = useState<CommandOutcome[]>([])
   const [loading, setLoading] = useState(true)
@@ -86,7 +85,7 @@ export default function DeviceDetail({ token, device, canConfigure, canOperate, 
     try {
       const result = await request<UnitModel>(token, `${base}/model`)
       const commands = result.commands || []
-      const points = result.points || []
+      const points = (result.points || []).filter(point => point.server_id === device.server_id)
       setModel({ ...result, commands, points, profiles: result.profiles || [] })
       setHistoryPoint((current) => current || points[0]?.id || "")
       setParamValues(Object.fromEntries(commands.map((command) => [
@@ -96,22 +95,20 @@ export default function DeviceDetail({ token, device, canConfigure, canOperate, 
     } catch (cause) {
       report(cause, "设备模型读取失败")
     }
-  }, [base, report, token])
+  }, [base, device.server_id, report, token])
 
   const loadLive = useCallback(async () => {
     try {
-      const [stateResult, alarmResult, commandResult] = await Promise.all([
-        request<{ values: StateValue[] }>(token, "/ems/state"),
+      const [alarmResult, commandResult] = await Promise.all([
         request<{ alarms: EmsAlarm[] }>(token, "/ems/alarms"),
         request<{ commands: CommandOutcome[] }>(token, `${base}/commands`),
       ])
-      setValues(Object.fromEntries((stateResult.values || []).filter((value) => value.device_id === deviceID).map((value) => [value.point_id, value])))
       setAlarms(alarmResult.alarms || [])
       setOutcomes(commandResult.commands || [])
     } catch (cause) {
       report(cause, "设备状态读取失败")
     }
-  }, [base, deviceID, report, token])
+  }, [base, report, token])
 
   useEffect(() => {
     let cancelled = false
@@ -153,10 +150,7 @@ export default function DeviceDetail({ token, device, canConfigure, canOperate, 
   ), [alarms, deviceID, pointIDs])
   const activeAlarms = deviceAlarms.filter((alarm) => alarm.active)
   const activeCommand = outcomes.find((outcome) => !isTerminal(outcome.state))
-  const badPoints = points.filter((point) => {
-    const value = values[point.id]
-    return value && value.quality !== "good"
-  }).length
+  const badPoints = points.filter(point => describeObservation(values[point.id], observations).quality !== "good").length
 
   const shownPoints = useMemo(() => {
     const text = query.trim().toLowerCase()
@@ -300,6 +294,7 @@ export default function DeviceDetail({ token, device, canConfigure, canOperate, 
       </nav>
 
       {error && <div className="device-inline-error" role="alert">{error}<button onClick={() => setError("")}>关闭</button></div>}
+      {observations.error && <div className="device-inline-error" role="alert">观测状态读取失败：{observations.error}。以下数值仅为上次查询结果。</div>}
 
       <div className="device-workspace-body">
         {loading && <div className="empty-state"><strong>正在读取设备模型…</strong></div>}
@@ -347,18 +342,19 @@ export default function DeviceDetail({ token, device, canConfigure, canOperate, 
 
         {!loading && tab === "points" && <div className="device-tab-page">
           <div className="device-toolbar"><input aria-label="搜索点位" placeholder="搜索点位名称、地址或类型" value={query} onChange={(event) => setQuery(event.target.value)} /><span>已映射 {mappedCount} / {points.length}</span></div>
-          <div className="device-table-wrap"><table className="device-table"><thead><tr><th>点位</th><th>角色</th><th>地址</th><th>类型</th><th>读/写</th><th>缩放 / 单位</th><th>当前值</th><th>质量</th><th>更新时间</th><th>映射</th></tr></thead><tbody>
+          <div className="device-table-wrap"><table className="device-table"><thead><tr><th>点位</th><th>角色</th><th>地址</th><th>类型</th><th>读/写</th><th>缩放 / 单位</th><th>当前值</th><th>质量</th><th>观测 / 接收时间</th><th>映射</th></tr></thead><tbody>
             {shownPoints.map((point) => {
               const value = values[point.id]
+              const observation = describeObservation(value, observations)
               const role = rolesByPointID[point.id]
               return <tr key={point.id}>
                 <td><strong>{point.name || point.id}</strong><small>{point.id}</small></td>
                 <td>{role ? <span className={`point-role ${role}`}>{pointRoleNames[role] || role}</span> : "—"}</td>
                 <td>{point.address}</td><td>{point.io_type || "—"}</td><td>{point.read_only ? "只读" : "可写"}</td>
                 <td>{point.scale && point.scale !== 1 ? point.scale : "1"} {point.unit || ""}</td>
-                <td className="device-value">{formatValue(value)}</td>
-                <td><span className={`device-quality ${value?.quality || "uninitialized"}`}>{qualityNames[value?.quality || "uninitialized"] || value?.quality || "无值"}</span></td>
-                <td>{timeText(value?.source_time)}</td>
+                <td className="device-value">{observation.text}</td>
+                <td><span className={`device-quality ${observation.quality}`}>{observation.label}</span><small>{observation.reason}</small></td>
+                <td>{observationTimeLabel(observation.sourceTime)}<small>{observation.timeSource}</small><small>接收：{observationTimeLabel(observation.receivedTime)}</small></td>
                 <td>{mappedPointIDs.has(point.id) ? <span className="ledger-verified">已映射</span> : <span className="ledger-unverified">未映射</span>}</td>
               </tr>
             })}</tbody></table></div>

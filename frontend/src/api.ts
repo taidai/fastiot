@@ -83,8 +83,9 @@ export async function login(email: string, password: string) {
   return (await response.json()) as { token: string }
 }
 
-export async function request<T>(token: string, path: string, method = "GET", body?: unknown): Promise<T> {
+export async function request<T>(token: string, path: string, method = "GET", body?: unknown, signal?: AbortSignal): Promise<T> {
   const response = await fetch(`/api${path}`, {
+    signal,
     method,
     headers: {
       Authorization: `Bearer ${token}`,
@@ -262,8 +263,12 @@ export type EmsStateValue = {
   point_id: string
   value: { kind: string; number?: number; bool?: boolean; enum?: string }
   quality: string
-  source_time: string
-  received_time: string
+  source_time?: string
+  received_time?: string
+  reason?: string
+  time_source?: string
+  last_attempt_time?: string
+  expires_at?: string
 }
 
 export type EmsHistorySample = {
@@ -272,8 +277,8 @@ export type EmsHistorySample = {
   source_time: string
 }
 
-export async function fetchEmsState(token: string) {
-  return request<{ values: EmsStateValue[] }>(token, "/ems/state")
+export async function fetchEmsState(token: string, signal?: AbortSignal) {
+  return request<{ values: EmsStateValue[]; evaluated_at: string }>(token, "/ems/state", "GET", undefined, signal)
 }
 
 export async function fetchEmsHistory(token: string, deviceId: string, pointId: string, start: Date, end: Date) {

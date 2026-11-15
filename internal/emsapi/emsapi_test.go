@@ -172,9 +172,11 @@ func TestStateExposesIndependentPointQualityAndTime(t *testing.T) {
 		SourceTime      *time.Time `json:"source_time"`
 		ReceivedTime    *time.Time `json:"received_time"`
 		LastAttemptTime *time.Time `json:"last_attempt_time"`
+		ExpiresAt       *time.Time `json:"expires_at"`
 	}
 	var payload struct {
-		Values []pointState `json:"values"`
+		Values      []pointState `json:"values"`
+		EvaluatedAt *time.Time   `json:"evaluated_at"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
@@ -188,6 +190,9 @@ func TestStateExposesIndependentPointQualityAndTime(t *testing.T) {
 	}
 	good, failed, missing := byID["working"], byID["failed"], byID["missing"]
 	last := first.Add(3 * time.Second)
+	if payload.EvaluatedAt == nil || payload.EvaluatedAt.Before(last) || good.ExpiresAt == nil || !good.ExpiresAt.Equal(last.Add(time.Minute)) || missing.ExpiresAt != nil {
+		t.Errorf("state lacks authoritative freshness bounds: evaluated=%v good=%v missing=%v", payload.EvaluatedAt, good.ExpiresAt, missing.ExpiresAt)
+	}
 	if good.Quality != "good" || good.Value.Number == nil || *good.Value.Number != 37 || good.TimeSource != "platform_collection" || good.SourceTime == nil || !good.SourceTime.Equal(last) || good.ReceivedTime == nil || !good.ReceivedTime.Equal(last.Add(time.Millisecond)) {
 		t.Errorf("successful point lost provenance or quality: %+v", good)
 	}

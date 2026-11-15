@@ -200,7 +200,8 @@ func kindName(kind signal.Kind) string {
 }
 
 func (h *Handler) state(w http.ResponseWriter, access Access) {
-	values := h.Service.Snapshot()
+	evaluatedAt := time.Now()
+	values := h.Service.State.Snapshot(evaluatedAt, h.Service.MaxAge)
 	type entry struct {
 		DeviceID        string     `json:"device_id"`
 		PointID         string     `json:"point_id"`
@@ -211,6 +212,7 @@ func (h *Handler) state(w http.ResponseWriter, access Access) {
 		SourceTime      *time.Time `json:"source_time,omitempty"`
 		ReceivedTime    *time.Time `json:"received_time,omitempty"`
 		LastAttemptTime time.Time  `json:"last_attempt_time"`
+		ExpiresAt       *time.Time `json:"expires_at,omitempty"`
 	}
 	entries := make([]entry, 0, len(values))
 	for _, value := range values {
@@ -225,10 +227,14 @@ func (h *Handler) state(w http.ResponseWriter, access Access) {
 		if !value.SourceTime.IsZero() {
 			current.Value = toDTO(value.Value)
 			current.SourceTime, current.ReceivedTime = &value.SourceTime, &value.ReceivedTime
+			if h.Service.MaxAge > 0 {
+				expires := value.SourceTime.Add(h.Service.MaxAge)
+				current.ExpiresAt = &expires
+			}
 		}
 		entries = append(entries, current)
 	}
-	writeJSON(w, map[string]any{"values": entries})
+	writeJSON(w, map[string]any{"values": entries, "evaluated_at": evaluatedAt})
 }
 
 type pointView struct {
