@@ -1,6 +1,7 @@
 package state
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -103,6 +104,36 @@ func TestUntrustedTimeDoesNotPoisonRecovery(t *testing.T) {
 	})
 }
 
+func TestInvalidObservationCannotReplaceTrustedValue(t *testing.T) {
+	for _, bad := range []channel.Result{
+		{DeviceID: "d1", PointID: "temp", Value: signal.Num(math.NaN()), Quality: signal.Good, SourceTime: t0.Add(time.Second)},
+		{DeviceID: "d1", PointID: "temp", Value: signal.Num(99), Quality: signal.Invalid, SourceTime: t0.Add(time.Second)},
+	} {
+		store := New()
+		store.Apply(t0, []channel.Result{result("d1", "temp", 37)})
+		if accepted := store.Apply(t0.Add(time.Second), []channel.Result{bad}); len(accepted) != 0 {
+			t.Error("invalid observation accepted for publication")
+		}
+		value, _ := store.Get(t0.Add(time.Second), "d1", "temp", time.Minute)
+		if value.Value.Num != 37 || value.Quality != signal.Invalid || value.Reason == "" || !value.SourceTime.Equal(t0) {
+			t.Errorf("invalid input replaced or refreshed trusted data: %+v", value)
+		}
+	}
+}
+
+func TestClockRollbackDoesNotMakeFutureCurrentUsable(t *testing.T) {
+	store := New()
+	store.Apply(t0, []channel.Result{result("d1", "temp", 37)})
+	value, _ := store.Get(t0.Add(-time.Second), "d1", "temp", time.Minute)
+	if value.Quality != signal.Invalid || value.Reason == "" {
+		t.Errorf("clock rollback left a future observation usable: %+v", value)
+	}
+	value, _ = store.Get(t0.Add(time.Second), "d1", "temp", time.Minute)
+	if value.Quality != signal.Good {
+		t.Errorf("trusted time recovery remained poisoned: %+v", value)
+	}
+}
+
 func TestValueGoesStaleByAge(t *testing.T) {
 	store := New()
 	store.Apply(t0, []channel.Result{result("d1", "temp", 35.1)})
@@ -115,13 +146,47 @@ func TestValueGoesStaleByAge(t *testing.T) {
 	}
 }
 
-func TestOfflineDeviceMarksPointsStale(t *testing.T) {
+func TestPointFailurePreservesLastObservation(t *testing.T) {
+	store := New()
+	good := result("d1", "pressure", 37)
+	store.Apply(t0, []channel.Result{good, result("d1", "temperature", 41), result("d2", "pressure", 53)})
+	failed := channel.Result{DeviceID: "d1", PointID: "pressure", Quality: signal.Invalid, Error: "read_failed"}
+	accepted := store.Apply(t0.Add(time.Second), []channel.Result{failed})
+	if len(accepted) != 0 {
+		t.Fatal("failed attempt was published as a new value")
+	}
+	store.SetHealth("d1", channel.HealthOffline, t0.Add(time.Second))
+	value, _ := store.Get(t0.Add(time.Second), "d1", "pressure", time.Minute)
+	if value.Value.Num != 37 || value.Quality != signal.Invalid || value.Reason != "read_failed" || !value.SourceTime.Equal(t0) || !value.ReceivedTime.Equal(t0) {
+		t.Errorf("failed point did not retain its last observation: %+v", value)
+	}
+	for _, key := range []Key{{"d1", "temperature"}, {"d2", "pressure"}} {
+		value, _ := store.Get(t0.Add(time.Second), key.DeviceID, key.PointID, time.Minute)
+		if value.Quality != signal.Good {
+			t.Errorf("unrelated successful point was downgraded: %+v", value)
+		}
+	}
+	store.Apply(t0.Add(2*time.Second), []channel.Result{{DeviceID: "d3", PointID: "missing", Quality: signal.Invalid, Error: "read_failed"}})
+	value, ok := store.Get(t0.Add(2*time.Second), "d3", "missing", time.Minute)
+	if !ok || !value.SourceTime.IsZero() || !value.ReceivedTime.IsZero() || value.Quality != signal.Invalid {
+		t.Errorf("first failure invented an observation: %+v", value)
+	}
+	good.Value = signal.Num(38)
+	good.SourceTime = t0.Add(3 * time.Second)
+	store.Apply(t0.Add(3*time.Second), []channel.Result{good})
+	value, _ = store.Get(t0.Add(3*time.Second), "d1", "pressure", time.Minute)
+	if value.Value.Num != 38 || value.Quality != signal.Good || value.Reason != "" {
+		t.Errorf("point did not recover independently of aggregate health: %+v", value)
+	}
+}
+
+func TestDeviceHealthDoesNotOverridePointQuality(t *testing.T) {
 	store := New()
 	store.Apply(t0, []channel.Result{result("d1", "temp", 35.1)})
 	store.SetHealth("d1", channel.HealthOffline, t0)
 	value, _ := store.Get(t0, "d1", "temp", time.Minute)
-	if value.Quality != signal.Stale {
-		t.Fatalf("offline device quality = %s, want stale", value.Quality)
+	if value.Quality != signal.Good {
+		t.Fatalf("aggregate health overrode a successful point: %s", value.Quality)
 	}
 	if store.Health("d1") != channel.HealthOffline {
 		t.Fatal("health not stored")

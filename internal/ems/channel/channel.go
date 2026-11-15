@@ -106,13 +106,16 @@ type Stats struct {
 	LatencyLastMS       float64
 }
 
-// Result is one successfully read point.
+// Result describes one point read: Error/Invalid carries a failed attempt,
+// not a new value. SourceTime and TimeSource identify successful observations.
 type Result struct {
 	DeviceID   string
 	PointID    string
 	Value      signal.Value
 	Quality    signal.Quality
 	SourceTime time.Time
+	TimeSource string
+	Error      string
 }
 
 // WriteResult is the outcome of one queued write. A failure means the device
@@ -289,6 +292,12 @@ func (c *Channel) RunOnce(ctx context.Context, now time.Time) ([]Result, []Write
 			if err != nil {
 				deviceOK = false
 				c.recordFailure(device.ID, err, now)
+				for _, index := range block.points {
+					results = append(results, Result{
+						DeviceID: device.ID, PointID: device.Points[index].ID,
+						Quality: signal.Invalid, Error: "read_failed",
+					})
+				}
 				continue
 			}
 			for _, index := range block.points {
@@ -297,11 +306,15 @@ func (c *Channel) RunOnce(ctx context.Context, now time.Time) ([]Result, []Write
 				if err != nil {
 					deviceOK = false
 					c.recordFailure(device.ID, err, now)
+					results = append(results, Result{
+						DeviceID: device.ID, PointID: point.ID,
+						Quality: signal.Invalid, Error: "decode_failed",
+					})
 					continue
 				}
 				results = append(results, Result{
 					DeviceID: device.ID, PointID: point.ID,
-					Value: value, Quality: signal.Good, SourceTime: now,
+					Value: value, Quality: signal.Good, SourceTime: now, TimeSource: "platform_collection",
 				})
 			}
 		}

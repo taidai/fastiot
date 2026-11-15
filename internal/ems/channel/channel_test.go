@@ -120,6 +120,69 @@ func find(results []Result, deviceID, pointID string) (Result, bool) {
 	return Result{}, false
 }
 
+type partialReadBus struct{ *fakeBus }
+
+func (b partialReadBus) ReadHoldingRegisters(server byte, address, count uint16) ([]uint16, error) {
+	if server == 1 && address == 20 {
+		return nil, errors.New("simulated block timeout")
+	}
+	return b.fakeBus.ReadHoldingRegisters(server, address, count)
+}
+
+func TestReadFailureIsLocalToPoint(t *testing.T) {
+	bus := newFakeBus()
+	bus.holding[10], bus.holding[30] = 37, 41
+	ch, err := New("c1", partialReadBus{bus}, []Device{
+		device("d1", 1,
+			Point{ID: "working", Function: HoldingRegister, Address: 10, Format: "uint16", Kind: signal.Number},
+			Point{ID: "failed", Function: HoldingRegister, Address: 20, Format: "uint16", Kind: signal.Number}),
+		device("d2", 2, Point{ID: "other", Function: HoldingRegister, Address: 30, Format: "uint16", Kind: signal.Number}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		results, _ := ch.RunOnce(context.Background(), t0.Add(time.Duration(i)*time.Second))
+		working, ok := find(results, "d1", "working")
+		if !ok || working.Quality != signal.Good || working.Value.Num != 37 {
+			t.Errorf("same-device successful point lost: %+v", working)
+		}
+		failed, ok := find(results, "d1", "failed")
+		if !ok || failed.Quality != signal.Invalid || failed.Error == "" || !failed.SourceTime.IsZero() {
+			t.Errorf("failed point lacks an explicit invalid attempt without a sample timestamp: %+v found=%v", failed, ok)
+		}
+		other, ok := find(results, "d2", "other")
+		if !ok || other.Quality != signal.Good || other.Value.Num != 41 {
+			t.Errorf("another device was affected by the failed block: %+v", other)
+		}
+	}
+}
+
+type shortReadBus struct{ *fakeBus }
+
+func (b shortReadBus) ReadHoldingRegisters(byte, uint16, uint16) ([]uint16, error) {
+	return []uint16{37}, nil
+}
+
+func TestDecodeFailureIsLocalToPoint(t *testing.T) {
+	ch, err := New("c1", shortReadBus{newFakeBus()}, []Device{device("d1", 1,
+		Point{ID: "working", Function: HoldingRegister, Address: 10, Format: "uint16", Kind: signal.Number},
+		Point{ID: "short", Function: HoldingRegister, Address: 11, Format: "uint16", Kind: signal.Number},
+	)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, _ := ch.RunOnce(context.Background(), t0)
+	good, ok := find(results, "d1", "working")
+	if !ok || good.Quality != signal.Good || good.Value.Num != 37 {
+		t.Errorf("valid part of response was discarded: %+v", good)
+	}
+	failed, ok := find(results, "d1", "short")
+	if !ok || failed.Quality != signal.Invalid || failed.Error != "decode_failed" || !failed.SourceTime.IsZero() {
+		t.Errorf("short response did not report a point-local decode failure: %+v", failed)
+	}
+}
+
 func TestPollsAllDevicesOnOneChannel(t *testing.T) {
 	bus := newFakeBus()
 	bus.holding[10] = 351
@@ -165,8 +228,8 @@ func TestOneFailingDeviceDoesNotStopTheChannel(t *testing.T) {
 		if _, ok := find(results, "d3", "temp"); !ok {
 			t.Fatalf("run %d: healthy device d3 missing", i)
 		}
-		if _, ok := find(results, "d2", "temp"); ok {
-			t.Fatalf("run %d: failing device d2 returned a value", i)
+		if failed, ok := find(results, "d2", "temp"); !ok || failed.Quality != signal.Invalid || failed.Error == "" || !failed.SourceTime.IsZero() {
+			t.Fatalf("run %d: failed device must report an invalid attempt, not a successful observation: %+v", i, failed)
 		}
 	}
 	if got := ch.Health("d2", t0.Add(3*time.Second), time.Minute); got != HealthOffline {

@@ -202,23 +202,31 @@ func kindName(kind signal.Kind) string {
 func (h *Handler) state(w http.ResponseWriter, access Access) {
 	values := h.Service.Snapshot()
 	type entry struct {
-		DeviceID     string    `json:"device_id"`
-		PointID      string    `json:"point_id"`
-		Value        valueDTO  `json:"value"`
-		Quality      string    `json:"quality"`
-		SourceTime   time.Time `json:"source_time"`
-		ReceivedTime time.Time `json:"received_time"`
+		DeviceID        string     `json:"device_id"`
+		PointID         string     `json:"point_id"`
+		Value           valueDTO   `json:"value"`
+		Quality         string     `json:"quality"`
+		Reason          string     `json:"reason,omitempty"`
+		TimeSource      string     `json:"time_source,omitempty"`
+		SourceTime      *time.Time `json:"source_time,omitempty"`
+		ReceivedTime    *time.Time `json:"received_time,omitempty"`
+		LastAttemptTime time.Time  `json:"last_attempt_time"`
 	}
 	entries := make([]entry, 0, len(values))
 	for _, value := range values {
 		if !access.allows(value.PointID) {
 			continue
 		}
-		entries = append(entries, entry{
+		current := entry{
 			DeviceID: value.DeviceID, PointID: value.PointID,
-			Value: toDTO(value.Value), Quality: value.Quality.String(),
-			SourceTime: value.SourceTime, ReceivedTime: value.ReceivedTime,
-		})
+			Value: valueDTO{Kind: "unknown"}, Quality: value.Quality.String(),
+			Reason: value.Reason, TimeSource: value.TimeSource, LastAttemptTime: value.LastAttemptTime,
+		}
+		if !value.SourceTime.IsZero() {
+			current.Value = toDTO(value.Value)
+			current.SourceTime, current.ReceivedTime = &value.SourceTime, &value.ReceivedTime
+		}
+		entries = append(entries, current)
 	}
 	writeJSON(w, map[string]any{"values": entries})
 }

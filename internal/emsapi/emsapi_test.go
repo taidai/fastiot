@@ -1,6 +1,7 @@
 package emsapi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -111,6 +112,91 @@ func waitFor(t *testing.T, condition func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatal("condition not met before deadline")
+}
+
+type pointQualityBus struct {
+	*fakeBus
+	failBlock bool
+}
+
+func (b *pointQualityBus) ReadHoldingRegisters(server byte, address, count uint16) ([]uint16, error) {
+	if b.failBlock && server == 1 && address == 20 {
+		return nil, fmt.Errorf("simulated block failure")
+	}
+	return b.fakeBus.ReadHoldingRegisters(server, address, count)
+}
+
+func TestStateExposesIndependentPointQualityAndTime(t *testing.T) {
+	service := runtime.NewService(nil, time.Minute, time.Second, 100)
+	defer service.Close()
+	bus := &pointQualityBus{fakeBus: &fakeBus{
+		holding:     map[uint16]uint16{10: 37, 20: 41, 30: 53},
+		failServers: map[byte]bool{3: true},
+	}}
+	point := func(id string, address uint16) channel.Point {
+		return channel.Point{ID: id, Function: channel.HoldingRegister, Address: address, Format: "uint16", Kind: signal.Number, ReadOnly: true}
+	}
+	ch, err := channel.New("c1", bus, []channel.Device{
+		{ID: "d1", ServerID: 1, Points: []channel.Point{point("working", 10), point("failed", 20)}},
+		{ID: "d2", ServerID: 2, Points: []channel.Point{point("other", 30)}},
+		{ID: "d3", ServerID: 3, Points: []channel.Point{point("missing", 40)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := time.Now().UTC().Add(-4 * time.Second)
+	for i := 0; i < 4; i++ {
+		at := first.Add(time.Duration(i) * time.Second)
+		results, _ := ch.RunOnce(context.Background(), at)
+		service.Observe(at.Add(time.Millisecond), results)
+		for _, device := range ch.Devices {
+			service.State.SetHealth(device.ID, ch.Health(device.ID, at, time.Minute), at)
+		}
+		bus.failBlock = true
+	}
+	response := call(t, New(service, time.Minute), Access{
+		UserID: "viewer", AllowNode: func(id string) bool { return id != "other" },
+	}, http.MethodGet, "/api/ems/state", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("state API: %d %s", response.Code, response.Body.String())
+	}
+	type pointState struct {
+		PointID string `json:"point_id"`
+		Value   struct {
+			Kind   string   `json:"kind"`
+			Number *float64 `json:"number"`
+		} `json:"value"`
+		Quality         string     `json:"quality"`
+		Reason          string     `json:"reason"`
+		TimeSource      string     `json:"time_source"`
+		SourceTime      *time.Time `json:"source_time"`
+		ReceivedTime    *time.Time `json:"received_time"`
+		LastAttemptTime *time.Time `json:"last_attempt_time"`
+	}
+	var payload struct {
+		Values []pointState `json:"values"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Values) != 3 {
+		t.Fatalf("point scope was not preserved: %s", response.Body.String())
+	}
+	byID := map[string]pointState{}
+	for _, value := range payload.Values {
+		byID[value.PointID] = value
+	}
+	good, failed, missing := byID["working"], byID["failed"], byID["missing"]
+	last := first.Add(3 * time.Second)
+	if good.Quality != "good" || good.Value.Number == nil || *good.Value.Number != 37 || good.TimeSource != "platform_collection" || good.SourceTime == nil || !good.SourceTime.Equal(last) || good.ReceivedTime == nil || !good.ReceivedTime.Equal(last.Add(time.Millisecond)) {
+		t.Errorf("successful point lost provenance or quality: %+v", good)
+	}
+	if failed.Quality != "invalid" || failed.Reason != "read_failed" || failed.Value.Number == nil || *failed.Value.Number != 41 || failed.SourceTime == nil || !failed.SourceTime.Equal(first) || failed.ReceivedTime == nil || !failed.ReceivedTime.Equal(first.Add(time.Millisecond)) || failed.LastAttemptTime == nil || !failed.LastAttemptTime.Equal(last.Add(time.Millisecond)) {
+		t.Errorf("failed point lost its last trusted observation and reason: %+v", failed)
+	}
+	if missing.Quality != "invalid" || missing.Reason != "read_failed" || missing.Value.Number != nil || missing.SourceTime != nil || missing.ReceivedTime != nil {
+		t.Errorf("never-observed point looks like a sampled zero: %+v", missing)
+	}
 }
 
 func TestStateHistoryAndExport(t *testing.T) {

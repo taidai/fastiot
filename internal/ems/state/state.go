@@ -25,6 +25,7 @@ type Value struct {
 	Quality         signal.Quality
 	SourceTime      time.Time
 	ReceivedTime    time.Time
+	TimeSource      string
 	Reason          string
 	LastAttemptTime time.Time
 }
@@ -54,8 +55,17 @@ func (s *Store) Apply(now time.Time, results []channel.Result) []channel.Result 
 	for _, result := range results {
 		key := Key{result.DeviceID, result.PointID}
 		previous, exists := s.values[key]
+		if exists && !result.SourceTime.IsZero() && result.SourceTime.UTC().Before(previous.SourceTime.UTC()) {
+			continue
+		}
 		reason := ""
 		switch {
+		case result.Error != "":
+			reason = result.Error
+		case result.Quality != signal.Good:
+			reason = "quality_" + result.Quality.String()
+		case !result.Value.Valid():
+			reason = "invalid_value"
 		case result.SourceTime.IsZero():
 			reason = "missing_source_time"
 		case result.SourceTime.UTC().After(now.UTC()):
@@ -77,6 +87,7 @@ func (s *Store) Apply(now time.Time, results []channel.Result) []channel.Result 
 			DeviceID: result.DeviceID, PointID: result.PointID,
 			Value: result.Value, Quality: result.Quality,
 			SourceTime: result.SourceTime, ReceivedTime: now, LastAttemptTime: now,
+			TimeSource: result.TimeSource,
 		}
 		accepted = append(accepted, result)
 	}
@@ -101,8 +112,8 @@ func (s *Store) Health(deviceID string) channel.Health {
 	return channel.HealthUnknown
 }
 
-// Get returns the effective value: a value whose device is offline, or whose
-// source time is older than maxAge, is downgraded to stale.
+// Get returns the point's own quality, downgraded when its observation expires.
+// Aggregate device health is diagnostic and does not override successful points.
 func (s *Store) Get(now time.Time, deviceID, pointID string, maxAge time.Duration) (Value, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -110,8 +121,7 @@ func (s *Store) Get(now time.Time, deviceID, pointID string, maxAge time.Duratio
 	if !ok {
 		return Value{}, false
 	}
-	value.Quality = s.effective(value, now, maxAge)
-	return value, true
+	return s.effective(value, now, maxAge), true
 }
 
 // Samples returns every point of a device keyed by point id, ready for the
@@ -124,9 +134,10 @@ func (s *Store) Samples(deviceID string, now time.Time, maxAge time.Duration) ma
 		if key.DeviceID != deviceID {
 			continue
 		}
+		value = s.effective(value, now, maxAge)
 		samples[key.PointID] = signal.Sample{
 			Input: key.PointID, Value: value.Value,
-			Quality:    s.effective(value, now, maxAge),
+			Quality:    value.Quality,
 			SourceTime: value.SourceTime, ReceivedTime: value.ReceivedTime,
 		}
 	}
@@ -139,8 +150,7 @@ func (s *Store) Snapshot(now time.Time, maxAge time.Duration) []Value {
 	defer s.mu.RUnlock()
 	values := make([]Value, 0, len(s.values))
 	for _, value := range s.values {
-		value.Quality = s.effective(value, now, maxAge)
-		values = append(values, value)
+		values = append(values, s.effective(value, now, maxAge))
 	}
 	sort.Slice(values, func(i, j int) bool {
 		if values[i].DeviceID != values[j].DeviceID {
@@ -151,15 +161,14 @@ func (s *Store) Snapshot(now time.Time, maxAge time.Duration) []Value {
 	return values
 }
 
-func (s *Store) effective(value Value, now time.Time, maxAge time.Duration) signal.Quality {
-	if s.health[value.DeviceID] == channel.HealthOffline {
-		return signal.Stale
-	}
+func (s *Store) effective(value Value, now time.Time, maxAge time.Duration) Value {
 	if value.Quality != signal.Good {
-		return value.Quality
+		return value
 	}
-	if maxAge > 0 && now.Sub(value.SourceTime) > maxAge {
-		return signal.Stale
+	if value.SourceTime.UTC().After(now.UTC()) {
+		value.Quality, value.Reason = signal.Invalid, "future_source_time"
+	} else if maxAge > 0 && now.Sub(value.SourceTime) > maxAge {
+		value.Quality, value.Reason = signal.Stale, "source_expired"
 	}
-	return signal.Good
+	return value
 }
