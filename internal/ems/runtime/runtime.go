@@ -82,14 +82,16 @@ func NewEngine(channels []*channel.Channel, profiles func(string) (device.Profil
 }
 
 // Cycle polls every channel, updates state and advances commands.
-func (e *Engine) Cycle(ctx context.Context, now time.Time) {
+func (e *Engine) Cycle(ctx context.Context, clock func() time.Time) {
 	for _, ch := range e.Channels {
-		results, _ := ch.RunOnce(ctx, now)
+		results, _ := ch.RunOnce(ctx, clock)
+		now := clock()
 		e.State.Apply(now, results)
 		for _, entry := range ch.Devices {
 			e.State.SetHealth(entry.ID, ch.Health(entry.ID, now, e.MaxAge), now)
 		}
 	}
+	now := clock()
 	if e.Commands != nil {
 		e.Commands.Tick(now)
 	}
@@ -144,7 +146,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	if period <= 0 {
 		period = time.Second
 	}
-	e.Cycle(ctx, time.Now())
+	e.Cycle(ctx, time.Now)
 	ticker := time.NewTicker(period)
 	defer ticker.Stop()
 	for {
@@ -152,7 +154,7 @@ func (e *Engine) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			e.Cycle(ctx, time.Now())
+			e.Cycle(ctx, time.Now)
 		}
 	}
 }

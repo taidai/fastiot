@@ -220,12 +220,18 @@ func (s *Service) runChannel(ctx context.Context, ch *channel.Channel, period ti
 		Channel: ch,
 		Period:  period,
 		OnCycle: func(now time.Time, results []channel.Result, _ []channel.WriteResult) {
+			s.mu.Lock()
+			if s.channels[ch.ID] != ch || ctx.Err() != nil {
+				s.mu.Unlock()
+				return
+			}
 			received := time.Now()
 			accepted := s.State.Apply(received, results)
 			s.History.Record(toHistory(received, accepted))
 			for _, entry := range ch.Devices {
 				s.State.SetHealth(entry.ID, ch.Health(entry.ID, now, s.MaxAge), now)
 			}
+			s.mu.Unlock()
 			s.updateDeviceAlarms(now, ch)
 			if s.OnResults != nil && len(accepted) > 0 {
 				s.OnResults(ch.ID, accepted)

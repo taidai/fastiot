@@ -362,7 +362,7 @@ func (f *pointConfigFixture) cycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, ch := range f.runtime.Channels() {
-		ch.RunOnce(context.Background(), time.Now())
+		ch.RunOnce(context.Background(), time.Now)
 	}
 }
 func (f *pointConfigFixture) writeValue(t *testing.T, id string, value float64) {

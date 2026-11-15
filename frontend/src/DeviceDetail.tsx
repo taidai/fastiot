@@ -5,7 +5,7 @@ import { ackAlarm, closeAlarm, downloadCSV, EmsAlarm, HistoryResponse, request }
 import AckDialog from "./AckDialog"
 import { describeObservation, observationTimeLabel } from "./observations"
 import { useObservations } from "./useObservations"
-import type { CommandOutcome, LedgerDevice, StateValue, UnitCommand, UnitModel } from "./deviceTypes"
+import type { CommandOutcome, LedgerDevice, UnitCommand, UnitModel } from "./deviceTypes"
 
 type Tab = "overview" | "points" | "commands" | "history" | "alarms" | "verify"
 
@@ -19,10 +19,6 @@ const pointRoleNames: Record<string, string> = { telemetry: "遥测", status: "�
 function formatNumber(value?: number) {
   if (value === undefined || !Number.isFinite(value)) return "—"
   return Math.abs(value) >= 1000 ? value.toFixed(0) : value.toFixed(2).replace(/\.?0+$/, "")
-}
-
-function formatValue(value?: StateValue) {
-  return describeObservation(value).text
 }
 
 function timeText(value?: string) {
@@ -85,9 +81,9 @@ export default function DeviceDetail({ token, device, canConfigure, canOperate, 
     try {
       const result = await request<UnitModel>(token, `${base}/model`)
       const commands = result.commands || []
-      const points = (result.points || []).filter(point => point.server_id === device.server_id)
+      const points = result.points || []
       setModel({ ...result, commands, points, profiles: result.profiles || [] })
-      setHistoryPoint((current) => current || points[0]?.id || "")
+      setHistoryPoint((current) => current || points.find(point => point.server_id === device.server_id)?.id || "")
       setParamValues(Object.fromEntries(commands.map((command) => [
         command.id,
         Object.fromEntries((command.parameters || []).map((parameter) => [parameter.name, parameter.default])),
@@ -142,7 +138,7 @@ export default function DeviceDetail({ token, device, canConfigure, canOperate, 
   const modelName = model?.model?.name || ""
   const businessName = device.business_node_name || model?.model?.business_node_id || ""
   const displayName = businessName || (modelName && modelName !== `站号 ${device.server_id}` ? modelName : `${device.channel_name} · 站号 ${device.server_id}`)
-  const points = model?.points || []
+  const points = useMemo(() => (model?.points || []).filter(point => point.server_id === device.server_id), [model, device.server_id])
   const mappedPointIDs = useMemo(() => new Set(Object.values(model?.model?.point_map || {})), [model])
   const pointIDs = useMemo(() => new Set(points.map((point) => point.id)), [points])
   const deviceAlarms = useMemo(() => alarms.filter((alarm) =>
@@ -223,6 +219,11 @@ export default function DeviceDetail({ token, device, canConfigure, canOperate, 
     } finally {
       setBusy(false)
     }
+  }
+
+  function observationSummary(pointID: string) {
+    const observation = describeObservation(values[pointID], observations)
+    return `${observation.text} · ${observation.label} · ${observationTimeLabel(observation.sourceTime)}`
   }
 
   async function saveVerification() {
@@ -445,8 +446,8 @@ export default function DeviceDetail({ token, device, canConfigure, canOperate, 
 
     {preview && <div className="device-confirm-backdrop" onClick={() => setPreview(null)}><section className="device-confirm" role="dialog" aria-label="影响预览" onClick={(event) => event.stopPropagation()}>
       <h3>{preview.name} · 影响预览</h3>
-      <p>不会下发任何值。确认目标点位和当前值后再执行。</p>
-      <div className="device-target-list">{commandTargets(preview).map((target) => <div key={target.pointID}><strong>{target.name}</strong><span>目标 {formatNumber(target.value)}</span><small>当前 {formatValue(values[target.pointID])}</small></div>)}</div>
+      <p>不会下发任何值。确认目标点位及最近观测的质量与时间后再执行。</p>
+      <div className="device-target-list">{commandTargets(preview).map((target) => <div key={target.pointID}><strong>{target.name}</strong><span>目标 {formatNumber(target.value)}</span><small>最近观测 {observationSummary(target.pointID)}</small></div>)}</div>
       <div className="device-confirm-actions"><button className="secondary-button" onClick={() => setPreview(null)}>关闭</button><button className="primary-button" disabled={!canOperate} onClick={() => { setPending({ command: preview, params: commandParams(preview) }); setPreview(null) }}>去执行</button></div>
     </section></div>}
 
@@ -468,7 +469,7 @@ export default function DeviceDetail({ token, device, canConfigure, canOperate, 
         <EmsButton busy={busy} busyLabel="执行中…" onClick={() => void execute(pending.command, pending.params)}>确认执行</EmsButton>
       </>}>
       <p className="m-0 text-sm">{displayName} · {device.channel_name} / 站号 {device.server_id}</p>
-      <div className="mt-3 grid gap-2">{commandTargets(pending.command).map((target) => <div key={target.pointID} className="flex items-center justify-between gap-3 rounded-lg border border-ems-line px-3 py-2 text-sm"><strong>{target.name}</strong><span>写入 {formatNumber(target.value)}</span><small className="text-ems-muted">当前 {formatValue(values[target.pointID])}</small></div>)}</div>
+      <div className="mt-3 grid gap-2">{commandTargets(pending.command).map((target) => <div key={target.pointID} className="flex items-center justify-between gap-3 rounded-lg border border-ems-line px-3 py-2 text-sm"><strong>{target.name}</strong><span>写入 {formatNumber(target.value)}</span><small className="text-ems-muted">最近观测 {observationSummary(target.pointID)}</small></div>)}</div>
       <InlineNotice tone="warning">命令会直接写入设备并等待回读；失败不会自动重试，结果未知时需要现场核对。</InlineNotice>
     </EmsOverlay>}
   </>, document.body)

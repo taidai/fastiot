@@ -255,7 +255,7 @@ func (c *Channel) QueueWrite(deviceID, pointID string, value signal.Value, reque
 
 // RunOnce applies queued writes, then polls every device. A failing device is
 // recorded and skipped for the rest of this run; other devices still run.
-func (c *Channel) RunOnce(ctx context.Context, now time.Time) ([]Result, []WriteResult) {
+func (c *Channel) RunOnce(ctx context.Context, now func() time.Time) ([]Result, []WriteResult) {
 	writes := c.drain()
 	results := make([]Result, 0)
 	writeResults := make([]WriteResult, 0, len(writes))
@@ -268,9 +268,9 @@ func (c *Channel) RunOnce(ctx context.Context, now time.Time) ([]Result, []Write
 		result := WriteResult{DeviceID: write.deviceID, PointID: write.pointID, RequestID: write.requestID, Value: write.value}
 		if err := c.write(device.ServerID, point, write.value); err != nil {
 			result.Error = err.Error()
-			c.recordFailure(write.deviceID, err, now)
+			c.recordFailure(write.deviceID, err, now())
 		} else {
-			c.recordSuccess(write.deviceID, now)
+			c.recordSuccess(write.deviceID, now())
 		}
 		writeResults = append(writeResults, result)
 	}
@@ -287,10 +287,11 @@ func (c *Channel) RunOnce(ctx context.Context, now time.Time) ([]Result, []Write
 			}
 			started := time.Now()
 			bits, words, err := c.read(device.ServerID, block)
+			observedAt := now()
 			c.recordLatency(device.ID, time.Since(started))
 			if err != nil {
 				deviceOK = false
-				c.recordFailure(device.ID, err, now)
+				c.recordFailure(device.ID, err, now())
 				for _, index := range block.points {
 					results = append(results, Result{
 						DeviceID: device.ID, PointID: device.Points[index].ID,
@@ -304,7 +305,7 @@ func (c *Channel) RunOnce(ctx context.Context, now time.Time) ([]Result, []Write
 				value, err := decode(point, block.address, bits, words)
 				if err != nil {
 					deviceOK = false
-					c.recordFailure(device.ID, err, now)
+					c.recordFailure(device.ID, err, now())
 					results = append(results, Result{
 						DeviceID: device.ID, PointID: point.ID,
 						Quality: signal.Invalid, Error: "decode_failed",
@@ -313,12 +314,12 @@ func (c *Channel) RunOnce(ctx context.Context, now time.Time) ([]Result, []Write
 				}
 				results = append(results, Result{
 					DeviceID: device.ID, PointID: point.ID,
-					Value: value, Quality: signal.Good, SourceTime: now, TimeSource: "platform_collection",
+					Value: value, Quality: signal.Good, SourceTime: observedAt, TimeSource: "platform_collection",
 				})
 			}
 		}
 		if deviceOK {
-			c.recordSuccess(device.ID, now)
+			c.recordSuccess(device.ID, now())
 		}
 	}
 	return results, writeResults

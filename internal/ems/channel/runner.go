@@ -24,10 +24,9 @@ func (r *Runner) Run(ctx context.Context) error {
 		period = time.Second
 	}
 	cycle := func() {
-		now := time.Now()
-		results, writes := r.Channel.RunOnce(ctx, now)
-		if r.OnCycle != nil {
-			r.OnCycle(now, results, writes)
+		results, writes := r.Channel.RunOnce(ctx, time.Now)
+		if ctx.Err() == nil && r.OnCycle != nil {
+			r.OnCycle(time.Now(), results, writes)
 		}
 	}
 	cycle()

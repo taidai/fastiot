@@ -62,7 +62,7 @@ func TestRealRtuFramesReadAndWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results, _ := ch.RunOnce(context.Background(), time.Now())
+	results, _ := ch.RunOnce(context.Background(), time.Now)
 	if result, ok := find(results, "voltage"); !ok || result.Value.Num != 351 {
 		t.Fatalf("voltage = %+v, want 351", result)
 	}
@@ -76,7 +76,7 @@ func TestRealRtuFramesReadAndWrite(t *testing.T) {
 	if err := ch.QueueWrite("meter", "setpoint", signal.Num(25.3), "req-1"); err != nil {
 		t.Fatalf("queue write: %v", err)
 	}
-	_, writes := ch.RunOnce(context.Background(), time.Now().Add(time.Second))
+	_, writes := ch.RunOnce(context.Background(), time.Now)
 	if len(writes) != 1 || writes[0].Error != "" {
 		t.Fatalf("write failed: %+v", writes)
 	}
@@ -111,7 +111,7 @@ func TestMissingSlaveDoesNotBreakOtherDevices(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results, _ := ch.RunOnce(context.Background(), time.Now())
+	results, _ := ch.RunOnce(context.Background(), time.Now)
 	if result, ok := find(results, "value"); !ok || result.DeviceID != "present" || result.Value.Num != 1234 {
 		t.Fatalf("present device result = %+v", result)
 	}
@@ -160,7 +160,7 @@ func TestRealTCPFrames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	results, _ := ch.RunOnce(context.Background(), time.Now())
+	results, _ := ch.RunOnce(context.Background(), time.Now)
 	if result, ok := find(results, "value"); !ok || result.Value.Num != 42 {
 		t.Fatalf("tcp read = %+v ok=%v, want 42", result, ok)
 	}

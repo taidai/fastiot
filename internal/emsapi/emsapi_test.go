@@ -147,7 +147,7 @@ func TestStateExposesIndependentPointQualityAndTime(t *testing.T) {
 	first := time.Now().UTC().Add(-4 * time.Second)
 	for i := 0; i < 4; i++ {
 		at := first.Add(time.Duration(i) * time.Second)
-		results, _ := ch.RunOnce(context.Background(), at)
+		results, _ := ch.RunOnce(context.Background(), func() time.Time { return at })
 		service.Observe(at.Add(time.Millisecond), results)
 		for _, device := range ch.Devices {
 			service.State.SetHealth(device.ID, ch.Health(device.ID, at, time.Minute), at)

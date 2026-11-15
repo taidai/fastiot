@@ -104,7 +104,7 @@ func TestCommandWriteIsQueuedThenConfirmedByReadback(t *testing.T) {
 		t.Fatal("write must wait for the channel run, not happen inside Submit")
 	}
 
-	results, writes := ch.RunOnce(context.Background(), t0)
+	results, writes := ch.RunOnce(context.Background(), func() time.Time { return t0 })
 	if len(writes) != 1 || writes[0].Error != "" {
 		t.Fatalf("queued write not applied: %+v", writes)
 	}
@@ -143,9 +143,9 @@ func TestEngineConfirmsCommandWithinOneCycle(t *testing.T) {
 	if _, err := engine.Commands.Submit(t0, command.Request{ID: "req-1", DeviceID: "pcs1", CommandID: "start", Actor: "operator"}); err != nil {
 		t.Fatal(err)
 	}
-	engine.Cycle(context.Background(), t0)
+	engine.Cycle(context.Background(), func() time.Time { return t0 })
 	// 提交后必须有一轮新的读取才能确认；同一时刻的读回不算数。
-	engine.Cycle(context.Background(), t0.Add(time.Second))
+	engine.Cycle(context.Background(), func() time.Time { return t0.Add(time.Second) })
 	final, _ := engine.Commands.Get("req-1")
 	if final.State != command.Confirmed {
 		t.Fatalf("state = %s, want confirmed", final.State)
@@ -174,7 +174,7 @@ func TestEngineRaisesAndClearsOfflineAlarm(t *testing.T) {
 		5*time.Second, time.Second, 3*time.Second,
 	)
 	for i := 0; i < 3; i++ {
-		engine.Cycle(context.Background(), t0.Add(time.Duration(i)*time.Second))
+		engine.Cycle(context.Background(), func() time.Time { return t0.Add(time.Duration(i) * time.Second) })
 	}
 	raised, ok := engine.Alarms.Get("device-offline:pcs1")
 	if !ok || !raised.Active || raised.Severity != alarm.Critical {
@@ -182,7 +182,7 @@ func TestEngineRaisesAndClearsOfflineAlarm(t *testing.T) {
 	}
 
 	bus.fail[1] = false
-	engine.Cycle(context.Background(), t0.Add(4*time.Second))
+	engine.Cycle(context.Background(), func() time.Time { return t0.Add(4 * time.Second) })
 	cleared, _ := engine.Alarms.Get("device-offline:pcs1")
 	if cleared.Active || cleared.State != alarm.Resolved {
 		t.Fatalf("alarm should resolve after recovery, got %+v", cleared)

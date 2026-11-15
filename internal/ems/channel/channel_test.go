@@ -142,7 +142,7 @@ func TestReadFailureIsLocalToPoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 3; i++ {
-		results, _ := ch.RunOnce(context.Background(), t0.Add(time.Duration(i)*time.Second))
+		results, _ := ch.RunOnce(context.Background(), func() time.Time { return t0.Add(time.Duration(i) * time.Second) })
 		working, ok := find(results, "d1", "working")
 		if !ok || working.Quality != signal.Good || working.Value.Num != 37 {
 			t.Errorf("same-device successful point lost: %+v", working)
@@ -172,7 +172,7 @@ func TestDecodeFailureIsLocalToPoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	results, _ := ch.RunOnce(context.Background(), t0)
+	results, _ := ch.RunOnce(context.Background(), func() time.Time { return t0 })
 	good, ok := find(results, "d1", "working")
 	if !ok || good.Quality != signal.Good || good.Value.Num != 37 {
 		t.Errorf("valid part of response was discarded: %+v", good)
@@ -180,6 +180,35 @@ func TestDecodeFailureIsLocalToPoint(t *testing.T) {
 	failed, ok := find(results, "d1", "short")
 	if !ok || failed.Quality != signal.Invalid || failed.Error != "decode_failed" || !failed.SourceTime.IsZero() {
 		t.Errorf("short response did not report a point-local decode failure: %+v", failed)
+	}
+}
+
+type completionReadBus struct {
+	*fakeBus
+	completed time.Time
+}
+
+func (b *completionReadBus) ReadHoldingRegisters(_ byte, address, _ uint16) ([]uint16, error) {
+	if address == 10 {
+		return nil, context.DeadlineExceeded
+	}
+	b.completed = time.Now()
+	return []uint16{37}, nil
+}
+
+func TestSuccessfulBlockUsesReadCompletionTime(t *testing.T) {
+	bus := &completionReadBus{fakeBus: newFakeBus()}
+	ch, err := New("c1", bus, []Device{device("d1", 1,
+		Point{ID: "failed", Function: HoldingRegister, Address: 10, Format: "uint16", Kind: signal.Number},
+		Point{ID: "later", Function: HoldingRegister, Address: 20, Format: "uint16", Kind: signal.Number},
+	)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, _ := ch.RunOnce(context.Background(), time.Now)
+	value, ok := find(results, "d1", "later")
+	if !ok || value.Quality != signal.Good || value.Value.Num != 37 || value.SourceTime.Before(bus.completed) {
+		t.Fatalf("successful block reused an earlier cycle timestamp: observation=%+v read_completed=%v", value, bus.completed)
 	}
 }
 
@@ -196,7 +225,7 @@ func TestPollsAllDevicesOnOneChannel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	results, _ := ch.RunOnce(context.Background(), t0)
+	results, _ := ch.RunOnce(context.Background(), func() time.Time { return t0 })
 	if len(results) != 3 {
 		t.Fatalf("results = %d, want 3", len(results))
 	}
@@ -221,7 +250,7 @@ func TestOneFailingDeviceDoesNotStopTheChannel(t *testing.T) {
 		device("d3", 3, tempPoint(30)),
 	})
 	for i := 0; i < 3; i++ {
-		results, _ := ch.RunOnce(context.Background(), t0.Add(time.Duration(i)*time.Second))
+		results, _ := ch.RunOnce(context.Background(), func() time.Time { return t0.Add(time.Duration(i) * time.Second) })
 		if _, ok := find(results, "d1", "temp"); !ok {
 			t.Fatalf("run %d: healthy device d1 missing", i)
 		}
@@ -252,7 +281,7 @@ func TestContiguousPointsShareOneRead(t *testing.T) {
 		{ID: "d", Function: HoldingRegister, Address: 20, Format: "uint16", Kind: signal.Number},
 	}
 	ch, _ := New("c1", bus, []Device{device("d1", 1, points...)})
-	ch.RunOnce(context.Background(), t0)
+	ch.RunOnce(context.Background(), func() time.Time { return t0 })
 	if len(bus.calls) != 2 {
 		t.Fatalf("block reads = %d, want 2: %v", len(bus.calls), bus.calls)
 	}
@@ -269,7 +298,7 @@ func TestMaxGapMergesClosePoints(t *testing.T) {
 	}
 	ch, _ := New("c1", bus, []Device{device("d1", 1, points...)})
 	ch.MaxGap = 1
-	ch.RunOnce(context.Background(), t0)
+	ch.RunOnce(context.Background(), func() time.Time { return t0 })
 	if len(bus.calls) != 1 || bus.calls[0] != "hr:1:10:3" {
 		t.Fatalf("expected one merged block, got %v", bus.calls)
 	}
@@ -282,7 +311,7 @@ func TestQueuedWriteRunsBeforePoll(t *testing.T) {
 	if err := ch.QueueWrite("d1", "power", signal.Num(25.3), "req-1"); err != nil {
 		t.Fatal(err)
 	}
-	_, writes := ch.RunOnce(context.Background(), t0)
+	_, writes := ch.RunOnce(context.Background(), func() time.Time { return t0 })
 	if len(writes) != 1 || writes[0].Error != "" || writes[0].RequestID != "req-1" {
 		t.Fatalf("unexpected write result %+v", writes)
 	}
@@ -300,7 +329,7 @@ func TestWriteFailuresAreReported(t *testing.T) {
 	point := Point{ID: "run", Function: Coil, Address: 1, Kind: signal.Bool}
 	ch, _ := New("c1", bus, []Device{device("d1", 1, point)})
 	ch.QueueWrite("d1", "run", signal.Flag(true), "req-1")
-	_, writes := ch.RunOnce(context.Background(), t0)
+	_, writes := ch.RunOnce(context.Background(), func() time.Time { return t0 })
 	if len(writes) != 1 || writes[0].Error == "" {
 		t.Fatalf("expected write error, got %+v", writes)
 	}
@@ -346,7 +375,7 @@ func TestDecodesSignedAndFloatFormats(t *testing.T) {
 		{ID: "wide", Function: HoldingRegister, Address: 14, Format: "uint32", Kind: signal.Number},
 	}
 	ch, _ := New("c1", bus, []Device{device("d1", 1, points...)})
-	results, _ := ch.RunOnce(context.Background(), t0)
+	results, _ := ch.RunOnce(context.Background(), func() time.Time { return t0 })
 	if result, _ := find(results, "d1", "signed"); math.Abs(result.Value.Num+10) > 1e-9 {
 		t.Errorf("signed = %v, want -10", result.Value.Num)
 	}
@@ -361,7 +390,7 @@ func TestDecodesSignedAndFloatFormats(t *testing.T) {
 func TestHealthGoesOfflineWhenSuccessIsStale(t *testing.T) {
 	bus := newFakeBus()
 	ch, _ := New("c1", bus, []Device{device("d1", 1, tempPoint(10))})
-	ch.RunOnce(context.Background(), t0)
+	ch.RunOnce(context.Background(), func() time.Time { return t0 })
 	if got := ch.Health("d1", t0.Add(5*time.Second), 10*time.Second); got != HealthHealthy {
 		t.Fatalf("health = %s, want healthy", got)
 	}

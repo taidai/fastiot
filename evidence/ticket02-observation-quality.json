@@ -1,6 +1,6 @@
 {
   "ticket": "02-two-device-observation-quality",
-  "status": "verification_complete_review_pending",
+  "status": "completed_with_deferred_minor",
   "date": "2026-11-16",
   "branch": "fix/ticket02-observation-quality",
   "baseline": "d9e1d284936af07709368e5f2ff62836a4e20d26",
@@ -59,8 +59,33 @@
     {"decision":"Expose server evaluation/expiry bounds and use monotonic request elapsed time in the UI", "why":"An outstanding query must not freeze an old normal label; the browser must not invent sensor TTLs", "cost_if_wrong":"Slow transport can conservatively mark data expired earlier, not later"},
     {"decision":"Do not infer physical clock-reset epochs from indistinguishable old packets", "why":"Without independent ordering evidence an old packet could simply be delayed; it must not refresh current state", "cost_if_wrong":"An actual device clock reset may remain unusable until trustworthy time is restored; automatic epoch-reset recovery is not claimed"}
   ],
-  "review": {"standards":"pending", "spec":"pending"},
-  "cleanup": "pending final review",
+  "review": {
+    "range": "d9e1d28...f1f2675",
+    "method": "Two independent fresh-context read-only reviews, Standards and Spec. One coordinator fix pass; no second review claimed.",
+    "standards": {"important_found": 2, "fixed": ["Read completion timestamp, not cycle start", "Retained values in command dialogs no longer called current; quality and source time shown"]},
+    "spec": {"important_found": 3, "fixed": ["Cancelled/obsolete channel results cannot overwrite the replacement channel's state", "Per-read timestamps", "Saving verification metadata preserves station-scoped points"], "minor_deferred": ["Older discarded samples have no independent rejection diagnostic; they still cannot replace or refresh accepted data"]},
+    "fix_verification": [
+      "TestCancelledRunnerDoesNotPublishCompletedRead: RED with one obsolete cycle, GREEN with cancellation suppression; Service additionally serializes active-source identity checks with state mutation.",
+      "TestSuccessfulBlockUsesReadCompletionTime: RED with source time before the read completed, GREEN with per-block clock capture. RunOnce and legacy Engine.Cycle now consume a clock function; production uses time.Now, deterministic tests retain fixed clocks.",
+      "Actual UI save: RED changed station 1 from three points to four including station 2; GREEN retained exactly three station-1 points after the successful PUT.",
+      "Actual UI command preview: RED showed '当前 120' with no quality; GREEN preview and confirmation showed recent observation 120, failed quality and original source time. An injected HTTP 503 also changed the confirmation from normal to query-failed. No command was submitted.",
+      "Post-fix full Go suite, observation/navigation/consistency checks and TypeScript/Vite build all exited 0."
+    ],
+    "declined_to_judge_rulings": [
+      "Standards deferred spec completeness to the independent Spec axis; it was reviewed there.",
+      "Formatting/types are checked by gofmt, diff checks and tsc rather than a second manual style verdict.",
+      "Real hardware/RTU, other adapters, device replacement/clock epoch recovery, history backfill and platform-wide timers remain explicitly outside this ticket; cost: this evidence cannot certify those paths.",
+      "Legacy Engine.Cycle has no normal-history/publication chain; it was nevertheless adapted in the fix pass so actual collection and receipt clocks stay coherent."
+    ]
+  },
+  "final_rulings": [
+    {"decision":"Adapt the RunOnce/Engine.Cycle clock seam during the review fix, superseding the earlier leave-legacy-unchanged ruling", "why":"A fixed cycle-start value cannot timestamp each completed read correctly; sampling and receipt must use the same clock domain", "cost_if_wrong":"Out-of-tree internal test harnesses using these Go methods must pass a clock function; no external HTTP contract was removed"},
+    {"decision":"Keep external result callbacks outside the Service registry mutex", "why":"Ownership checks and state updates must be atomic with channel replacement, but callbacks may re-enter the service", "cost_if_wrong":"Callbacks for already-accepted observations can finish after removal; preserved source timestamps still govern published values"},
+    {"decision":"Run Task 3's embedded final review before its completion ledger entry", "why":"The task brief includes review and cleanup, so it must not be marked complete beforehand", "cost_if_wrong":"Ordering differs from the generic workflow diagram, but no verification gate is omitted"}
+  ],
+  "command_dialog_test_boundary": "One test point was temporarily configured writable only to open preview/confirmation dialogs against the write-rejecting fake Bus. Confirmation was cancelled, read-only configuration restored, and write count remained zero.",
+  "screenshot": "evidence/ticket02-command-dialog.jpg",
+  "cleanup": "All three temporary preview servers stopped, disposable backend container stopped/removed, viewport emulation cleared, and only the task's temporary launch entries removed; pre-existing assets left untouched",
   "limits": [
     "The UI fixture exercises an in-process fake Bus, not a TCP wire simulator, RTU framing, physical serial/RS485 or real hardware.",
     "M5 and real-device sign-off remain pending.",
