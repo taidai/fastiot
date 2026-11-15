@@ -19,12 +19,14 @@ type Key struct {
 
 // Value is the latest accepted reading of one point.
 type Value struct {
-	DeviceID     string
-	PointID      string
-	Value        signal.Value
-	Quality      signal.Quality
-	SourceTime   time.Time
-	ReceivedTime time.Time
+	DeviceID        string
+	PointID         string
+	Value           signal.Value
+	Quality         signal.Quality
+	SourceTime      time.Time
+	ReceivedTime    time.Time
+	Reason          string
+	LastAttemptTime time.Time
 }
 
 // Store is safe for concurrent readers and one writer.
@@ -44,17 +46,41 @@ func New() *Store {
 	}
 }
 
-// Apply records successful reads.
-func (s *Store) Apply(now time.Time, results []channel.Result) {
+// Apply records newer observations and returns only newly accepted readings.
+func (s *Store) Apply(now time.Time, results []channel.Result) []channel.Result {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	accepted := make([]channel.Result, 0, len(results))
 	for _, result := range results {
-		s.values[Key{result.DeviceID, result.PointID}] = Value{
+		key := Key{result.DeviceID, result.PointID}
+		previous, exists := s.values[key]
+		reason := ""
+		switch {
+		case result.SourceTime.IsZero():
+			reason = "missing_source_time"
+		case result.SourceTime.UTC().After(now.UTC()):
+			reason = "future_source_time"
+		case exists && result.SourceTime.Equal(previous.SourceTime) && result.Value != previous.Value:
+			reason = "conflicting_source_time"
+		}
+		if reason != "" {
+			previous.DeviceID, previous.PointID = result.DeviceID, result.PointID
+			previous.Quality, previous.Reason = signal.Invalid, reason
+			previous.LastAttemptTime = now
+			s.values[key] = previous
+			continue
+		}
+		if exists && !result.SourceTime.After(previous.SourceTime) {
+			continue
+		}
+		s.values[key] = Value{
 			DeviceID: result.DeviceID, PointID: result.PointID,
 			Value: result.Value, Quality: result.Quality,
-			SourceTime: result.SourceTime, ReceivedTime: now,
+			SourceTime: result.SourceTime, ReceivedTime: now, LastAttemptTime: now,
 		}
+		accepted = append(accepted, result)
 	}
+	return accepted
 }
 
 // SetHealth records the communication health of one device.

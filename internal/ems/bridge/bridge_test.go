@@ -114,7 +114,7 @@ func (f *fakeSource) ValueSets() (map[string]ValueSet, error) {
 	return out, nil
 }
 
-func (f *fakeSource) PublishValue(id string, value signal.Value) error {
+func (f *fakeSource) PublishValue(id string, value signal.Value, _ time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.values[id] = value

@@ -30,6 +30,33 @@ func tempDevice() channel.Device {
 	}
 }
 
+func TestRejectedObservationDoesNotRepublishOrRefreshHistory(t *testing.T) {
+	service := NewService(nil, time.Minute, time.Second, 100)
+	defer service.Close()
+	now := time.Date(2026, 11, 15, 12, 0, 10, 0, time.UTC)
+	firstTime := now.Add(-5 * time.Second)
+	reading := func(at time.Time, value float64) channel.Result {
+		return channel.Result{DeviceID: "d1", PointID: "temp", Value: signal.Num(value), Quality: signal.Good, SourceTime: at}
+	}
+	var published []channel.Result
+	service.OnResults = func(_ string, results []channel.Result) { published = append(published, results...) }
+	service.Observe(now, []channel.Result{reading(firstTime, 37)})
+	service.Observe(now.Add(time.Second), []channel.Result{reading(now.Add(-8*time.Second), 12)})
+	service.Observe(now.Add(2*time.Second), []channel.Result{reading(firstTime, 37)})
+	service.Observe(now.Add(3*time.Second), []channel.Result{reading(now.Add(time.Hour), 99)})
+	if len(published) != 1 || service.History.Len("d1", "temp") != 1 {
+		t.Errorf("rejected samples escaped into publication/history: published=%d history=%d", len(published), service.History.Len("d1", "temp"))
+	}
+	service.Observe(now.Add(4*time.Second), []channel.Result{reading(now.Add(-4*time.Second), 38)})
+	history := service.History.Query("d1", "temp", time.Time{}, time.Time{}, 10)
+	if len(published) != 2 || len(history) != 2 || history[0].Value.Num != 37 || history[1].Value.Num != 38 {
+		t.Fatalf("accepted observation sequence lost: published=%+v history=%+v", published, history)
+	}
+	if !published[0].SourceTime.Equal(firstTime) || !history[0].SourceTime.Equal(firstTime) || !history[0].ReceivedTime.Equal(now) {
+		t.Fatal("publication or history replaced observation or receipt time")
+	}
+}
+
 func TestServicePollsAndRecordsHistory(t *testing.T) {
 	bus := &fakeBus{coils: map[uint16]bool{}, holding: map[uint16]uint16{10: 351}, fail: map[byte]bool{}}
 	service := NewService(nil, 5*time.Second, 3*time.Second, 100)

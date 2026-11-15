@@ -115,10 +115,10 @@ func (s *Service) Observe(now time.Time, results []channel.Result) {
 	if len(results) == 0 {
 		return
 	}
-	s.State.Apply(now, results)
-	s.History.Record(toHistory(results))
-	if s.OnResults != nil {
-		s.OnResults("", results)
+	accepted := s.State.Apply(now, results)
+	s.History.Record(toHistory(now, accepted))
+	if s.OnResults != nil && len(accepted) > 0 {
+		s.OnResults("", accepted)
 	}
 }
 
@@ -220,14 +220,15 @@ func (s *Service) runChannel(ctx context.Context, ch *channel.Channel, period ti
 		Channel: ch,
 		Period:  period,
 		OnCycle: func(now time.Time, results []channel.Result, _ []channel.WriteResult) {
-			s.State.Apply(now, results)
-			s.History.Record(toHistory(results))
+			received := time.Now()
+			accepted := s.State.Apply(received, results)
+			s.History.Record(toHistory(received, accepted))
 			for _, entry := range ch.Devices {
 				s.State.SetHealth(entry.ID, ch.Health(entry.ID, now, s.MaxAge), now)
 			}
 			s.updateDeviceAlarms(now, ch)
-			if s.OnResults != nil && len(results) > 0 {
-				s.OnResults(ch.ID, results)
+			if s.OnResults != nil && len(accepted) > 0 {
+				s.OnResults(ch.ID, accepted)
 			}
 		},
 	}
@@ -268,13 +269,13 @@ func (s *Service) updateCommandAlarms(now time.Time) {
 	}
 }
 
-func toHistory(results []channel.Result) []history.Sample {
+func toHistory(received time.Time, results []channel.Result) []history.Sample {
 	samples := make([]history.Sample, 0, len(results))
 	for _, result := range results {
 		samples = append(samples, history.Sample{
 			DeviceID: result.DeviceID, PointID: result.PointID,
 			Value: result.Value, Quality: result.Quality,
-			SourceTime: result.SourceTime, ReceivedTime: time.Now(),
+			SourceTime: result.SourceTime, ReceivedTime: received,
 		})
 	}
 	return samples

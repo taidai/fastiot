@@ -183,14 +183,14 @@ func (s *NodeSource) ValueSets() (map[string]ValueSet, error) {
 }
 
 // PublishValue writes a read value back to the IO node.
-func (s *NodeSource) PublishValue(ioNodeID string, value signal.Value) error {
+func (s *NodeSource) PublishValue(ioNodeID string, value signal.Value, sourceTime time.Time) error {
 	number, ok := asFloat(value)
 	if !ok {
 		return fmt.Errorf("point %s: cannot publish %s", ioNodeID, value.Kind)
 	}
 	point := data.NewPointFloat(data.PointTypeValue, "", number)
 	point.Origin = s.Origin
-	point.Time = time.Now()
+	point.Time = sourceTime
 	return client.SendNodePoint(s.NC, ioNodeID, point, true)
 }
 

@@ -37,7 +37,7 @@ type ValueSet struct {
 type Source interface {
 	Buses() ([]BusConfig, error)
 	ValueSets() (map[string]ValueSet, error)
-	PublishValue(ioNodeID string, value signal.Value) error
+	PublishValue(ioNodeID string, value signal.Value, sourceTime time.Time) error
 	PublishHealth(channelID string, lastGood time.Time, failures int) error
 	PublishDeviceHealth(ioNodeID, health string) error
 }
@@ -77,7 +77,7 @@ func New(service *runtime.Service, source Source, open BusOpener) *Bridge {
 	}
 	service.OnResults = func(_ string, results []channel.Result) {
 		for _, result := range results {
-			if err := source.PublishValue(result.PointID, result.Value); err != nil {
+			if err := source.PublishValue(result.PointID, result.Value, result.SourceTime); err != nil {
 				b.report(err)
 			}
 		}
