@@ -134,11 +134,7 @@ func (h *Handler) createModbusIO(w http.ResponseWriter, r *http.Request, identit
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	encoded, err := newModbusIONode(busID, input)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_modbus_point")
-		return
-	}
+	encoded := newModbusIONode(busID, input)
 	if err := client.SendNode(h.nc, encoded, identity.UserID); err != nil {
 		writeError(w, http.StatusBadRequest, "create_failed")
 		return
@@ -146,11 +142,11 @@ func (h *Handler) createModbusIO(w http.ResponseWriter, r *http.Request, identit
 	writeJSON(w, map[string]string{"id": encoded.ID})
 }
 
-func newModbusIONode(busID string, input ModbusIOInput) (data.NodeEdge, error) {
+func newModbusIONode(busID string, input ModbusIOInput) data.NodeEdge {
 	return data.NodeEdge{
 		ID: data.NewID(), Parent: busID, Type: data.NodeTypeModbusIO,
 		Points: append(modbusIOConfigPoints(input), data.NewPointString("businessId", "", data.NewID())),
-	}, nil
+	}
 }
 
 func (h *Handler) importModbusCSV(w http.ResponseWriter, r *http.Request, identity Identity, busID string) {
@@ -320,11 +316,8 @@ func parseCSVBool(value string) (bool, error) {
 func (h *Handler) createModbusBatch(busID string, inputs []ModbusIOInput, origin string) error {
 	created := []data.NodeEdge{}
 	for _, input := range inputs {
-		node, err := newModbusIONode(busID, input)
-		if err == nil {
-			err = client.SendNode(h.nc, node, origin)
-		}
-		if err != nil {
+		node := newModbusIONode(busID, input)
+		if err := client.SendNode(h.nc, node, origin); err != nil {
 			for _, rollback := range created {
 				_ = client.DeleteNode(h.nc, rollback.ID, busID, origin)
 			}
@@ -475,7 +468,7 @@ func (h *Handler) modbusCSVDiff(w http.ResponseWriter, r *http.Request, identity
 		return
 	}
 	for _, change := range changed {
-		if err := h.updateModbusIOFields(byName[change.Name].NodeID, busID, change.After, identity.UserID); err != nil {
+		if err := h.updateModbusIOFields(byName[change.Name].NodeID, change.After, identity.UserID); err != nil {
 			writeError(w, http.StatusInternalServerError, "sync_update_failed: "+change.Name)
 			return
 		}
@@ -594,7 +587,7 @@ func (h *Handler) updateModbusIO(w http.ResponseWriter, r *http.Request, identit
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.updateModbusIOFields(id, node.Parent, input, identity.UserID); err != nil {
+	if err := h.updateModbusIOFields(id, input, identity.UserID); err != nil {
 		writeError(w, http.StatusBadRequest, "save_failed")
 		return
 	}
@@ -621,7 +614,7 @@ func modbusIOConfigPoints(input ModbusIOInput) data.Points {
 	}
 }
 
-func (h *Handler) updateModbusIOFields(id, parent string, input ModbusIOInput, origin string) error {
+func (h *Handler) updateModbusIOFields(id string, input ModbusIOInput, origin string) error {
 	points := modbusIOConfigPoints(input)
 	for i := range points {
 		points[i].Origin = origin

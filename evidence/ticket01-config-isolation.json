@@ -51,6 +51,12 @@
     "Saved a model template from the sampled source, created a second port, selected it and applied the template through the UI: copied point had a distinct identity, no value/valueSet and displayed em dash; source retained 37 and target 73; no additional writes occurred.",
     "No browser console errors were reported at the final check. Retained recent network requests had no failures; the browser buffer had discarded earlier requests, so this is not a full-session network audit."
   ],
+  "review": {
+    "candidate_commit": "afcdfaa",
+    "standards": "No blocking findings. Removed the newly unused parent argument and the constructor's impossible error return, including direct caller branches. Optional assertion deduplication was not applied.",
+    "spec": "No substantive missing requirements, scope creep or incorrect implementation identified within ticket 01; reviewers performed static inspection only.",
+    "post_review_verification": "Targeted regressions, full go test -count=1 ./... and frontend typecheck/build re-run successfully after signature-only cleanup. UI verification preceded that non-behavioral cleanup."
+  },
   "not_claimed": [
     "Real Modbus TCP or RTU framing, serial hardware, production credentials or target-device sign-off",
     "The complete associated-configuration draft/apply contract or migration of already-persisted fabricated values",

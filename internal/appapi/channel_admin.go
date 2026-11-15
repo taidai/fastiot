@@ -111,15 +111,11 @@ func (a ChannelAdmin) Create(access emsapi.Access, input emsapi.ChannelInput) (m
 					return nil, fmt.Errorf("point %s: bit area requires bool", point.Name)
 				}
 			}
-			node, err := newModbusIONode(busID, ModbusIOInput{
+			node := newModbusIONode(busID, ModbusIOInput{
 				Description: point.Name, ServerID: device.ServerID, Address: point.Address,
 				IOType: ioType, DataFormat: format, ReadOnly: readOnly,
 				Scale: point.Scale, Offset: point.Offset, Units: point.Units,
 			})
-			if err != nil {
-				rollback()
-				return nil, fmt.Errorf("invalid_point")
-			}
 			if err := client.SendNode(a.NC, node, access.UserID); err != nil {
 				rollback()
 				return nil, fmt.Errorf("create_failed")
