@@ -25,13 +25,17 @@ import (
 )
 
 type Handler struct {
-	nc          *nats.Conn
-	users       api.UserAuthority
-	ready       *atomic.Bool
-	commandMu   sync.Mutex
-	ownershipMu sync.Mutex
-	ems         *emsapi.Handler
-	opcua       *OpcuaManager
+	nc             *nats.Conn
+	users          api.UserAuthority
+	ready          *atomic.Bool
+	commandMu      sync.Mutex
+	virtualInputMu sync.Mutex
+	inputEpoch     string
+	inputStart     time.Time
+	inputLastWall  time.Time
+	ownershipMu    sync.Mutex
+	ems            *emsapi.Handler
+	opcua          *OpcuaManager
 
 	siteGoalMu    sync.Mutex
 	siteGoalCache map[string]siteGoalEntry
@@ -95,6 +99,10 @@ type sessionState struct {
 }
 
 func (h *Handler) resolveSession(id string) (string, bool) {
+	return h.sessionUser(id, true)
+}
+
+func (h *Handler) sessionUser(id string, refresh bool) (string, bool) {
 	h.sessionMu.Lock()
 	defer h.sessionMu.Unlock()
 	if h.sessions == nil {
@@ -108,8 +116,10 @@ func (h *Handler) resolveSession(id string) (string, bool) {
 		delete(h.sessions, id)
 		return "", false
 	}
-	state.lastSeen = time.Now()
-	h.sessions[id] = state
+	if refresh {
+		state.lastSeen = time.Now()
+		h.sessions[id] = state
+	}
 	return state.userID, true
 }
 
@@ -194,6 +204,7 @@ var allActions = []string{
 	ActionConfigure, ActionWriteValue, ActionCommand, ActionRulePublish,
 	ActionAlarmAck, ActionAlarmMaintain, ActionDelete, ActionExport,
 	ActionAccountManage, ActionAuditView, ActionSiteSettings,
+	ActionVirtualInputApply, ActionVirtualInputWrite,
 }
 
 // canAction is the single permission decision point. Admin always passes; an
@@ -218,9 +229,9 @@ func canAction(identity Identity, action string) bool {
 // role-default predicates, so action granularity never drifts from them.
 func roleAllows(policy AccessPolicy, action string) bool {
 	switch action {
-	case ActionConfigure, ActionRulePublish, ActionDelete, ActionExport:
+	case ActionConfigure, ActionRulePublish, ActionDelete, ActionExport, ActionVirtualInputApply:
 		return canConfigure(Identity{Policy: policy})
-	case ActionWriteValue, ActionCommand, ActionAlarmAck, ActionAlarmMaintain:
+	case ActionWriteValue, ActionCommand, ActionAlarmAck, ActionAlarmMaintain, ActionVirtualInputWrite:
 		return canOperateIdentity(Identity{Policy: policy})
 	case ActionAccountManage, ActionAuditView, ActionSiteSettings:
 		return policy.Admin
@@ -283,9 +294,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parts := strings.Split(path, "/")
+	if r.Method != http.MethodGet && (parts[0] == "rules" || parts[0] == "nodes" || parts[0] == "projects" || strings.HasPrefix(path, "ems/screen/")) {
+		h.virtualInputMu.Lock()
+		defer h.virtualInputMu.Unlock()
+	}
 	switch {
 	case path == "ws":
-		h.serveWS(w, r, identity)
+		h.serveWS(status.ResponseWriter, r, identity)
 	case path == "metrics" && r.Method == http.MethodGet:
 		h.serveMetrics(w, identity)
 	case path == "snapshot" && r.Method == http.MethodGet:
@@ -395,6 +410,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.unitCommands(w, r, identity, parts[1], server, parts[5])
+	case len(parts) > 0 && parts[0] == "virtual-inputs":
+		h.virtualInputs(w, r, identity, parts[1:])
 	case path == "nodes" && r.Method == http.MethodPost:
 		h.createNode(w, r, identity)
 	case len(parts) == 2 && parts[0] == "nodes" && r.Method == http.MethodPatch:
@@ -567,10 +584,17 @@ func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (Identity
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return Identity{}, false
 	}
+	identity, ok := h.identityForUser(userID)
+	if !ok {
+		writeError(w, http.StatusForbidden, "no_access")
+	}
+	return identity, ok
+}
+
+func (h *Handler) identityForUser(userID string) (Identity, bool) {
 	anchors := h.users.UserAnchors(userID)
 	nodes, err := client.GetNodes(h.nc, "all", userID, "", false)
 	if err != nil || len(nodes) == 0 || len(anchors) == 0 {
-		writeError(w, http.StatusForbidden, "no_access")
 		return Identity{}, false
 	}
 	email := ""
@@ -588,7 +612,6 @@ func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (Identity
 		}
 	}
 	if !policy.Admin && policy.Role != "implementer" && policy.Role != "operator" && policy.Role != "viewer" {
-		writeError(w, http.StatusForbidden, "no_access")
 		return Identity{}, false
 	}
 	if !policy.Admin {
@@ -604,7 +627,6 @@ func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (Identity
 		}
 		anchors = kept
 		if len(anchors) == 0 {
-			writeError(w, http.StatusForbidden, "no_access")
 			return Identity{}, false
 		}
 	}
@@ -618,7 +640,7 @@ func (h *Handler) snapshot(w http.ResponseWriter, identity Identity) {
 		return
 	}
 	writeJSON(w, map[string]any{
-		"user": identity, "roots": identity.Anchors, "nodes": data.RedactNodes(nodes),
+		"user": identity, "roots": identity.Anchors, "nodes": data.RedactNodes(publicInputNodes(nodes)),
 		"session_timeout_seconds": int(h.sessionTimeout / time.Second),
 	})
 }
@@ -627,7 +649,7 @@ func (h *Handler) visibleNodes(identity Identity) ([]data.NodeEdge, error) {
 	allowedTypes := map[string]bool{
 		data.NodeTypeDevice: true, data.NodeTypeGroup: true, data.NodeTypeVariable: true,
 		data.NodeTypeModbus: true, data.NodeTypeModbusIO: true,
-		"decisionTable": true, "deviceTemplate": true,
+		"decisionTable": true, "deviceTemplate": true, virtualInputType: true,
 		// 领域模型三层节点：不在白名单会被剪断整棵子树，前端看不到。
 		NodeTypeSite: true, NodeTypePlant: true, NodeTypeEnergyUnit: true, NodeTypeResourceGroup: true,
 		NodeTypeOpcua: true, NodeTypeOpcuaPoint: true,

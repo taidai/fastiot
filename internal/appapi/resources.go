@@ -122,6 +122,10 @@ func (h *Handler) moveNode(w http.ResponseWriter, r *http.Request, identity Iden
 				continue
 			}
 			if h.referencesSubtree(rule, id) && input.NewParent != rule.Parent && !h.users.IsUnder(input.NewParent, rule.Parent) {
+				if node.Type == virtualInputType && !h.allows(identity, rule.ID) {
+					writeError(w, http.StatusConflict, "restricted_dependency")
+					return
+				}
 				writeError(w, http.StatusConflict, "move_would_break_rule: "+rule.Desc())
 				return
 			}
@@ -169,6 +173,10 @@ func (h *Handler) deleteNode(w http.ResponseWriter, r *http.Request, identity Id
 		}
 		for _, rule := range rules {
 			if h.referencesSubtree(rule, id) {
+				if node.Type == virtualInputType && !h.allows(identity, rule.ID) {
+					writeError(w, http.StatusConflict, "restricted_dependency")
+					return
+				}
 				writeError(w, http.StatusConflict, "used_by_rule: "+rule.Desc())
 				return
 			}

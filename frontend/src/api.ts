@@ -102,6 +102,15 @@ export async function request<T>(token: string, path: string, method = "GET", bo
 
 // 服务端错误码 → 面向值班员的业务文案；未知码按状态给出可操作提示。
 const errorTexts: Record<string, string> = {
+  invalid_input_definition: "输入定义不合法，请核对类型、单位、用途、范围与有效期",
+  invalid_input_value: "输入值类型不符或超出允许范围，原值未改变",
+  input_not_writable: "此输入尚未应用、未开放运行修改或属于配置常量",
+  revision_conflict: "输入已被其他操作更新，请刷新后重新确认",
+  operation_conflict: "此操作标识已使用，请读取当前状态后重新操作",
+  impact_confirmation_conflict: "变更内容或下游引用已变化，请重新预览并确认",
+  input_persistence_unconfirmed: "保存结果尚未确认，请先重新读取，不要盲目重复提交",
+  invalid_input_document: "输入存储内容不可用，请联系工程人员核查",
+  virtual_input_rollback_unsupported: "项目含虚拟输入，暂不支持项目版本回退；未执行写入",
   admin_required: "需要管理员权限",
   forbidden: "当前账号无权执行此操作",
   not_found: "对象不存在或已删除",
@@ -565,6 +574,8 @@ export async function fetchRuleDeps(token: string, ruleId: string, document: Doc
 export const permissionActions: { key: string; label: string }[] = [
   { key: "configure", label: "配置（通道/设备/点位/规则/画面）" },
   { key: "write_value", label: "写值（控制写入）" },
+  { key: "virtual_input_apply", label: "应用虚拟输入定义" },
+  { key: "virtual_input_write", label: "修改已开放的运行输入" },
   { key: "command", label: "命令执行" },
   { key: "rule_publish", label: "规则发布" },
   { key: "alarm_ack", label: "报警确认" },

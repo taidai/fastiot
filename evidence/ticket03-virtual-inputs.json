@@ -1,0 +1,95 @@
+{
+  "ticket": "03-typed-virtual-inputs",
+  "date": "2026-11-16",
+  "status": "implemented-and-verified-local-only",
+  "base": "3091296780531312382fd31081b83aa138bf9911",
+  "branch": "claude/happy-hodgkin-6a6407",
+  "scope": {
+    "physical_devices_connected": false,
+    "physical_device_writes": false,
+    "github_issue_or_pr_created": false,
+    "pushed": false,
+    "parent_checkout_modified": false,
+    "test_environment": "Isolated local SIOT/HTTP fixtures and a loopback-only Windows app instance with demo seeding disabled",
+    "credentials": "Generated for local fixtures; no passwords or session tokens in this evidence, source changes, screenshots or exports. Browser test account grants required explicit user approval."
+  },
+  "verification": {
+    "go": { "command": "go test -count=1 ./...", "result": "pass", "packages_with_tests": 24, "environment": "cached golang:1.27.3 container, network none, repository read-only" },
+    "frontend": [
+      { "command": "npm --prefix frontend run build", "result": "pass", "warning": "Existing bundle-size warning remains; no new dependency" },
+      { "command": "npm --prefix frontend run check:navigation", "result": "pass" },
+      { "command": "npm --prefix frontend run check:consistency", "result": "pass" },
+      { "command": "npm --prefix frontend run check:observations", "result": "pass" },
+      { "command": "npm --prefix frontend run check:acceptance", "result": "pass" }
+    ],
+    "domain": [
+      "Configuration creation and drafts have no effective value; applying 120 activates it; a later draft of 150 leaves 120 effective",
+      "Missing values are distinct from numeric zero and boolean false; number ranges and enum membership are enforced",
+      "Manual/simulation definitions require finite validity; writes require an applied, explicitly open definition",
+      "Wrong type and out-of-range assignments are rejected without changing state",
+      "Retries, reads and unchanged applications do not renew entered_at or expiry",
+      "Wall-clock rollback, monotonic expiry and process-epoch changes cannot make a timed value usable again",
+      "Changing a timed definition invalidates its current value; restoring the former definition does not resurrect it"
+    ],
+    "authenticated_http_and_storage": [
+      "Real HTTP/SIOT create, draft, apply, read and runtime assignment; explicit action whitelists and role defaults",
+      "Configure-only cannot apply; apply-only cannot edit; viewer and out-of-root writes rejected",
+      "Creation response retry preserves identity; changed payload with the same operation conflicts",
+      "Known screen-reference changes invalidate an earlier impact confirmation",
+      "Generic physical value/manual routes reject virtual inputs; canary Bus observed zero protocol writes",
+      "Raw private input documents are removed from snapshot and WebSocket projections",
+      "Corrupt stored source/revision/definition/current entries are rejected",
+      "Actual server stop/start on the same storage restores constants and original timed-entry timestamps, with timed values pending verification",
+      "Project copy produces new identities, draft-only state, closed runtime editing and preserved simulation provenance",
+      "Project versions exclude runtime values and change evidence; unsupported rollback rejects before writes",
+      "Generic move/delete rejection does not disclose an inaccessible rule name",
+      "WebSocket closes on password-reset session revocation and idle-session expiry"
+    ],
+    "browser": [
+      "Before implementation the actual point page had no virtual-input entry",
+      "Created a capacity configuration and a manual input through the real forms",
+      "Saved capacity 100 then draft 120: no effective value; explicit confirmation applied 120; subsequent draft 150 left 120 effective",
+      "Manual definition application did not invent a runtime value; explicitly opened runtime editing",
+      "Entered 11 outside -10..10: server rejected and the UI displayed the refusal without changing the value",
+      "Entered 5 and confirmed the impact: became effective with actor, time, source and original expiry",
+      "Final build: a local operator with only virtual_input_write logged in through the real login form, opened the visible customer runtime-input drawer, and changed manual value from 5 to 6; engineering navigation/buttons were absent",
+      "Final build: a local viewer logged in through the real login form, opened the visible read-only drawer, saw no mutation buttons, and a direct write returned 403",
+      "Simulation was created by public API and remained labelled 模拟输入（非实测） in the actual UI",
+      "Final backend process restarted against the same temporary data; configuration remained good at 120, manual and simulation became bad/pending_verification, and entered_at/expires_at were unchanged",
+      "A failed list query removed successful-looking input cards and displayed current-data-unavailable; recovery restored the list",
+      "Desktop 1440x1000 and mobile 390x844 drawers were visible; dialog/card horizontal overflow measured zero; mobile close control worked",
+      "Review regression: a character entered into Purpose originally moved focus to Name; after stable callbacks, further character insertion kept focus in Purpose",
+      "Review regression: a deliberately lost creation response originally produced two inputs on retry; final UI retry retained its operation ID and produced one input"
+    ]
+  },
+  "review": {
+    "method": "One independent read-only Standards/Spec review of all tracked and untracked implementation files",
+    "initial_findings": 4,
+    "resolved": [
+      { "issue": "Unstable overlay close callbacks stole typing focus", "proof": "Browser observed red then green using the Purpose field and character insertion" },
+      { "issue": "WebSocket streamed after session revocation/expiry", "proof": "TestVirtualInputWebSocketHonorsRevocationAndExpiry reset/expiry RED to GREEN; full suite green" },
+      { "issue": "UI generated a new creation operation ID on uncertain retry", "proof": "Browser injected a response loss after actual persistence; duplicate count changed from 2 to 1" },
+      { "issue": "Generic move/delete disclosed inaccessible rule descriptions", "proof": "TestVirtualInputGenericOperationsHideRestrictedReferences RED to GREEN; full suite green" }
+    ],
+    "deferred_findings": []
+  },
+  "rulings": [
+    "User explicitly authorized migration from 3091296 into this worktree after initial parent implementation; parent files were copied read-only and left intact",
+    "Inherited configuration red/green evidence was retained, then focused permission red tests were reproduced locally before continuing",
+    "Closely coupled backend/UI slices were consolidated into one final local implementation commit rather than exposing an unfinished intermediate API",
+    "Creation operation identity is scoped by parent, actor and operation ID; retry after intervening edits requires read/reconciliation instead of creating a duplicate",
+    "Known impact coverage is rule draft/applied bindings and saved group/device screens. Affected reference mutations are serialized with input mutations; this is not a project-wide transaction or a complete future calculation graph",
+    "Confirmed known dependencies require a matching impact fingerprint; the UI previews and confirms every apply/runtime assignment, including inputs with no known references",
+    "Enabling real WebSocket verification required the underlying HTTP writer; the now-enabled stream also checks existing session validity and current user scope on every push without renewing the idle lease",
+    "Customer overview uses a runtime-input drawer because inserting a card into its fixed layout collapsed the card to zero height; the same component is used by the engineering point page",
+    "Screenshots were displayed by preview tools, but copying tool-result images into the repository was permission-denied. No alternate copy path was attempted; this credential-free report records the evidence"
+  ],
+  "limits": [
+    "No production devices, real control writes, physical observations or real-device acceptance",
+    "No task04 calculations or complete control-chain simulation rejection claim; T33-F remains a later integration acceptance boundary",
+    "Timed entries conservatively require new authorized input after process restart or clock discontinuity",
+    "Legacy test-variable behavior is unchanged; there is no automatic migration",
+    "Copy and rollback were verified through real storage/HTTP integration tests, not an end-to-end browser project-copy workflow",
+    "Desktop and mobile screenshots exist in the session transcript, not as committed evidence files"
+  ]
+}

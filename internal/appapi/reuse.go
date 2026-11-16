@@ -201,6 +201,13 @@ func (h *Handler) createProjectFromSource(identity Identity, req reuseRequest) (
 		return reuseResult{}, fmt.Errorf("target_parent_unavailable")
 	}
 
+	for _, node := range nodes {
+		if node.Type == virtualInputType {
+			if _, err := decodeVirtualInput(node); err != nil {
+				return reuseResult{}, err
+			}
+		}
+	}
 	order := orderByDepth(nodes)
 	skipped := skippedNodes(nodes)
 	idMap := make(map[string]string, len(nodes))
@@ -334,6 +341,10 @@ func copyConfigPoints(node data.NodeEdge) data.Points {
 		}
 		if node.Type == data.NodeTypeModbus && reuseConnectionPoints[p.Type] {
 			continue
+		}
+		if node.Type == virtualInputType && p.Type == virtualInputDocument {
+			encoded, _ := inputConfiguration(node, true)
+			p = data.NewPointString(virtualInputDocument, "0", encoded)
 		}
 		if hasNodeReference(node, p) {
 			continue // 第二遍统一重写

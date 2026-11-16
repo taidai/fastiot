@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import { IonApp, IonCardContent, IonContent, IonSpinner } from "@ionic/react"
-import { EmsButton, EmsCard, EmsInput, EmsSectionHeader, EmsSelect, EmsSelectOption, EmptyState, InlineNotice, SegmentedTabs, StatusBadge } from "./components/ems"
+import { EmsButton, EmsCard, EmsInput, EmsOverlay, EmsSectionHeader, EmsSelect, EmsSelectOption, EmptyState, InlineNotice, SegmentedTabs, StatusBadge } from "./components/ems"
 import DecisionEditor from "./DecisionEditor"
 import { writable } from "./writable"
 import NodeManager from "./NodeManager"
@@ -13,6 +13,7 @@ import ScreenView from "./ScreenView"
 import DeliveryWorkbench from "./DeliveryWorkbench"
 import AllocatorsView from "./AllocatorsView"
 import PointsView from "./PointsView"
+import VirtualInputs from "./VirtualInputs"
 import AggregatesView from "./AggregatesView"
 import CommunicationView from "./CommunicationView"
 import ModbusTools from "./ModbusTools"
@@ -254,6 +255,8 @@ export default function App() {
   const [kpiConfigOpen, setKpiConfigOpen] = useState(false)
   const [shiftOpen, setShiftOpen] = useState(false)
   const [commandsOpen, setCommandsOpen] = useState(false)
+  const [inputsOpen, setInputsOpen] = useState(false)
+  const closeInputs = useCallback(() => setInputsOpen(false), [])
   const [stageScale, setStageScale] = useState(() => window.innerWidth >= 1000 ? Math.min((window.innerWidth - 8) / 1632, (window.innerHeight - 8) / 1000) : 1)
 
   const policy = snapshot?.user.policy
@@ -636,6 +639,7 @@ export default function App() {
             ? `站点 ${Math.max(1, siteNodes.findIndex((node) => node.id === siteID) + 1)} / ${siteNodes.length}`
             : `项目 1 / ${snapshot.roots.length}`}</span>
           {page === "devices" && <>
+            <button className="secondary-button head-action" onClick={() => setInputsOpen(true)}>运行输入</button>
             {canOperate && <button className="secondary-button head-action" onClick={() => setCommandsOpen(true)}>常用命令</button>}
             <button className="secondary-button head-action" onClick={() => setShiftOpen(true)}>班次交接</button>
             <button className="secondary-button head-action" onClick={() => setKpiConfigOpen(true)}>显示设置</button>
@@ -741,6 +745,9 @@ export default function App() {
 
     {kpiConfigOpen && <KpiConfigPanel config={kpiConfig} onSave={(next) => { setKpiConfig(next); saveKpiConfig(next) }} onClose={() => setKpiConfigOpen(false)} />}
     {shiftOpen && <ShiftHandover onClose={() => setShiftOpen(false)} />}
+    <EmsOverlay open={inputsOpen} title="运行输入" variant="drawer" onClose={closeInputs} actions={<EmsButton variant="secondary" onClick={closeInputs}>关闭运行输入</EmsButton>}>
+      {inputsOpen && <VirtualInputs token={token} nodes={view.nodes} />}
+    </EmsOverlay>
     {commandsOpen && <CommonCommands token={token} canOperate={canOperate} onError={setError} onClose={() => setCommandsOpen(false)} />}
   </div></div></IonContent></IonApp>
 }

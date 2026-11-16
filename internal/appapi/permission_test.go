@@ -7,17 +7,19 @@ import "testing"
 // run/ack/maintain set, viewer nothing.
 func TestCanActionRoleDefaults(t *testing.T) {
 	grants := map[string]map[string]bool{
-		ActionConfigure:     {"admin": true, "implementer": true, "operator": false, "viewer": false},
-		ActionRulePublish:   {"admin": true, "implementer": true, "operator": false, "viewer": false},
-		ActionDelete:        {"admin": true, "implementer": true, "operator": false, "viewer": false},
-		ActionExport:        {"admin": true, "implementer": true, "operator": false, "viewer": false},
-		ActionWriteValue:    {"admin": true, "implementer": true, "operator": true, "viewer": false},
-		ActionCommand:       {"admin": true, "implementer": true, "operator": true, "viewer": false},
-		ActionAlarmAck:      {"admin": true, "implementer": true, "operator": true, "viewer": false},
-		ActionAlarmMaintain: {"admin": true, "implementer": true, "operator": true, "viewer": false},
-		ActionAccountManage: {"admin": true, "implementer": false, "operator": false, "viewer": false},
-		ActionAuditView:     {"admin": true, "implementer": false, "operator": false, "viewer": false},
-		ActionSiteSettings:  {"admin": true, "implementer": false, "operator": false, "viewer": false},
+		ActionVirtualInputApply: {"admin": true, "implementer": true, "operator": false, "viewer": false},
+		ActionVirtualInputWrite: {"admin": true, "implementer": true, "operator": true, "viewer": false},
+		ActionConfigure:         {"admin": true, "implementer": true, "operator": false, "viewer": false},
+		ActionRulePublish:       {"admin": true, "implementer": true, "operator": false, "viewer": false},
+		ActionDelete:            {"admin": true, "implementer": true, "operator": false, "viewer": false},
+		ActionExport:            {"admin": true, "implementer": true, "operator": false, "viewer": false},
+		ActionWriteValue:        {"admin": true, "implementer": true, "operator": true, "viewer": false},
+		ActionCommand:           {"admin": true, "implementer": true, "operator": true, "viewer": false},
+		ActionAlarmAck:          {"admin": true, "implementer": true, "operator": true, "viewer": false},
+		ActionAlarmMaintain:     {"admin": true, "implementer": true, "operator": true, "viewer": false},
+		ActionAccountManage:     {"admin": true, "implementer": false, "operator": false, "viewer": false},
+		ActionAuditView:         {"admin": true, "implementer": false, "operator": false, "viewer": false},
+		ActionSiteSettings:      {"admin": true, "implementer": false, "operator": false, "viewer": false},
 	}
 	for _, role := range []string{"admin", "implementer", "operator", "viewer"} {
 		identity := Identity{Policy: AccessPolicy{Admin: role == "admin", Role: role}}

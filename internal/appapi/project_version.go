@@ -107,6 +107,13 @@ func (h *Handler) snapshotSite(identity Identity, siteID, note string) (projectV
 			if reuseRuntimePoints[p.Type] || isSecretPoint(p.Type) {
 				continue
 			}
+			if node.Type == virtualInputType && p.Type == virtualInputDocument {
+				encoded, err := inputConfiguration(node, false)
+				if err != nil {
+					return projectVersion{}, err
+				}
+				p = data.NewPointString(virtualInputDocument, "0", encoded)
+			}
 			points = append(points, p)
 		}
 		version.Nodes = append(version.Nodes, versionNode{ID: node.ID, Type: node.Type, Parent: node.Parent, Points: points})
@@ -250,14 +257,26 @@ func (h *Handler) rollbackHandler(w http.ResponseWriter, identity Identity, site
 		writeError(w, http.StatusNotFound, "version_not_found")
 		return
 	}
-	// 回退前先冻结当前配置，回退失败或需要反悔时有据可查。
-	if current, err := h.snapshotSite(identity, siteID, "回退前自动快照"); err == nil {
-		_ = h.saveVersion(current)
+	for _, node := range version.Nodes {
+		if node.Type == virtualInputType {
+			writeError(w, 409, "virtual_input_rollback_unsupported")
+			return
+		}
 	}
 	currentNodes, err := h.loadReuseSource(identity, siteID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	for _, node := range currentNodes {
+		if node.Type == virtualInputType {
+			writeError(w, 409, "virtual_input_rollback_unsupported")
+			return
+		}
+	}
+	// 回退前先冻结当前配置，回退失败或需要反悔时有据可查。
+	if current, err := h.snapshotSite(identity, siteID, "回退前自动快照"); err == nil {
+		_ = h.saveVersion(current)
 	}
 	existing := make(map[string]bool, len(currentNodes))
 	for _, node := range currentNodes {

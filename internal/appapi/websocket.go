@@ -2,6 +2,7 @@ package appapi
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -27,9 +28,17 @@ func (h *Handler) serveWS(w http.ResponseWriter, r *http.Request, identity Ident
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for {
+		userID, ok := h.sessionUser(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), false)
+		if !ok {
+			return
+		}
+		identity, ok = h.identityForUser(userID)
+		if !ok {
+			return
+		}
 		nodes, err := h.visibleNodes(identity)
 		if err == nil {
-			if err := conn.WriteJSON(map[string]any{"nodes": nodes, "at": time.Now().UTC()}); err != nil {
+			if err := conn.WriteJSON(map[string]any{"nodes": publicInputNodes(nodes), "at": time.Now().UTC()}); err != nil {
 				return // 客户端断开
 			}
 		}

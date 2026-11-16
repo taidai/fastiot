@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { IonCardContent } from "@ionic/react"
 import { fetchHistory, Node, point, request } from "./api"
+import VirtualInputs from "./VirtualInputs"
 import SafetyModal from "./SafetyModal"
 import { describeObservation, observationKey, observationTimeLabel } from "./observations"
 import { useObservations } from "./useObservations"
@@ -545,6 +546,7 @@ export default function PointsView({ token, nodes, isAdmin, canOperate, busy, ru
   }
 
   return <section className="points-page grid min-w-0 gap-4">
+    <VirtualInputs token={token} nodes={nodes} engineering={isAdmin} />
     {observations.error && <InlineNotice tone="danger">观测状态读取失败：{observations.error}。以下数值仅为上次查询结果。</InlineNotice>}
     <MetricStrip items={[
       { label: "全部点位", value: counts.total, note: "实时值每 2 秒刷新" },
