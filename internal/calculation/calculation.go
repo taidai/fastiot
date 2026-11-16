@@ -15,12 +15,10 @@ type Definition struct {
 	Unit      string   `json:"unit"`
 	MaxSkewMS *int64   `json:"max_skew_ms,omitempty"`
 }
-
 type Metadata struct {
 	Kind string `json:"kind"`
 	Unit string `json:"unit"`
 }
-
 type Error struct {
 	NodeID  string `json:"node_id"`
 	Code    string `json:"code"`
@@ -28,7 +26,6 @@ type Error struct {
 }
 
 func (e *Error) Error() string { return fmt.Sprintf("%s: %s (%s)", e.NodeID, e.Code, e.InputID) }
-
 func (d Definition) Validate() error {
 	if (d.Operator != "add" && d.Operator != "divide") || len(d.Inputs) != 2 || d.Inputs[0] == "" || d.Inputs[1] == "" || d.Kind != "number" || strings.TrimSpace(d.Unit) == "" {
 		return &Error{Code: "invalid_definition"}
@@ -38,14 +35,10 @@ func (d Definition) Validate() error {
 	}
 	return nil
 }
-
-func ValidateGraph(definitions map[string]Definition, sources map[string]Metadata) ([]string, error) {
+func dependencyOrder(definitions map[string]Definition) ([]string, []string) {
 	pending := map[string]int{}
 	dependents := map[string][]string{}
 	for id, d := range definitions {
-		if err := d.Validate(); err != nil {
-			return nil, &Error{NodeID: id, Code: err.(*Error).Code}
-		}
 		pending[id] = 0
 		for _, input := range d.Inputs {
 			if _, ok := definitions[input]; ok {
@@ -73,14 +66,49 @@ func ValidateGraph(definitions map[string]Definition, sources map[string]Metadat
 			}
 		}
 	}
-	if len(order) != len(definitions) {
-		blocked := []string{}
-		for id, count := range pending {
-			if count > 0 {
-				blocked = append(blocked, id)
-			}
+	blocked := []string{}
+	for id, count := range pending {
+		if count > 0 {
+			blocked = append(blocked, id)
 		}
-		sort.Strings(blocked)
+	}
+	sort.Strings(blocked)
+	return order, blocked
+}
+func checkInputs(id string, d Definition, metadata map[string]Metadata) error {
+	for _, input := range d.Inputs {
+		m, ok := metadata[input]
+		if !ok {
+			return &Error{NodeID: id, Code: "missing_reference", InputID: input}
+		}
+		if m.Kind != "number" {
+			return &Error{NodeID: id, Code: "input_type", InputID: input}
+		}
+		if strings.TrimSpace(m.Unit) == "" {
+			return &Error{NodeID: id, Code: "missing_unit", InputID: input}
+		}
+	}
+	left, right := metadata[d.Inputs[0]], metadata[d.Inputs[1]]
+	if left.Unit != right.Unit {
+		return &Error{NodeID: id, Code: "unit_mismatch"}
+	}
+	unit := left.Unit
+	if d.Operator == "divide" {
+		unit = "1"
+	}
+	if d.Unit != unit {
+		return &Error{NodeID: id, Code: "output_unit"}
+	}
+	return nil
+}
+func ValidateGraph(definitions map[string]Definition, sources map[string]Metadata) ([]string, error) {
+	for id, d := range definitions {
+		if err := d.Validate(); err != nil {
+			return nil, &Error{NodeID: id, Code: err.(*Error).Code}
+		}
+	}
+	order, blocked := dependencyOrder(definitions)
+	if len(blocked) > 0 {
 		return nil, &Error{NodeID: blocked[0], Code: "cycle"}
 	}
 	metadata := make(map[string]Metadata, len(sources)+len(definitions))
@@ -89,28 +117,8 @@ func ValidateGraph(definitions map[string]Definition, sources map[string]Metadat
 	}
 	for _, id := range order {
 		d := definitions[id]
-		for _, input := range d.Inputs {
-			m, ok := metadata[input]
-			if !ok {
-				return nil, &Error{NodeID: id, Code: "missing_reference", InputID: input}
-			}
-			if m.Kind != "number" {
-				return nil, &Error{NodeID: id, Code: "input_type", InputID: input}
-			}
-			if strings.TrimSpace(m.Unit) == "" {
-				return nil, &Error{NodeID: id, Code: "missing_unit", InputID: input}
-			}
-		}
-		left, right := metadata[d.Inputs[0]], metadata[d.Inputs[1]]
-		if left.Unit != right.Unit {
-			return nil, &Error{NodeID: id, Code: "unit_mismatch"}
-		}
-		unit := left.Unit
-		if d.Operator == "divide" {
-			unit = "1"
-		}
-		if d.Unit != unit {
-			return nil, &Error{NodeID: id, Code: "output_unit"}
+		if err := checkInputs(id, d, metadata); err != nil {
+			return nil, err
 		}
 		metadata[id] = Metadata{Kind: d.Kind, Unit: d.Unit}
 	}

@@ -20,22 +20,24 @@ import (
 	"github.com/simpleiot/simpleiot/data"
 
 	"fastiot/internal/audit"
+	"fastiot/internal/calculation"
 	"fastiot/internal/decision"
 	"fastiot/internal/emsapi"
 )
 
 type Handler struct {
-	nc             *nats.Conn
-	users          api.UserAuthority
-	ready          *atomic.Bool
-	commandMu      sync.Mutex
-	virtualInputMu sync.Mutex
-	inputEpoch     string
-	inputStart     time.Time
-	inputLastWall  time.Time
-	ownershipMu    sync.Mutex
-	ems            *emsapi.Handler
-	opcua          *OpcuaManager
+	nc                 *nats.Conn
+	users              api.UserAuthority
+	ready              *atomic.Bool
+	commandMu          sync.Mutex
+	virtualInputMu     sync.Mutex
+	calculationRuntime *calculation.Runtime
+	inputEpoch         string
+	inputStart         time.Time
+	inputLastWall      time.Time
+	ownershipMu        sync.Mutex
+	ems                *emsapi.Handler
+	opcua              *OpcuaManager
 
 	siteGoalMu    sync.Mutex
 	siteGoalCache map[string]siteGoalEntry
@@ -58,9 +60,10 @@ type Handler struct {
 func New(nc *nats.Conn, users api.UserAuthority, ready *atomic.Bool) *Handler {
 	return &Handler{
 		nc: nc, users: users, ready: ready,
-		sessions:       map[string]sessionState{},
-		sessionTimeout: 30 * time.Minute,
-		maxSessions:    5,
+		calculationRuntime: calculation.NewRuntime(data.NewID()),
+		sessions:           map[string]sessionState{},
+		sessionTimeout:     30 * time.Minute,
+		maxSessions:        5,
 	}
 }
 

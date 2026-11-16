@@ -1,6 +1,9 @@
 package bridge
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"time"
@@ -37,6 +40,31 @@ func (s *NodeSource) Buses() ([]BusConfig, error) {
 		return nil, err
 	}
 	return buildBuses(buses, ios), nil
+}
+
+// Revision timestamps prevent an edit-and-revert from validating an old sample.
+func AcquisitionStamp(bus, point data.NodeEdge) string {
+	selectPoints := func(node data.NodeEdge, names []string) data.Points {
+		points := data.Points{}
+		for _, name := range names {
+			if p, ok := node.Points.Find(name, ""); ok {
+				p.Origin = ""
+				points = append(points, p)
+			}
+		}
+		return points
+	}
+	transport := selectPoints(bus, []string{data.PointTypeProtocol, data.PointTypeURI, data.PointTypePort, data.PointTypeBaud, data.PointTypeClientServer, data.PointTypeDisabled, data.PointTypePollPeriod, "timeout", "dataBits", "parity", "stopBits"})
+	mapping := selectPoints(point, []string{data.PointTypeID, data.PointTypeAddress, data.PointTypeModbusIOType, data.PointTypeDataFormat, data.PointTypeScale, data.PointTypeOffset, data.PointTypeUnits, data.PointTypeDisabled, data.PointTypeReadOnly})
+	encoded, err := json.Marshal(struct {
+		Bus, Point         string
+		Transport, Mapping data.Points
+	}{bus.ID, point.ID, transport, mapping})
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:])
 }
 
 func buildBuses(buses, ios []data.NodeEdge) []BusConfig {
@@ -86,6 +114,16 @@ func buildBuses(buses, ios []data.NodeEdge) []BusConfig {
 			period = time.Second
 		}
 		devices := buildDevices(bus.ID, children[bus.ID])
+		byID := map[string]data.NodeEdge{}
+		for _, node := range children[bus.ID] {
+			byID[node.ID] = node
+		}
+		for i := range devices {
+			for j := range devices[i].Points {
+				point := &devices[i].Points[j]
+				point.ConfigStamp = AcquisitionStamp(bus, byID[point.ID])
+			}
+		}
 		if len(devices) == 0 {
 			continue
 		}
@@ -158,6 +196,7 @@ func buildPoint(node data.NodeEdge) (channel.Point, bool) {
 		Scale:  number(node.Points, data.PointTypeScale),
 		Offset: number(node.Points, data.PointTypeOffset),
 		Kind:   kind, ReadOnly: number(node.Points, data.PointTypeReadOnly) != 0,
+		Unit: text(node.Points, data.PointTypeUnits),
 	}, true
 }
 

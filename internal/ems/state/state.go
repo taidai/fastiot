@@ -26,16 +26,20 @@ type Value struct {
 	SourceTime      time.Time
 	ReceivedTime    time.Time
 	TimeSource      string
+	Unit            string
+	ConfigStamp     string
 	Reason          string
 	LastAttemptTime time.Time
 }
 
 // Store is safe for concurrent readers and one writer.
 type Store struct {
-	mu      sync.RWMutex
-	values  map[Key]Value
-	health  map[string]channel.Health
-	updated map[string]time.Time
+	mu       sync.RWMutex
+	values   map[Key]Value
+	health   map[string]channel.Health
+	updated  map[string]time.Time
+	changed  chan struct{}
+	revision uint64
 }
 
 // New returns an empty store.
@@ -44,6 +48,7 @@ func New() *Store {
 		values:  make(map[Key]Value),
 		health:  make(map[string]channel.Health),
 		updated: make(map[string]time.Time),
+		changed: make(chan struct{}, 1),
 	}
 }
 
@@ -78,6 +83,7 @@ func (s *Store) Apply(now time.Time, results []channel.Result) []channel.Result 
 			previous.Quality, previous.Reason = signal.Invalid, reason
 			previous.LastAttemptTime = now
 			s.values[key] = previous
+			s.notifyLocked()
 			continue
 		}
 		if exists && !result.SourceTime.After(previous.SourceTime) {
@@ -87,8 +93,9 @@ func (s *Store) Apply(now time.Time, results []channel.Result) []channel.Result 
 			DeviceID: result.DeviceID, PointID: result.PointID,
 			Value: result.Value, Quality: result.Quality,
 			SourceTime: result.SourceTime, ReceivedTime: now, LastAttemptTime: now,
-			TimeSource: result.TimeSource,
+			TimeSource: result.TimeSource, Unit: result.Unit, ConfigStamp: result.ConfigStamp,
 		}
+		s.notifyLocked()
 		accepted = append(accepted, result)
 	}
 	return accepted
@@ -144,10 +151,37 @@ func (s *Store) Samples(deviceID string, now time.Time, maxAge time.Duration) ma
 	return samples
 }
 
+type Capture struct {
+	At       time.Time
+	Revision uint64
+	Values   []Value
+}
+
+func (s *Store) notifyLocked() {
+	s.revision++
+	select {
+	case s.changed <- struct{}{}:
+	default:
+	}
+}
+
+// Changed coalesces wakeups for one consumer; it is not an observation log.
+func (s *Store) Changed() <-chan struct{} { return s.changed }
+func (s *Store) Capture(clock func() time.Time, maxAge time.Duration) Capture {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	now := clock()
+	return Capture{At: now, Revision: s.revision, Values: s.snapshotLocked(now, maxAge)}
+}
+
 // Snapshot returns all values sorted by device and point.
 func (s *Store) Snapshot(now time.Time, maxAge time.Duration) []Value {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.snapshotLocked(now, maxAge)
+}
+
+func (s *Store) snapshotLocked(now time.Time, maxAge time.Duration) []Value {
 	values := make([]Value, 0, len(s.values))
 	for _, value := range s.values {
 		values = append(values, s.effective(value, now, maxAge))

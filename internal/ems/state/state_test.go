@@ -18,6 +18,48 @@ func result(deviceID, pointID string, value float64) channel.Result {
 	}
 }
 
+func TestCaptureWakesOnQualityChanges(t *testing.T) {
+	store := New()
+	store.Apply(t0, []channel.Result{result("d1", "p", 37)})
+	select {
+	case <-store.Changed():
+	default:
+		t.Fatal("new observation did not wake consumer")
+	}
+	calls := 0
+	captured := store.Capture(func() time.Time { calls++; return t0.Add(time.Second) }, time.Minute)
+	if calls != 1 || !captured.At.Equal(t0.Add(time.Second)) || len(captured.Values) != 1 || captured.Values[0].Quality != signal.Good {
+		t.Fatalf("invalid capture: %+v", captured)
+	}
+	store.Apply(t0.Add(2*time.Second), []channel.Result{{DeviceID: "d1", PointID: "p", Quality: signal.Invalid, Error: "read_failed"}})
+	select {
+	case <-store.Changed():
+	default:
+		t.Fatal("failed attempt did not wake consumer")
+	}
+	failed := store.Capture(func() time.Time { return t0.Add(2 * time.Second) }, time.Minute)
+	if failed.Revision <= captured.Revision || failed.Values[0].Quality != signal.Invalid || failed.Values[0].Value.Num != 37 || !failed.Values[0].SourceTime.Equal(t0) {
+		t.Fatalf("quality change lost accepted evidence: %+v", failed)
+	}
+	old := result("d1", "p", 12)
+	old.SourceTime = t0.Add(-time.Second)
+	store.Apply(t0.Add(3*time.Second), []channel.Result{old})
+	select {
+	case <-store.Changed():
+		t.Fatal("discarded old sample emitted a change")
+	default:
+	}
+	again := store.Capture(func() time.Time { return t0.Add(4 * time.Second) }, time.Minute)
+	if again.Revision != failed.Revision {
+		t.Fatal("capture or discarded sample changed revision")
+	}
+	again.Values[0].Value = signal.Num(999)
+	actual, _ := store.Get(t0.Add(4*time.Second), "d1", "p", time.Minute)
+	if actual.Value.Num != 37 {
+		t.Fatal("capture exposed mutable store values")
+	}
+}
+
 func TestApplyAndGet(t *testing.T) {
 	store := New()
 	store.Apply(t0, []channel.Result{result("d1", "temp", 35.1)})

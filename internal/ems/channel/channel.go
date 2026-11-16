@@ -35,9 +35,11 @@ type Point struct {
 	// Format applies to registers: uint16, int16, uint32, int32, float32.
 	Format string
 	// Scale and Offset convert raw to engineering units.
-	Scale  float64
-	Offset float64
-	Kind   signal.Kind
+	Scale       float64
+	Offset      float64
+	Kind        signal.Kind
+	Unit        string
+	ConfigStamp string
 	// ReadOnly points cannot be queued as writes.
 	ReadOnly bool
 }
@@ -108,13 +110,15 @@ type Stats struct {
 
 // Result failures are attempts, not observations; never publish their zero Value.
 type Result struct {
-	DeviceID   string
-	PointID    string
-	Value      signal.Value
-	Quality    signal.Quality
-	SourceTime time.Time
-	TimeSource string
-	Error      string
+	DeviceID    string
+	PointID     string
+	Value       signal.Value
+	Quality     signal.Quality
+	SourceTime  time.Time
+	TimeSource  string
+	Unit        string
+	ConfigStamp string
+	Error       string
 }
 
 // WriteResult is the outcome of one queued write. A failure means the device
@@ -314,7 +318,7 @@ func (c *Channel) RunOnce(ctx context.Context, now func() time.Time) ([]Result, 
 				}
 				results = append(results, Result{
 					DeviceID: device.ID, PointID: point.ID,
-					Value: value, Quality: signal.Good, SourceTime: observedAt, TimeSource: "platform_collection",
+					Value: value, Quality: signal.Good, SourceTime: observedAt, TimeSource: "platform_collection", Unit: point.Unit, ConfigStamp: point.ConfigStamp,
 				})
 			}
 		}

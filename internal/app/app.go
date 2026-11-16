@@ -120,6 +120,7 @@ func Start(ctx context.Context, cfg Config) (*App, error) {
 		log.Println("fastiot profiles:", message)
 	}
 	handlerRef := new(atomic.Value)
+	calculationHandler := new(atomic.Pointer[appapi.Handler])
 	var energyDispatch func(string) error
 	var reconcileCabinet func()
 	var forecastTick func(time.Time)
@@ -143,6 +144,7 @@ func Start(ctx context.Context, cfg Config) (*App, error) {
 			handler.SetSessionPolicy(envMinutes("FASTEMS_SESSION_TIMEOUT_MINUTES", 30), envCount("FASTEMS_MAX_SESSIONS", 5))
 			emsHandler.PersistMaintenance = handler.PersistAlarmMaintenance
 			handler.SetEMS(emsHandler)
+			calculationHandler.Store(handler)
 			energyDispatch = func(id string) error {
 				return handler.RunUnitArbitratedDispatch(id)
 			}
@@ -272,6 +274,22 @@ func Start(ctx context.Context, cfg Config) (*App, error) {
 		startCancel()
 		readyOnce.Do(func() { close(readyCh) })
 	})
+
+	group.Add(func() error {
+		select {
+		case <-readyCh:
+		case <-emsCtx.Done():
+			return nil
+		}
+		handler := calculationHandler.Load()
+		if handler == nil {
+			return errors.New("calculation handler not initialized")
+		}
+		if err := handler.RunCalculations(emsCtx); err != nil && !errors.Is(err, context.Canceled) {
+			return err
+		}
+		return nil
+	}, func(error) { emsCancel() })
 
 	// An external cancellation (context or App.Close) stops the group.
 	group.Add(func() error {

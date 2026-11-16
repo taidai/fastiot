@@ -34,7 +34,7 @@ type calculationResponse struct {
 	Version     uint64                  `json:"version"`
 	Draft       *calculation.Definition `json:"draft,omitempty"`
 	Applied     *calculation.Definition `json:"applied,omitempty"`
-	State       map[string]any          `json:"state"`
+	State       any                     `json:"state"`
 	Permissions map[string]bool         `json:"permissions"`
 }
 type calculationCatalog struct {
@@ -121,7 +121,29 @@ func (h *Handler) calculationResponse(n data.NodeEdge, d calculation.Document, i
 		out.Draft = &d.Draft
 	}
 	if d.Applied != nil {
-		out.State["reason"] = "pending_calculation"
+		out.State = map[string]any{"quality": "uninitialized", "reason": "pending_calculation"}
+		if result, ok := h.CalculationRuntime().Snapshot().Results[n.ID]; ok && result.Version == d.Version {
+			visible := true
+			for _, leaf := range result.Leaves {
+				if !h.allows(identity, leaf.ID) {
+					visible = false
+					break
+				}
+			}
+			if !visible {
+				out.State = map[string]any{"quality": "invalid", "reason": "restricted_dependency"}
+				return out
+			}
+			if result.Quality == "good" && !result.ValidUntil.IsZero() && !time.Now().Before(result.ValidUntil) {
+				last := result
+				last.Retained = nil
+				result.Retained = &last
+				result.Value = nil
+				result.Quality = "stale"
+				result.Reason = "expired"
+			}
+			out.State = result
+		}
 	}
 	return out
 }

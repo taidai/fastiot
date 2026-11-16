@@ -310,9 +310,9 @@ func configHash(bus BusConfig) string {
 			if point.ReadOnly {
 				readOnly = 1
 			}
-			fmt.Fprintf(&builder, "P:%s:%s:%d:%s:%g:%g:%d:%d\n",
+			fmt.Fprintf(&builder, "P:%s:%s:%d:%s:%g:%g:%d:%d:%s:%s\n",
 				point.ID, point.Function, point.Address, point.Format,
-				point.Scale, point.Offset, point.Kind, readOnly)
+				point.Scale, point.Offset, point.Kind, readOnly, point.Unit, point.ConfigStamp)
 		}
 	}
 	sum := sha256.Sum256([]byte(builder.String()))
