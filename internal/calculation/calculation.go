@@ -26,12 +26,21 @@ type Error struct {
 }
 
 func (e *Error) Error() string { return fmt.Sprintf("%s: %s (%s)", e.NodeID, e.Code, e.InputID) }
-func (d Definition) Validate() error {
-	if (d.Operator != "add" && d.Operator != "divide") || len(d.Inputs) != 2 || d.Inputs[0] == "" || d.Inputs[1] == "" || d.Kind != "number" || strings.TrimSpace(d.Unit) == "" {
+func (d Definition) ValidateDraft() error {
+	if (d.Operator != "add" && d.Operator != "divide") || len(d.Inputs) != 2 || d.Kind != "number" || strings.TrimSpace(d.Unit) == "" {
 		return &Error{Code: "invalid_definition"}
 	}
 	if d.MaxSkewMS != nil && (*d.MaxSkewMS < 0 || *d.MaxSkewMS > math.MaxInt64/int64(time.Millisecond)) {
 		return &Error{Code: "invalid_time_skew"}
+	}
+	return nil
+}
+func (d Definition) Validate() error {
+	if err := d.ValidateDraft(); err != nil {
+		return err
+	}
+	if d.Inputs[0] == "" || d.Inputs[1] == "" {
+		return &Error{Code: "missing_reference"}
 	}
 	return nil
 }

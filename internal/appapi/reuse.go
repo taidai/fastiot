@@ -202,6 +202,11 @@ func (h *Handler) createProjectFromSource(identity Identity, req reuseRequest) (
 	}
 
 	for _, node := range nodes {
+		if node.Type == calculationType {
+			if _, err := decodeCalculation(node); err != nil {
+				return reuseResult{}, err
+			}
+		}
 		if node.Type == virtualInputType {
 			if _, err := decodeVirtualInput(node); err != nil {
 				return reuseResult{}, err
@@ -366,7 +371,7 @@ func setDescription(points data.Points, name string) data.Points {
 
 func hasNodeReference(node data.NodeEdge, p data.Point) bool {
 	switch p.Type {
-	case PointTypePCCFeedback, capabilityInputsPoint, reuseSetpointPoint, "applied", "draft":
+	case PointTypePCCFeedback, capabilityInputsPoint, reuseSetpointPoint, "applied", "draft", calculationDocument:
 		return true
 	}
 	return false
@@ -405,6 +410,17 @@ func rewriteReferences(node data.NodeEdge, idMap map[string]string) (data.Points
 	var unresolved []string
 	for _, p := range node.Points {
 		switch p.Type {
+		case calculationDocument:
+			if node.Type != calculationType {
+				continue
+			}
+			encoded, missing, err := copyCalculation(node, idMap)
+			if err != nil {
+				unresolved = append(unresolved, "invalid calculation document")
+				continue
+			}
+			unresolved = append(unresolved, missing...)
+			points = append(points, data.NewPointString(calculationDocument, "0", encoded))
 		case PointTypePCCFeedback:
 			var binding decision.PCCFeedback
 			if json.Unmarshal([]byte(p.Txt()), &binding) != nil {

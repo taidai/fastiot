@@ -164,7 +164,7 @@ func (h *Handler) virtualInputs(w http.ResponseWriter, r *http.Request, identity
 		return
 	}
 	if action != "draft" {
-		impact, err := h.inputImpact(identity, node.ID, action, input)
+		impact, err := h.inputImpact(identity, node.ID, action, impactOperation{Revision: input.Revision, OperationID: input.OperationID, Value: input.Value})
 		if err != nil {
 			writeError(w, 503, "dependency_check_failed")
 			return
@@ -182,6 +182,9 @@ func (h *Handler) virtualInputs(w http.ResponseWriter, r *http.Request, identity
 		if err = h.persistVirtualInput(node, next, identity.UserID); err != nil {
 			writeError(w, 503, "input_persistence_unconfirmed")
 			return
+		}
+		if action != "draft" {
+			h.CalculationRuntime().Invalidate([]string{node.ID})
 		}
 	}
 	writeJSON(w, h.inputResponse(node, next, identity))
@@ -322,9 +325,15 @@ type inputImpact struct {
 	Coverage     string      `json:"coverage"`
 }
 
-func (h *Handler) inputImpact(identity Identity, id, action string, input virtualInputRequest) (inputImpact, error) {
+type impactOperation struct {
+	Revision    uint64
+	OperationID string
+	Value       json.RawMessage
+}
+
+func (h *Handler) inputImpact(identity Identity, id, action string, input impactOperation) (inputImpact, error) {
 	var nodes []data.NodeEdge
-	for _, typ := range []string{"decisionTable", data.NodeTypeGroup, data.NodeTypeDevice} {
+	for _, typ := range []string{"decisionTable", data.NodeTypeGroup, data.NodeTypeDevice, calculationType} {
 		found, err := client.GetNodes(h.nc, "all", "all", typ, false)
 		if err != nil {
 			return inputImpact{}, err
@@ -332,18 +341,34 @@ func (h *Handler) inputImpact(identity Identity, id, action string, input virtua
 		nodes = append(nodes, found...)
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
-	result := inputImpact{References: []reuseItem{}, Coverage: "已知规则草稿/生效绑定与画面引用；不代表完整计算链或真实控制验证"}
+	result := inputImpact{References: []reuseItem{}, Coverage: "已知规则、画面与计算点定义引用；不代表全部外部消费或真实控制验证"}
 	dependencies := []string{}
 	for _, n := range nodes {
 		for _, p := range n.Points {
 			if p.Tombstone%2 != 0 {
 				continue
 			}
-			if p.Type != screenPointType && !(n.Type == "decisionTable" && (p.Type == "draft" || p.Type == "applied")) {
+			isCalculation := n.Type == calculationType && p.Type == calculationDocument
+			if p.Type != screenPointType && !(n.Type == "decisionTable" && (p.Type == "draft" || p.Type == "applied")) && !isCalculation {
 				continue
 			}
 			var document any
-			if json.Unmarshal([]byte(p.Txt()), &document) != nil {
+			if isCalculation {
+				d, err := decodeCalculation(n)
+				if err != nil {
+					continue
+				}
+				refs := append([]string(nil), d.Draft.Inputs...)
+				if d.Applied != nil {
+					refs = append(refs, d.Applied.Inputs...)
+				}
+				for _, ref := range refs {
+					if ref == id {
+						document = id
+						break
+					}
+				}
+			} else if json.Unmarshal([]byte(p.Txt()), &document) != nil {
 				continue
 			}
 			if !inputReference(document, id) {

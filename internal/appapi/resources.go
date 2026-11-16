@@ -100,6 +100,9 @@ func (h *Handler) moveNode(w http.ResponseWriter, r *http.Request, identity Iden
 		writeJSON(w, map[string]bool{"moved": true})
 		return
 	}
+	if h.rejectCalculationDependents(w, id) {
+		return
+	}
 	if node.Type == "decisionTable" {
 		applied, _ := node.Points.Text("applied", "")
 		if applied != "" {
@@ -122,7 +125,7 @@ func (h *Handler) moveNode(w http.ResponseWriter, r *http.Request, identity Iden
 				continue
 			}
 			if h.referencesSubtree(rule, id) && input.NewParent != rule.Parent && !h.users.IsUnder(input.NewParent, rule.Parent) {
-				if node.Type == virtualInputType && !h.allows(identity, rule.ID) {
+				if (node.Type == virtualInputType || node.Type == calculationType) && !h.allows(identity, rule.ID) {
 					writeError(w, http.StatusConflict, "restricted_dependency")
 					return
 				}
@@ -165,6 +168,9 @@ func (h *Handler) deleteNode(w http.ResponseWriter, r *http.Request, identity Id
 		writeError(w, http.StatusConflict, "has_children")
 		return
 	}
+	if h.rejectCalculationDependents(w, id) {
+		return
+	}
 	if node.Type != "decisionTable" {
 		rules, err := h.allRules()
 		if err != nil {
@@ -173,7 +179,7 @@ func (h *Handler) deleteNode(w http.ResponseWriter, r *http.Request, identity Id
 		}
 		for _, rule := range rules {
 			if h.referencesSubtree(rule, id) {
-				if node.Type == virtualInputType && !h.allows(identity, rule.ID) {
+				if (node.Type == virtualInputType || node.Type == calculationType) && !h.allows(identity, rule.ID) {
 					writeError(w, http.StatusConflict, "restricted_dependency")
 					return
 				}

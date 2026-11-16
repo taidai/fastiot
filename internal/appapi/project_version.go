@@ -258,6 +258,10 @@ func (h *Handler) rollbackHandler(w http.ResponseWriter, identity Identity, site
 		return
 	}
 	for _, node := range version.Nodes {
+		if node.Type == calculationType {
+			writeError(w, 409, "calculation_rollback_unsupported")
+			return
+		}
 		if node.Type == virtualInputType {
 			writeError(w, 409, "virtual_input_rollback_unsupported")
 			return
@@ -269,6 +273,10 @@ func (h *Handler) rollbackHandler(w http.ResponseWriter, identity Identity, site
 		return
 	}
 	for _, node := range currentNodes {
+		if node.Type == calculationType {
+			writeError(w, 409, "calculation_rollback_unsupported")
+			return
+		}
 		if node.Type == virtualInputType {
 			writeError(w, 409, "virtual_input_rollback_unsupported")
 			return

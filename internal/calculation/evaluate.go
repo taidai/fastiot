@@ -22,6 +22,7 @@ type Sample struct {
 	Quality      string    `json:"quality"`
 	Reason       string    `json:"reason,omitempty"`
 	Source       string    `json:"source"`
+	Simulated    bool      `json:"simulated"`
 	Version      string    `json:"version,omitempty"`
 	TimeSource   string    `json:"time_source,omitempty"`
 	SourceTime   time.Time `json:"source_time,omitzero"`
@@ -46,6 +47,7 @@ type Result struct {
 	ValidUntil   time.Time  `json:"valid_until,omitzero"`
 	Inputs       []Sample   `json:"inputs"`
 	Leaves       []Sample   `json:"leaves"`
+	Simulated    bool       `json:"simulated"`
 	Retained     *Result    `json:"retained,omitempty"`
 	signature    string
 }
@@ -123,6 +125,9 @@ func EvaluateBatch(formulas map[string]Formula, snapshot Snapshot, batchID strin
 		for _, ref := range ids {
 			leaf := leaves[ref]
 			result.Leaves = append(result.Leaves, leaf)
+			if leaf.Simulated || leaf.Source == "simulation" {
+				result.Simulated = true
+			}
 			if !leaf.ValidUntil.IsZero() && (result.ValidUntil.IsZero() || leaf.ValidUntil.Before(result.ValidUntil)) {
 				result.ValidUntil = leaf.ValidUntil
 			}

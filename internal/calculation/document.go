@@ -93,7 +93,7 @@ func (d Document) SaveDraft(draft Definition, c Mutation) (Document, error) {
 	if err != nil || retry {
 		return d, err
 	}
-	if err := draft.Validate(); err != nil {
+	if err := draft.ValidateDraft(); err != nil {
 		return d, err
 	}
 	if reflect.DeepEqual(d.Draft, draft) {

@@ -20,11 +20,14 @@ const calculationDocument = "calculationDocument"
 const ActionCalculationApply = "calculation_apply"
 
 type calculationRequest struct {
-	Parent      string                 `json:"parent"`
-	Name        string                 `json:"name"`
-	Definition  calculation.Definition `json:"definition"`
-	Revision    uint64                 `json:"revision"`
-	OperationID string                 `json:"operation_id"`
+	Parent       string                 `json:"parent"`
+	Name         string                 `json:"name"`
+	Definition   calculation.Definition `json:"definition"`
+	Revision     uint64                 `json:"revision"`
+	OperationID  string                 `json:"operation_id"`
+	Values       map[string]float64     `json:"values,omitempty"`
+	Times        map[string]time.Time   `json:"times,omitempty"`
+	Confirmation string                 `json:"confirmation,omitempty"`
 }
 type calculationResponse struct {
 	ID          string                  `json:"id"`
@@ -46,7 +49,7 @@ type calculationCatalog struct {
 func decodeCalculation(node data.NodeEdge) (calculation.Document, error) {
 	var d calculation.Document
 	text, ok := node.Points.Text(calculationDocument, "")
-	if node.Type != calculationType || !ok || json.Unmarshal([]byte(text), &d) != nil || d.Schema != 1 || d.Revision == 0 || d.Draft.Validate() != nil {
+	if node.Type != calculationType || !ok || json.Unmarshal([]byte(text), &d) != nil || d.Schema != 1 || d.Revision == 0 || d.Draft.ValidateDraft() != nil {
 		return d, errors.New("invalid_calculation_document")
 	}
 	if (d.Applied == nil && d.Version != 0) || (d.Applied != nil && (d.Version == 0 || d.Applied.Validate() != nil)) {
@@ -96,6 +99,9 @@ func (h *Handler) readableCalculation(identity Identity, definition calculation.
 	for len(queue) > 0 {
 		id := queue[0]
 		queue = queue[1:]
+		if id == "" {
+			continue
+		}
 		if seen[id] {
 			continue
 		}
@@ -109,6 +115,25 @@ func (h *Handler) readableCalculation(identity Identity, definition calculation.
 	}
 	return true
 }
+func (h *Handler) readableCalculationEvidence(identity Identity, result calculation.Result) bool {
+	for _, id := range result.Definition.Inputs {
+		if !h.allows(identity, id) {
+			return false
+		}
+	}
+	for _, input := range result.Inputs {
+		if !h.allows(identity, input.ID) {
+			return false
+		}
+	}
+	for _, leaf := range result.Leaves {
+		if !h.allows(identity, leaf.ID) {
+			return false
+		}
+	}
+	return true
+}
+
 func (h *Handler) calculationResponse(n data.NodeEdge, d calculation.Document, identity Identity, c calculationCatalog) calculationResponse {
 	out := calculationResponse{ID: n.ID, Parent: n.Parent, Name: nodeName(n), Revision: d.Revision, Version: d.Version, State: map[string]any{"quality": "uninitialized", "reason": "not_applied"}, Permissions: map[string]bool{"edit": canAction(identity, ActionConfigure), "apply": canAction(identity, ActionCalculationApply)}}
 	if (d.Applied != nil && !h.readableCalculation(identity, *d.Applied, c)) || !h.readableCalculation(identity, d.Draft, c) {
@@ -123,14 +148,7 @@ func (h *Handler) calculationResponse(n data.NodeEdge, d calculation.Document, i
 	if d.Applied != nil {
 		out.State = map[string]any{"quality": "uninitialized", "reason": "pending_calculation"}
 		if result, ok := h.CalculationRuntime().Snapshot().Results[n.ID]; ok && result.Version == d.Version {
-			visible := true
-			for _, leaf := range result.Leaves {
-				if !h.allows(identity, leaf.ID) {
-					visible = false
-					break
-				}
-			}
-			if !visible {
+			if !h.readableCalculationEvidence(identity, result) {
 				out.State = map[string]any{"quality": "invalid", "reason": "restricted_dependency"}
 				return out
 			}
@@ -141,6 +159,9 @@ func (h *Handler) calculationResponse(n data.NodeEdge, d calculation.Document, i
 				result.Value = nil
 				result.Quality = "stale"
 				result.Reason = "expired"
+			}
+			if result.Retained != nil && !h.readableCalculationEvidence(identity, *result.Retained) {
+				result.Retained = nil
 			}
 			out.State = result
 		}
@@ -192,6 +213,14 @@ func (h *Handler) calculations(w http.ResponseWriter, r *http.Request, identity 
 		return
 	}
 	action := path[1]
+	if action == "trial" {
+		h.trialCalculation(w, r, identity, node, d, catalog)
+		return
+	}
+	preview := action == "impact"
+	if preview {
+		action = "apply"
+	}
 	permission := ActionConfigure
 	if action == "apply" {
 		permission = ActionCalculationApply
@@ -230,7 +259,7 @@ func (h *Handler) calculations(w http.ResponseWriter, r *http.Request, identity 
 			}
 		}
 		definitions[node.ID] = *next.Applied
-		if _, err = calculation.ValidateGraph(definitions, catalog.sources); err != nil {
+		if _, err = calculation.ValidateGraph(calculationAffectedGraph(node.ID, definitions), catalog.sources); err != nil {
 			var issue *calculation.Error
 			if errors.As(err, &issue) && (!h.allows(identity, issue.NodeID) || (issue.InputID != "" && !h.allows(identity, issue.InputID))) {
 				writeError(w, 409, "restricted_dependency")
@@ -240,11 +269,29 @@ func (h *Handler) calculations(w http.ResponseWriter, r *http.Request, identity 
 			return
 		}
 	}
+	if action == "apply" {
+		impact, err := h.inputImpact(identity, node.ID, action, impactOperation{Revision: request.Revision, OperationID: request.OperationID})
+		if err != nil {
+			writeError(w, 503, "dependency_check_failed")
+			return
+		}
+		if preview {
+			writeJSON(w, impact)
+			return
+		}
+		if next.Version != d.Version && (impact.Required || request.Confirmation != "") && request.Confirmation != impact.Confirmation {
+			writeError(w, 409, "impact_confirmation_conflict")
+			return
+		}
+	}
 	if next.Revision != d.Revision {
 		if err = h.persistCalculation(node, next, identity.UserID); err != nil {
 			writeError(w, 503, "calculation_persistence_unconfirmed")
 			return
 		}
+	}
+	if next.Version != d.Version {
+		h.CalculationRuntime().Invalidate([]string{node.ID})
 	}
 	catalog.documents[node.ID] = next
 	writeJSON(w, h.calculationResponse(node, next, identity, catalog))

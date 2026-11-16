@@ -76,9 +76,33 @@ func (r *Runtime) Snapshot() Batch {
 func (r *Runtime) Invalidate(ids []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	dependents := map[string][]string{}
+	for id, result := range r.batch.Results {
+		for _, input := range result.Definition.Inputs {
+			dependents[input] = append(dependents[input], id)
+		}
+	}
+	queue := append([]string(nil), ids...)
+	seen := map[string]bool{}
+	affected := []string{}
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		queue = append(queue, dependents[id]...)
+		if _, ok := r.batch.Results[id]; ok {
+			affected = append(affected, id)
+		}
+	}
+	if len(affected) == 0 {
+		return
+	}
 	r.sequence++
 	r.batch.ID = fmt.Sprintf("%s/%d", r.epoch, r.sequence)
-	for _, id := range ids {
+	for _, id := range affected {
 		if old, ok := r.batch.Results[id]; ok {
 			next := old
 			next.Quality = "invalid"
