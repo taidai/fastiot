@@ -204,7 +204,7 @@ var allActions = []string{
 	ActionConfigure, ActionWriteValue, ActionCommand, ActionRulePublish,
 	ActionAlarmAck, ActionAlarmMaintain, ActionDelete, ActionExport,
 	ActionAccountManage, ActionAuditView, ActionSiteSettings,
-	ActionVirtualInputApply, ActionVirtualInputWrite,
+	ActionVirtualInputApply, ActionVirtualInputWrite, ActionCalculationApply,
 }
 
 // canAction is the single permission decision point. Admin always passes; an
@@ -229,7 +229,7 @@ func canAction(identity Identity, action string) bool {
 // role-default predicates, so action granularity never drifts from them.
 func roleAllows(policy AccessPolicy, action string) bool {
 	switch action {
-	case ActionConfigure, ActionRulePublish, ActionDelete, ActionExport, ActionVirtualInputApply:
+	case ActionConfigure, ActionRulePublish, ActionDelete, ActionExport, ActionVirtualInputApply, ActionCalculationApply:
 		return canConfigure(Identity{Policy: policy})
 	case ActionWriteValue, ActionCommand, ActionAlarmAck, ActionAlarmMaintain, ActionVirtualInputWrite:
 		return canOperateIdentity(Identity{Policy: policy})
@@ -410,6 +410,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.unitCommands(w, r, identity, parts[1], server, parts[5])
+	case len(parts) > 0 && parts[0] == "calculations":
+		h.calculations(w, r, identity, parts[1:])
 	case len(parts) > 0 && parts[0] == "virtual-inputs":
 		h.virtualInputs(w, r, identity, parts[1:])
 	case path == "nodes" && r.Method == http.MethodPost:
@@ -649,7 +651,7 @@ func (h *Handler) visibleNodes(identity Identity) ([]data.NodeEdge, error) {
 	allowedTypes := map[string]bool{
 		data.NodeTypeDevice: true, data.NodeTypeGroup: true, data.NodeTypeVariable: true,
 		data.NodeTypeModbus: true, data.NodeTypeModbusIO: true,
-		"decisionTable": true, "deviceTemplate": true, virtualInputType: true,
+		"decisionTable": true, "deviceTemplate": true, virtualInputType: true, calculationType: true,
 		// 领域模型三层节点：不在白名单会被剪断整棵子树，前端看不到。
 		NodeTypeSite: true, NodeTypePlant: true, NodeTypeEnergyUnit: true, NodeTypeResourceGroup: true,
 		NodeTypeOpcua: true, NodeTypeOpcuaPoint: true,

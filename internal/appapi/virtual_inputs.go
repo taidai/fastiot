@@ -301,7 +301,7 @@ func inputConfiguration(node data.NodeEdge, copy bool) (string, error) {
 func publicInputNodes(nodes []data.NodeEdge) []data.NodeEdge {
 	out := append([]data.NodeEdge(nil), nodes...)
 	for i, node := range out {
-		if node.Type != virtualInputType {
+		if node.Type != virtualInputType && node.Type != calculationType {
 			continue
 		}
 		out[i].Points = nil

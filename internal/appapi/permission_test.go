@@ -7,6 +7,7 @@ import "testing"
 // run/ack/maintain set, viewer nothing.
 func TestCanActionRoleDefaults(t *testing.T) {
 	grants := map[string]map[string]bool{
+		ActionCalculationApply:  {"admin": true, "implementer": true, "operator": false, "viewer": false},
 		ActionVirtualInputApply: {"admin": true, "implementer": true, "operator": false, "viewer": false},
 		ActionVirtualInputWrite: {"admin": true, "implementer": true, "operator": true, "viewer": false},
 		ActionConfigure:         {"admin": true, "implementer": true, "operator": false, "viewer": false},
