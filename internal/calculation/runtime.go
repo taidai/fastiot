@@ -46,6 +46,7 @@ func cloneSample(s Sample) Sample {
 }
 func cloneResult(r Result) Result {
 	r.Definition = cloneDefinition(r.Definition)
+	r.Dependencies = append([]string(nil), r.Dependencies...)
 	if r.Value != nil {
 		v := *r.Value
 		r.Value = &v

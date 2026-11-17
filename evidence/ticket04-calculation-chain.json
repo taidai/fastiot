@@ -1,0 +1,78 @@
+{
+  "ticket": "04-live-calculation-chain",
+  "verified_on": "2026-11-17",
+  "branch": "feat/ticket04-calculation-chain",
+  "base": "8dd12f58b1454142ed4097878bb21960fa13da45",
+  "scope": "Two-input add/divide, stable read-only calculation points, existing single Go application",
+  "environment": "Isolated loopback-only software Modbus TCP fixture; synthetic values explicitly named non-measured in the UI. No hardware or production connections.",
+  "browser": {
+    "initial_workflow": "Created A and B through actual channel/point forms, capacity through the virtual-input form, and total/ratio through calculation forms; explicitly applied each definition.",
+    "initial": {"A_kW": 20, "B_kW": 30, "capacity_kW": 100, "expected": [50, 0.5], "api": [50, 0.5], "ui": [50, 0.5]},
+    "page_closed": {"calculation_component_mounted": false, "A_changed_to_kW": 40, "api_before_reopening": [70, 0.7], "ui_after_reopening": [70, 0.7]},
+    "percentage": [{"raw": 0.5, "display": "50%"}, {"raw": 0.7, "display": "70%"}],
+    "input_failure": "Synthetic A read failure removed both current values; historical 70/0.7 remained explicitly labelled with original times. Recovery restored 70/0.7.",
+    "trial": "Fixed 20/30/100 returned intermediate 50 and ratio 0.5 while live remained 70/0.7; denominator 0 showed an unavailable result and division-by-zero diagnosis. Final build also returned fixed 70/0.7 while live stayed 50/0.5, with simulation labels on intermediate direct-input evidence.",
+    "draft_application": "Saved an incorrect kWh output draft; live values and applied v1 remained 70/0.7. Application preview rejected output-unit mismatch. Restored draft to kW; impact preview named the dependent ratio.",
+    "query_failure": "Injected GET /calculations 503 cleared all current-value elements, displayed failure and a retry action; recovery restored the list.",
+    "keyboard": "Output-unit input retained focus and typed kWh across polling before save.",
+    "authorization": {
+      "revocation_red": "Same token/parent scope, implementer actions changed to export-only: API returned edit=false/apply=false while old UI editor and enabled save remained visible.",
+      "revocation_green": "After fix, next successful authorization refresh removed the editor and save button. Failed refresh also clears sensitive overlays; late trial/impact responses recheck current authorization.",
+      "apply_only_red": "Viewer with calculation_apply could apply through API but had no calculation UI.",
+      "apply_only_green": "Reused the customer workbench's runtime-input drawer. Viewer applied the ratio through the actual confirmation UI; API and UI showed 0.5, formula v1, edit=false/apply=true. No create/edit/trial buttons were offered."
+    },
+    "responsive": {"desktop_width": 1600, "desktop_overflow": false, "mobile_width": 375, "mobile_scroll_width": 375, "mobile_card_width": 326, "mobile_form_field_bounds": [20.67, 354.67], "viewport_reset": true},
+    "final_console": "No console errors on the final fixture. Earlier 400 invalid-application and injected 503 responses were deliberate negative cases; startup navigation retry errors were not application API failures.",
+    "protocol_writes": 0,
+    "screenshot_limit": "Preview screenshots were produced but the host returned tiny thumbnails; responsive verification uses DOM bounding boxes and computed styles rather than screenshot readability."
+  },
+  "persisted_definition_and_runtime_sample": {
+    "evaluated_at": "2026-11-17T02:36:04.503401952Z",
+    "batch_id": "5j51yat008q0hbbgyxgnryth9c/690",
+    "calculated_at": "2026-11-17T02:36:03.531091102Z",
+    "valid_until": "2026-11-17T02:36:18.527675839Z",
+    "total": {"id": "cp-8c65ecdddd15ff204b1e5649ac8b3646", "revision": 2, "version": 1, "operator": "add", "inputs": ["62wff14exhxg9wcvah3m5p2hbc", "g23wgh56xv7am5nm0gt2903z2r"], "unit": "kW", "value": 50, "quality": "good"},
+    "ratio": {"id": "cp-8c547bc320a014b9e2d7003a213b536c", "revision": 2, "version": 1, "operator": "divide", "inputs": ["cp-8c65ecdddd15ff204b1e5649ac8b3646", "vi-03b8dabb3d6ba5953ce9925643f3c164"], "unit": "1", "value": 0.5, "quality": "good"},
+    "leaves": [
+      {"id": "62wff14exhxg9wcvah3m5p2hbc", "value": 20, "unit": "kW", "source": "observation", "source_time": "2026-11-17T02:36:03.527675839Z", "valid_until": "2026-11-17T02:36:18.527675839Z"},
+      {"id": "g23wgh56xv7am5nm0gt2903z2r", "value": 30, "unit": "kW", "source": "observation", "source_time": "2026-11-17T02:36:03.527839528Z", "valid_until": "2026-11-17T02:36:18.527839528Z"},
+      {"id": "vi-03b8dabb3d6ba5953ce9925643f3c164", "value": 100, "unit": "kW", "source": "configuration", "source_time": null, "valid_until": null}
+    ],
+    "note": "Public API definitions are loaded from persisted SIOT documents, not the editor's local state. Observation labels describe the acquisition pathway; all observations in this fixture are synthetic, not hardware measurements."
+  },
+  "automated_checks": {
+    "frontend": ["npm --prefix frontend run build", "npm --prefix frontend run check:observations", "npm --prefix frontend run check:navigation", "npm --prefix frontend run check:consistency", "npm --prefix frontend run check:acceptance"],
+    "frontend_result": "passed; existing >500 kB Vite chunk warning remains",
+    "go": "go test -p 1 -count=1 ./...",
+    "go_result": "passed",
+    "restart_stress": "go test -count=10 ./internal/app passed",
+    "failed_full_run": "Initial parallel final run exposed pre-existing cross-package port 9743 reuse (appapi capability-rich fixture and decision RTU fixture), plus transient 503 at startup login. No failure was treated as a pass; the final full suite was rerun serially after bounded startup-readiness handling in the new restart test.",
+    "coverage": ["graph contracts and cycles", "draft/applied separation and independent action ACL", "real source acquisition stamps and edit/revert", "background result update before GET", "coherent batches and original leaf-time skew", "failure/expiry/recovery and no partial values", "no stored observation replay after restart", "pure configuration restart", "fixed complete trial inputs and no live mutation", "impact confirmation conflicts", "dependent invalidation", "copy/remap/unbound drafts", "rollback rejects before writes", "generic write/manual rejection", "current and historical authorization"]
+  },
+  "final_review": {
+    "method": "One fresh-context parallel Standards and Spec review; one implementation fix pass, no re-review",
+    "standards_findings": 4,
+    "spec_findings": 5,
+    "fixed": [
+      {"issue": "Physical configuration race", "test": "TestCalculationCaptureSerializesPhysicalConfiguration", "red": "HTTP edit completed while older expected configuration capture was blocked", "green": "Relevant configuration routes share capture serialization; changed point/bus invalidates dependent cache before subsequent reads"},
+      {"issue": "Historical intermediate authorization", "test": "TestCalculationRetainedIntermediateRemainsPrivate", "red": "Three-level retained result exposed contribution from a now-hidden intermediate", "green": "Immutable complete dependency closure retained with results and checked under current authorization"},
+      {"issue": "Intermediate simulation flag", "test": "TestCalculationTrialUsesOnlyFrozenInputs", "red": "Downstream direct sample had simulated=false", "green": "Result-to-sample conversion propagates simulated flag"},
+      {"issue": "Cached overlays after authorization revocation", "test": "Actual browser with same-session action revocation", "red": "Old editor and enabled save remained", "green": "Authorization refresh closes unavailable actions; query failures clear overlays and late responses recheck access"},
+      {"issue": "Apply-only viewer UI entry", "test": "Actual viewer account with calculation_apply only", "red": "API permitted application but no reachable UI", "green": "Existing customer runtime drawer exposes authorized calculation operations without widening navigation or edit rights"}
+    ],
+    "deferred_minors": [],
+    "declined_scope": "Hardware/control simulation isolation and full project configuration transactions remain out of this ticket; no real-device sign-off is claimed."
+  },
+  "rulings": [
+    {"decision": "Sequential work in the existing checkout and dedicated local branch", "why": "Approved inline execution with shared interfaces", "cost_if_wrong": "Shared filesystem requires avoiding concurrent writers"},
+    {"decision": "Graph validation separate from draft shape", "why": "Invalid graphs must remain diagnosable drafts", "cost_if_wrong": "Every application path must enforce graph validation"},
+    {"decision": "In-process runtime with immutable public snapshot; app adapter owns I/O", "why": "No separate service and no GET-driven evaluation", "cost_if_wrong": "Lifecycle and capture serialization must remain explicit"},
+    {"decision": "Acquisition stamps include configuration revisions", "why": "Editing back must not revive stale observations", "cost_if_wrong": "Equivalent saved configuration can briefly wait for fresh input"},
+    {"decision": "Unbound copied drafts are readable/editable but not applicable", "why": "Unmapped external references must not silently activate or disappear", "cost_if_wrong": "Trial and application must retain strict binding validation"},
+    {"decision": "Reuse known-reference impact confirmation", "why": "Inputs and formulas share the same change-confirmation boundary", "cost_if_wrong": "Coverage does not prove all external consumers"},
+    {"decision": "Reuse customer runtime-input drawer for apply-only actors", "why": "Independent action grants require an accessible operation, without adding navigation", "cost_if_wrong": "Drawer can become long with many points"},
+    {"decision": "Serial full Go suite and bounded startup-login 503 wait", "why": "Existing fixtures reuse ports; real startup authentication is asynchronous", "cost_if_wrong": "Tests run longer; temporary startup unavailability is tolerated only within five seconds, not wrong credentials or persistent failures"}
+  ],
+  "limitations": ["Only binary add/divide", "No automatic unit conversion", "No full historical result platform or backfill", "No new protocol or real control binding", "Simulator is not hardware; M5 sign-off pending", "No claim that every T33 scenario is implemented", "No GitHub issue/PR publication or push"],
+  "preservation": {"verified_unchanged_originals_or_backups": 91, "intentional_manifest_difference": "Only the local task04 ticket was updated", "missing": 0, "backup": ".scratch/task03-premerge-r26evcnm", "stash": "1816cdbed35c43a05e1da30d9419de49eaec3ce7", "policy": "Do not apply, pop or drop the premerge stash; unrelated user files remain untouched"}
+}

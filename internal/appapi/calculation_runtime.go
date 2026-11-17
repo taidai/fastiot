@@ -17,6 +17,18 @@ import (
 
 func (h *Handler) CalculationRuntime() *calculation.Runtime { return h.calculationRuntime }
 
+func (h *Handler) invalidatePhysicalCalculations(id string) {
+	ids := []string{id}
+	for _, result := range h.CalculationRuntime().Snapshot().Results {
+		for _, leaf := range result.Leaves {
+			if leaf.Source == "observation" && h.users.IsUnder(leaf.ID, id) {
+				ids = append(ids, leaf.ID)
+			}
+		}
+	}
+	h.CalculationRuntime().Invalidate(ids)
+}
+
 func (h *Handler) RunCalculations(ctx context.Context) error {
 	wake := make(chan struct{}, 1)
 	notify := func() {

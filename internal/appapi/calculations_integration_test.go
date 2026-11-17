@@ -62,6 +62,27 @@ func TestCalculationProjectionHidesRestrictedInputs(t *testing.T) {
 	if status != 200 || strings.Contains(body, source) {
 		t.Fatalf("dedicated read exposed restricted input: %d %s", status, body)
 	}
+	var catalog struct {
+		Sources []struct {
+			ID   string `json:"id"`
+			Kind string `json:"kind"`
+			Unit string `json:"unit"`
+		} `json:"sources"`
+	}
+	status, body = call(t, http.MethodGet, f.base+"/calculations", f.token, nil, &catalog)
+	found := false
+	for _, item := range catalog.Sources {
+		if item.ID == source && item.Kind == "number" && item.Unit == "kW" {
+			found = true
+		}
+	}
+	if status != 200 || !found {
+		t.Fatalf("source picker metadata missing: %d %s", status, body)
+	}
+	status, body = call(t, http.MethodGet, f.base+"/calculations", limited, nil, nil)
+	if status != 200 || strings.Contains(body, source) {
+		t.Fatalf("source picker leaked a restricted input: %d %s", status, body)
+	}
 	for _, node := range snapshotNodes(t, f.base, limited) {
 		if node.ID == out.ID {
 			for _, p := range node.Points {

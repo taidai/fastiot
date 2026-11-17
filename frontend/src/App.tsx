@@ -14,6 +14,7 @@ import DeliveryWorkbench from "./DeliveryWorkbench"
 import AllocatorsView from "./AllocatorsView"
 import PointsView from "./PointsView"
 import VirtualInputs from "./VirtualInputs"
+import CalculationPoints from "./CalculationPoints"
 import AggregatesView from "./AggregatesView"
 import CommunicationView from "./CommunicationView"
 import ModbusTools from "./ModbusTools"
@@ -639,7 +640,7 @@ export default function App() {
             ? `站点 ${Math.max(1, siteNodes.findIndex((node) => node.id === siteID) + 1)} / ${siteNodes.length}`
             : `项目 1 / ${snapshot.roots.length}`}</span>
           {page === "devices" && <>
-            <button className="secondary-button head-action" onClick={() => setInputsOpen(true)}>运行输入</button>
+            <button className="secondary-button head-action" onClick={() => setInputsOpen(true)}>运行输入与计算</button>
             {canOperate && <button className="secondary-button head-action" onClick={() => setCommandsOpen(true)}>常用命令</button>}
             <button className="secondary-button head-action" onClick={() => setShiftOpen(true)}>班次交接</button>
             <button className="secondary-button head-action" onClick={() => setKpiConfigOpen(true)}>显示设置</button>
@@ -745,8 +746,8 @@ export default function App() {
 
     {kpiConfigOpen && <KpiConfigPanel config={kpiConfig} onSave={(next) => { setKpiConfig(next); saveKpiConfig(next) }} onClose={() => setKpiConfigOpen(false)} />}
     {shiftOpen && <ShiftHandover onClose={() => setShiftOpen(false)} />}
-    <EmsOverlay open={inputsOpen} title="运行输入" variant="drawer" onClose={closeInputs} actions={<EmsButton variant="secondary" onClick={closeInputs}>关闭运行输入</EmsButton>}>
-      {inputsOpen && <VirtualInputs token={token} nodes={view.nodes} />}
+    <EmsOverlay open={inputsOpen} title="运行输入与计算" variant="drawer" onClose={closeInputs} actions={<EmsButton variant="secondary" onClick={closeInputs}>关闭运行输入与计算</EmsButton>}>
+      {inputsOpen && <><VirtualInputs token={token} nodes={view.nodes} /><CalculationPoints token={token} nodes={view.nodes} /></>}
     </EmsOverlay>
     {commandsOpen && <CommonCommands token={token} canOperate={canOperate} onError={setError} onClose={() => setCommandsOpen(false)} />}
   </div></div></IonContent></IonApp>

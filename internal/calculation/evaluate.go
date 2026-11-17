@@ -49,6 +49,7 @@ type Result struct {
 	Leaves       []Sample   `json:"leaves"`
 	Simulated    bool       `json:"simulated"`
 	Retained     *Result    `json:"retained,omitempty"`
+	Dependencies []string   `json:"-"`
 	signature    string
 }
 
@@ -64,7 +65,7 @@ func keepLast(result Result, previous Result) Result {
 	return result
 }
 func (r Result) sample() Sample {
-	return Sample{ID: r.ID, Kind: "number", Unit: r.Unit, Value: r.Value, Quality: r.Quality, Reason: r.Reason, Source: "calculation", Version: r.BatchID + "/" + strconv.FormatUint(r.Version, 10), ValidUntil: r.ValidUntil}
+	return Sample{ID: r.ID, Kind: "number", Unit: r.Unit, Value: r.Value, Quality: r.Quality, Reason: r.Reason, Source: "calculation", Simulated: r.Simulated, Version: r.BatchID + "/" + strconv.FormatUint(r.Version, 10), ValidUntil: r.ValidUntil}
 }
 
 func EvaluateBatch(formulas map[string]Formula, snapshot Snapshot, batchID string, previous map[string]Result) map[string]Result {
@@ -103,13 +104,18 @@ func EvaluateBatch(formulas map[string]Formula, snapshot Snapshot, batchID strin
 		d := f.Definition
 		result := Result{ID: id, BatchID: batchID, Version: f.Version, Definition: cloneDefinition(d), Quality: "invalid", Unit: d.Unit, CalculatedAt: snapshot.At}
 		leaves := map[string]Sample{}
+		dependencies := map[string]bool{}
 		for _, ref := range d.Inputs {
+			dependencies[ref] = true
 			value, ok := values[ref]
 			if !ok {
 				value = Sample{ID: ref, Quality: "invalid", Reason: "missing_reference"}
 			}
 			result.Inputs = append(result.Inputs, value)
 			if upstream, ok := results[ref]; ok {
+				for _, dependency := range upstream.Dependencies {
+					dependencies[dependency] = true
+				}
 				for _, leaf := range upstream.Leaves {
 					leaves[leaf.ID] = leaf
 				}
@@ -117,6 +123,10 @@ func EvaluateBatch(formulas map[string]Formula, snapshot Snapshot, batchID strin
 				leaves[ref] = value
 			}
 		}
+		for dependency := range dependencies {
+			result.Dependencies = append(result.Dependencies, dependency)
+		}
+		sort.Strings(result.Dependencies)
 		ids := []string{}
 		for ref := range leaves {
 			ids = append(ids, ref)

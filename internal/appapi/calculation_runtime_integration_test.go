@@ -54,6 +54,81 @@ func startCalculationLoop(t *testing.T, h *Handler) func() {
 	return stop
 }
 
+func TestCalculationCaptureSerializesPhysicalConfiguration(t *testing.T) {
+	base, token, h, _ := startInputServer(t, t.TempDir(), data.NewID())
+	service := runtime.NewService(nil, time.Minute, time.Second, 100)
+	defer service.Close()
+	source := bridge.NewNodeSource(h.nc)
+	api := emsapi.New(service, time.Minute)
+	api.Buses = source.Buses
+	h.SetEMS(api)
+	f := &pointConfigFixture{base: base, token: token}
+	bus := f.createBus(t, "capture-source")
+	input := ModbusIOInput{Description: "P", ServerID: 1, Address: 10, IOType: data.PointValueModbusHoldingRegister, DataFormat: "uint16", Scale: 1, ReadOnly: true, Units: "kW"}
+	point := f.createPoint(t, bus, input)
+	configs, err := source.Buses()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch, err := channel.New(configs[0].ChannelID, &pointConfigBus{}, configs[0].Devices)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readings, _ := ch.RunOnce(context.Background(), time.Now)
+	service.Observe(time.Now(), readings)
+	var result calcResponse
+	status, body := call(t, http.MethodPost, base+"/calculations", token, map[string]any{"parent": snapshotRoot(t, base, token), "name": "double", "operation_id": "create", "definition": calculation.Definition{Operator: "add", Inputs: []string{point, point}, Kind: "number", Unit: "kW"}}, &result)
+	if status != 200 {
+		t.Fatal(body)
+	}
+	status, body = call(t, http.MethodPost, base+"/calculations/"+result.ID+"/apply", token, map[string]any{"revision": result.Revision, "operation_id": "apply"}, &result)
+	if status != 200 {
+		t.Fatal(body)
+	}
+	stop := startCalculationLoop(t, h)
+	waitFor(t, func() bool { return h.CalculationRuntime().Snapshot().Results[result.ID].Quality == "good" }, "initial observation")
+	stop()
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	api.Buses = func() ([]bridge.BusConfig, error) {
+		cfg, err := source.Buses()
+		once.Do(func() { close(entered); <-release })
+		return cfg, err
+	}
+	stop = startCalculationLoop(t, h)
+	<-entered
+	completed := make(chan int, 1)
+	input.Address = 11
+	go func() {
+		status, _ := call(t, http.MethodPut, base+"/modbus/io/"+point, token, input, nil)
+		completed <- status
+	}()
+	early := false
+	select {
+	case status = <-completed:
+		early = true
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	if !early {
+		select {
+		case status = <-completed:
+		case <-time.After(2 * time.Second):
+			t.Fatal("configuration edit stuck")
+		}
+	}
+	stop()
+	if early {
+		t.Fatal("physical edit completed inside an older configuration capture")
+	}
+	if status != 200 {
+		t.Fatalf("edit status %d", status)
+	}
+	if r := h.CalculationRuntime().Snapshot().Results[result.ID]; r.Value != nil || r.Quality == "good" {
+		t.Fatal("completed configuration edit left old current value usable")
+	}
+}
+
 func TestCalculationRestartDoesNotUseStoredPhysicalValues(t *testing.T) {
 	dir, password := t.TempDir(), data.NewID()
 	base, token, h, stop := startInputServer(t, dir, password)

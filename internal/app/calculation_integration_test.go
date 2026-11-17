@@ -48,11 +48,29 @@ func TestApplicationStartsAndRestartsPureConfigurationCalculations(t *testing.T)
 	}
 	defer func() { application.Close() }()
 	login := func() string {
-		var result struct {
-			Token string `json:"token"`
+		t.Helper()
+		encoded, _ := json.Marshal(map[string]string{"email": "admin", "password": password})
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			req := httptest.NewRequest("POST", "/api/login", bytes.NewReader(encoded))
+			req.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			application.ServeHTTP(response, req)
+			if response.Code == 503 && time.Now().Before(deadline) {
+				time.Sleep(20 * time.Millisecond)
+				continue
+			}
+			if response.Code != 200 {
+				t.Fatalf("startup login: %d %s", response.Code, response.Body.String())
+			}
+			var result struct {
+				Token string `json:"token"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || result.Token == "" {
+				t.Fatal("missing login session")
+			}
+			return result.Token
 		}
-		calculationAPI(t, application, "POST", "/login", "", map[string]any{"email": "admin", "password": password}, &result)
-		return result.Token
 	}
 	token := login()
 	var snapshot struct {

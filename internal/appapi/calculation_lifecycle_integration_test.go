@@ -59,6 +59,74 @@ func configCalculationSetup(t *testing.T) calculationTestSetup {
 	}, "configuration graph")
 	return calculationTestSetup{f, h, a, b, capacity, total, ratio, stopLoop}
 }
+func TestCalculationRetainedIntermediateRemainsPrivate(t *testing.T) {
+	base, token, h, _ := startInputServer(t, t.TempDir(), data.NewID())
+	startCalculationLoop(t, h)
+	root := snapshotRoot(t, base, token)
+	public := createNodeAPI(t, base, token, "group", root, "public", 0)
+	post := func(path string, payload any, out any) {
+		t.Helper()
+		status, body := call(t, http.MethodPost, base+path, token, payload, out)
+		if status != 200 {
+			t.Fatalf("%s: %d %s", path, status, body)
+		}
+	}
+	input := func(name, value string, manual bool) string {
+		d := virtualCapacity(value)
+		d.Unit = "kW"
+		source := "configuration"
+		if manual {
+			source = "manual"
+			d.Validity = "timed"
+			d.TTLSeconds = 60
+			d.Value = nil
+		}
+		var out inputResponse
+		post("/virtual-inputs", map[string]any{"parent": public, "name": name, "source": source, "definition": d, "operation_id": name}, &out)
+		post("/virtual-inputs/"+out.ID+"/apply", map[string]any{"revision": out.Revision, "operation_id": "apply-" + name}, &out)
+		return out.ID
+	}
+	a, b, capacity, missing := input("a", "20", false), input("b", "30", false), input("capacity", "100", false), input("missing", "", true)
+	create := func(name, parent string, d calculation.Definition) string {
+		var out calcResponse
+		post("/calculations", map[string]any{"parent": parent, "name": name, "definition": d, "operation_id": name}, &out)
+		post("/calculations/"+out.ID+"/apply", map[string]any{"revision": out.Revision, "operation_id": "apply-" + name}, &out)
+		return out.ID
+	}
+	hidden := create("hidden", root, calculation.Definition{Operator: "add", Inputs: []string{a, b}, Kind: "number", Unit: "kW"})
+	middle := create("middle", public, calculation.Definition{Operator: "add", Inputs: []string{hidden, hidden}, Kind: "number", Unit: "kW"})
+	top := create("top", public, calculation.Definition{Operator: "divide", Inputs: []string{middle, capacity}, Kind: "number", Unit: "1"})
+	waitFor(t, func() bool {
+		r := h.CalculationRuntime().Snapshot().Results[top]
+		return r.Value != nil && *r.Value == 1
+	}, "original three-level result")
+	var current calcResponse
+	status, body := call(t, http.MethodGet, base+"/calculations/"+middle, token, nil, &current)
+	if status != 200 {
+		t.Fatal(body)
+	}
+	post("/calculations/"+middle+"/draft", map[string]any{"revision": current.Revision, "operation_id": "rebind", "definition": calculation.Definition{Operator: "add", Inputs: []string{missing, missing}, Kind: "number", Unit: "kW"}}, &current)
+	payload := map[string]any{"revision": current.Revision, "operation_id": "rebind-apply"}
+	var impact inputImpact
+	post("/calculations/"+middle+"/impact", payload, &impact)
+	payload["confirmation"] = impact.Confirmation
+	post("/calculations/"+middle+"/apply", payload, nil)
+	waitFor(t, func() bool {
+		r := h.CalculationRuntime().Snapshot().Results[top]
+		return r.Value == nil && r.Retained != nil && r.Reason != "pending_calculation"
+	}, "unavailable new branch with historical result")
+	limited := inputAccount(t, &pointConfigFixture{base: base, token: token}, public, "viewer", nil)
+	var result struct {
+		State struct {
+			Retained *calculation.Result `json:"retained"`
+		} `json:"state"`
+	}
+	status, body = call(t, http.MethodGet, base+"/calculations/"+top, limited, nil, &result)
+	if status != 200 || result.State.Retained != nil {
+		t.Fatalf("historical private intermediate leaked: %d %s", status, body)
+	}
+}
+
 func TestCalculationApplicationChecksOnlyAffectedGraph(t *testing.T) {
 	s := configCalculationSetup(t)
 	var input inputResponse
@@ -276,14 +344,22 @@ func TestCalculationTrialUsesOnlyFrozenInputs(t *testing.T) {
 	var trial struct {
 		Simulated bool `json:"simulated"`
 		Results   map[string]struct {
-			Value     *float64 `json:"value"`
-			Reason    string   `json:"reason"`
-			Simulated bool     `json:"simulated"`
+			Value     *float64             `json:"value"`
+			Reason    string               `json:"reason"`
+			Simulated bool                 `json:"simulated"`
+			Inputs    []calculation.Sample `json:"inputs"`
 		} `json:"results"`
 	}
 	status, body = call(t, http.MethodPost, s.f.base+"/calculations/"+s.Ratio+"/trial", s.f.token, map[string]any{"revision": object.Revision, "values": values}, &trial)
 	if status != 200 {
 		t.Fatalf("trial: %d %s", status, body)
+	}
+	for _, result := range trial.Results {
+		for _, input := range result.Inputs {
+			if !input.Simulated {
+				t.Fatalf("trial direct input lost simulation provenance: %+v", input)
+			}
+		}
 	}
 	if !trial.Simulated || !trial.Results[s.Ratio].Simulated || trial.Results[s.Ratio].Value == nil || *trial.Results[s.Ratio].Value != 0.7 || *trial.Results[s.Total].Value != 70 {
 		t.Fatalf("trial omitted intermediate/simulation evidence: %s", body)

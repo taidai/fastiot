@@ -297,7 +297,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parts := strings.Split(path, "/")
-	if r.Method != http.MethodGet && (parts[0] == "rules" || parts[0] == "nodes" || parts[0] == "projects" || strings.HasPrefix(path, "ems/screen/")) {
+	physicalConfiguration := parts[0] == "modbus" && (len(parts) == 1 || r.Method == http.MethodPut || (len(parts) > 2 && parts[2] == "io") || (len(parts) == 4 && parts[2] == "units" && parts[3] == "apply"))
+	if r.Method != http.MethodGet && (physicalConfiguration || parts[0] == "templates" || parts[0] == "rules" || parts[0] == "nodes" || parts[0] == "projects" || strings.HasPrefix(path, "ems/screen/")) {
 		h.virtualInputMu.Lock()
 		defer h.virtualInputMu.Unlock()
 	}

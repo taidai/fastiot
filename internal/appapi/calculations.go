@@ -40,6 +40,40 @@ type calculationResponse struct {
 	State       any                     `json:"state"`
 	Permissions map[string]bool         `json:"permissions"`
 }
+type calculationSource struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Kind   string `json:"kind"`
+	Unit   string `json:"unit"`
+	Source string `json:"source"`
+}
+
+func (h *Handler) calculationSources(identity Identity, c calculationCatalog) []calculationSource {
+	out := []calculationSource{}
+	for id, m := range c.sources {
+		if !h.allows(identity, id) {
+			continue
+		}
+		node := c.nodes[id]
+		source := "observation"
+		if node.Type == virtualInputType {
+			d, err := decodeVirtualInput(node)
+			if err != nil {
+				continue
+			}
+			source = d.Source
+		}
+		out = append(out, calculationSource{id, nodeName(node), m.Kind, m.Unit, source})
+	}
+	for id, d := range c.documents {
+		if d.Applied != nil && h.allows(identity, id) && h.readableCalculation(identity, *d.Applied, c) {
+			out = append(out, calculationSource{id, nodeName(c.nodes[id]), d.Applied.Kind, d.Applied.Unit, "calculation"})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
 type calculationCatalog struct {
 	nodes     map[string]data.NodeEdge
 	documents map[string]calculation.Document
@@ -116,6 +150,11 @@ func (h *Handler) readableCalculation(identity Identity, definition calculation.
 	return true
 }
 func (h *Handler) readableCalculationEvidence(identity Identity, result calculation.Result) bool {
+	for _, id := range result.Dependencies {
+		if !h.allows(identity, id) {
+			return false
+		}
+	}
 	for _, id := range result.Definition.Inputs {
 		if !h.allows(identity, id) {
 			return false
@@ -188,7 +227,7 @@ func (h *Handler) calculations(w http.ResponseWriter, r *http.Request, identity 
 			}
 		}
 		sort.Slice(values, func(i, j int) bool { return values[i].ID < values[j].ID })
-		writeJSON(w, map[string]any{"calculations": values})
+		writeJSON(w, map[string]any{"calculations": values, "sources": h.calculationSources(identity, catalog), "can_create": canAction(identity, ActionConfigure), "evaluated_at": time.Now(), "batch_id": h.CalculationRuntime().Snapshot().ID})
 		return
 	}
 	if len(path) < 1 || len(path) > 2 {

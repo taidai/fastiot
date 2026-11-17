@@ -559,6 +559,7 @@ func (h *Handler) updateModbus(w http.ResponseWriter, r *http.Request, identity 
 	for i := range encoded.Points {
 		encoded.Points[i].Origin = identity.UserID
 	}
+	defer h.invalidatePhysicalCalculations(id)
 	if err := client.SendNodePoints(h.nc, id, encoded.Points, true); err != nil {
 		writeError(w, http.StatusBadRequest, "save_failed")
 		return
@@ -615,6 +616,7 @@ func modbusIOConfigPoints(input ModbusIOInput) data.Points {
 }
 
 func (h *Handler) updateModbusIOFields(id string, input ModbusIOInput, origin string) error {
+	defer h.CalculationRuntime().Invalidate([]string{id})
 	points := modbusIOConfigPoints(input)
 	for i := range points {
 		points[i].Origin = origin

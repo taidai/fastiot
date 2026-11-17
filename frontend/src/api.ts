@@ -15,6 +15,29 @@ export type Node = {
   points: Point[]
 }
 
+export type CalculationDefinition = {
+  operator: "add" | "divide"; inputs: string[]; kind: "number"; unit: string; max_skew_ms?: number
+}
+export type CalculationSample = {
+  id: string; kind: string; unit: string; value?: number; quality: string; reason?: string
+  source: string; simulated: boolean; version: string; time_source?: string
+  source_time?: string; received_time?: string; changed_at?: string; valid_until?: string
+}
+export type CalculationResult = {
+  id: string; batch_id: string; version: number; definition: CalculationDefinition
+  quality: string; reason?: string; value?: number; unit: string; calculated_at?: string; valid_until?: string
+  inputs?: CalculationSample[]; leaves?: CalculationSample[]; simulated?: boolean; retained?: CalculationResult
+}
+export type CalculationPoint = {
+  id: string; parent: string; name: string; revision: number; version: number
+  draft?: CalculationDefinition; applied?: CalculationDefinition; state: CalculationResult
+  permissions: { edit?: boolean; apply?: boolean }
+}
+export type CalculationSource = { id: string; name: string; kind: string; unit: string; source: string }
+export type CalculationList = {
+  calculations: CalculationPoint[]; sources: CalculationSource[]; can_create: boolean; evaluated_at: string; batch_id: string
+}
+
 export type Condition = {
   point_id: string
   operator: string
@@ -575,6 +598,7 @@ export const permissionActions: { key: string; label: string }[] = [
   { key: "configure", label: "配置（通道/设备/点位/规则/画面）" },
   { key: "write_value", label: "写值（控制写入）" },
   { key: "virtual_input_apply", label: "应用虚拟输入定义" },
+  { key: "calculation_apply", label: "应用只读计算定义" },
   { key: "virtual_input_write", label: "修改已开放的运行输入" },
   { key: "command", label: "命令执行" },
   { key: "rule_publish", label: "规则发布" },
