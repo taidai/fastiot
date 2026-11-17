@@ -74,7 +74,7 @@ function FlowCard({ item, value, health, onOpen }: { item: FlowNode; value: numb
 type FlowEvent = {
   activeRules: number
   rules: number
-  alarmCount: number
+  alarmCount: number | null
   errors: number
   pointCount: number
   onOpenRules: () => void
@@ -264,7 +264,7 @@ export default function EnergyFlow({ points, siteName, onOpenPoint, onOpenTrends
       {event.latestAlarm
         ? <span className={`event-alarm ${event.latestAlarm.severity}`}>最新报警 {event.latestAlarm.title} · {timeLabel(event.latestAlarm.at)}</span>
         : <span>{dispatch ? actionLabel(dispatch) : "—"}</span>}
-      <button onClick={event.onOpenAlarms || event.onOpenRules}>活动报警 {event.alarmCount} 条 · 点位 {event.pointCount} 个 ›</button>
+      <button onClick={event.onOpenAlarms || event.onOpenRules}>活动报警 {event.alarmCount === null ? "暂不可确认" : `${event.alarmCount} 条`} · 点位 {event.pointCount} 个 ›</button>
     </div>}
   </section>
 }

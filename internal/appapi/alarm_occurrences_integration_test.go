@@ -2,6 +2,8 @@ package appapi
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,6 +17,7 @@ import (
 	"fastiot/internal/ems/bridge"
 	"fastiot/internal/ems/channel"
 	"fastiot/internal/ems/runtime"
+	"fastiot/internal/ems/signal"
 	"fastiot/internal/emsapi"
 	"github.com/simpleiot/simpleiot/data"
 )
@@ -40,6 +43,7 @@ func TestAlarmObservationsPreserveRecoveryBetweenScans(t *testing.T) {
 	watcher.State = service.State
 	watcher.Buses = source.Buses
 	watcher.MaxAge = service.MaxAge
+	api.BeginAlarmConfiguration = watcher.BeginConfiguration
 	service.OnObservations = watcher.Observe
 	if err := watcher.Scan(time.Now()); err != nil {
 		t.Fatal(err)
@@ -107,6 +111,12 @@ func TestAlarmObservationsPreserveRecoveryBetweenScans(t *testing.T) {
 		t.Fatalf("unavailable input was not explained: %d %s", status, body)
 	}
 	cycle(20, false)
+	var recoveredAt time.Time
+	for _, value := range service.State.Snapshot(time.Now(), service.MaxAge) {
+		if value.PointID == point {
+			recoveredAt = value.SourceTime
+		}
+	}
 	cycle(46, false)
 	after := list()
 	if len(after) != 2 {
@@ -125,6 +135,41 @@ func TestAlarmObservationsPreserveRecoveryBetweenScans(t *testing.T) {
 	}
 	if active != 1 || len(bus.written()) != 0 {
 		t.Fatal("invalid active count or protocol write")
+	}
+	var evidence struct {
+		Events []struct {
+			Transition string `json:"transition"`
+			Input      *struct {
+				Value       float64   `json:"value"`
+				SourceTime  time.Time `json:"source_time"`
+				Quality     string    `json:"quality"`
+				ConfigStamp string    `json:"config_stamp"`
+			} `json:"input"`
+		} `json:"events"`
+	}
+	status, body = call(t, http.MethodGet, base+"/alarm-events?occurrence_id="+first[0].ID, token, nil, &evidence)
+	matched := false
+	for _, event := range evidence.Events {
+		if event.Transition == "resolved" && event.Input != nil && event.Input.Value == 20 && event.Input.SourceTime.Equal(recoveredAt) && event.Input.Quality == "good" && event.Input.ConfigStamp == configs[0].Devices[0].Points[0].ConfigStamp {
+			matched = true
+		}
+	}
+	if status != 200 || !matched {
+		t.Fatalf("original recovery observation was not preserved: %d %s", status, body)
+	}
+	status, body = call(t, http.MethodPut, base+"/modbus/io/"+point, token, ModbusIOInput{Description: "A temperature", ServerID: 1, Address: 11, IOType: data.PointValueModbusHoldingRegister, DataFormat: "uint16", Scale: 1, ReadOnly: true, Units: "C"}, nil)
+	if status != 200 {
+		t.Fatal(body)
+	}
+	cycle(20, false)
+	stillActive := false
+	for _, record := range list() {
+		if record.ID != first[0].ID && record.Active {
+			stillActive = true
+		}
+	}
+	if !stillActive {
+		t.Fatal("old channel configuration fabricated recovery after an address edit")
 	}
 	config.Enabled = false
 	status, body = call(t, http.MethodPut, base+"/alarm-types?root="+root, token, map[string]any{"root": root, "type": config}, nil)
@@ -167,12 +212,180 @@ func TestAlarmWatcherUnknownDoesNotResolveOccurrence(t *testing.T) {
 	if first.ID == "" || !first.Active {
 		t.Fatal("valid abnormal input did not raise")
 	}
+	finish := watcher.BeginConfiguration()
+	finish()
+	if err := watcher.Scan(now); err != nil {
+		t.Fatal(err)
+	}
+	refreshed, _ := service.Alarms.Get(first.ID)
+	if refreshed.InputState != "abnormal" {
+		t.Fatal("verified unchanged configuration remained unknown")
+	}
 	if err := watcher.Scan(now.Add(20 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	current, _ := service.Alarms.Get(first.ID)
 	if !current.Active || current.State == alarm.Resolved {
 		t.Fatalf("stale input fabricated recovery: %+v", current)
+	}
+}
+
+func TestAlarmEvidenceWriteFailureIsReported(t *testing.T) {
+	dir := t.TempDir()
+	base, token, h, _ := startInputServer(t, dir, data.NewID())
+	service := runtime.NewService(nil, time.Minute, time.Second, 100)
+	defer service.Close()
+	h.SetEMS(emsapi.New(service, time.Minute))
+	root := snapshotRoot(t, base, token)
+	record, _ := service.Alarms.Raise(time.Now(), "source", alarm.Warning, "A alarm", "active", root, "")
+	path := filepath.Join(dir, "alarm-events.jsonl")
+	if err := os.Rename(path, path+".saved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	status, body := call(t, http.MethodPost, base+"/ems/alarms/"+record.ID+"/ack", token, map[string]any{"note": "handling"}, nil)
+	if status != 503 {
+		t.Fatalf("handling claimed durable evidence after write failure: %d %s", status, body)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	status, body = call(t, http.MethodGet, base+"/alarm-stats", token, nil, nil)
+	if status != 503 {
+		t.Fatalf("lost evidence became successful empty history: %d %s", status, body)
+	}
+}
+
+func TestActiveAlarmSeverityDoesNotRestartActivationDelay(t *testing.T) {
+	base, token, h, _ := startInputServer(t, t.TempDir(), data.NewID())
+	service := runtime.NewService(nil, time.Minute, time.Second, 100)
+	defer service.Close()
+	h.SetEMS(emsapi.New(service, time.Minute))
+	root := snapshotRoot(t, base, token)
+	point := createNodeAPI(t, base, token, "variable", root, "delayed input", 45)
+	config := alarmtype.Config{Code: "DELAY", Name: "delayed alarm", Severity: "warning", Trigger: "gt", PointID: point, Value: 40, DelaySeconds: 10, Confirm: "manual", RecordRecovery: true, Enabled: true}
+	save := func() {
+		t.Helper()
+		status, body := call(t, http.MethodPut, base+"/alarm-types?root="+root, token, map[string]any{"root": root, "type": config}, nil)
+		if status != 200 {
+			t.Fatal(body)
+		}
+	}
+	save()
+	watcher := alarmwatch.NewWatcher(h.nc, service.Alarms)
+	now := time.Now()
+	if err := watcher.Scan(now); err != nil {
+		t.Fatal(err)
+	}
+	if err := watcher.Scan(now.Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var first alarm.Alarm
+	for _, record := range service.Alarms.List() {
+		if record.Title == config.Name {
+			first = record
+		}
+	}
+	if !first.Active {
+		t.Fatal("initial delay did not qualify")
+	}
+	config.Severity = "critical"
+	save()
+	if err := watcher.Scan(now.Add(11 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	updated, _ := service.Alarms.Get(first.ID)
+	if updated.Severity != alarm.Critical {
+		t.Fatalf("active severity update restarted delay: %+v", updated)
+	}
+}
+
+func TestTrustedDigitalAlarmPreservesBooleanConditions(t *testing.T) {
+	base, token, h, _ := startInputServer(t, t.TempDir(), data.NewID())
+	service := runtime.NewService(nil, time.Minute, time.Second, 100)
+	defer service.Close()
+	source := bridge.NewNodeSource(h.nc)
+	api := emsapi.New(service, time.Minute)
+	api.Buses = source.Buses
+	h.SetEMS(api)
+	f := &pointConfigFixture{base: base, token: token}
+	root := snapshotRoot(t, base, token)
+	bus := f.createBus(t, "digital")
+	point := f.createPoint(t, bus, ModbusIOInput{Description: "fault bit", ServerID: 1, Address: 0, IOType: data.PointValueModbusCoil, DataFormat: "uint16", Scale: 1, ReadOnly: true})
+	config := alarmtype.Config{Code: "FAULT", Name: "fault", Severity: "warning", Trigger: "eq", PointID: point, Value: 1, Confirm: "manual", RecordRecovery: true, Enabled: true}
+	status, body := call(t, http.MethodPut, base+"/alarm-types?root="+root, token, map[string]any{"root": root, "type": config}, nil)
+	if status != 200 {
+		t.Fatal(body)
+	}
+	watcher := alarmwatch.NewWatcher(h.nc, service.Alarms)
+	watcher.State = service.State
+	watcher.Buses = source.Buses
+	service.OnObservations = watcher.Observe
+	if err := watcher.Scan(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	configs, err := source.Buses()
+	if err != nil {
+		t.Fatal(err)
+	}
+	device := configs[0].Devices[0]
+	observe := func(value bool) {
+		now := time.Now()
+		service.Observe(now, []channel.Result{{DeviceID: device.ID, PointID: point, Value: signal.Value{Kind: signal.Bool, Bool: value}, Quality: signal.Good, SourceTime: now, ConfigStamp: device.Points[0].ConfigStamp}})
+	}
+	observe(true)
+	var raised alarm.Alarm
+	for _, record := range service.Alarms.List() {
+		if record.Title == "fault" {
+			raised = record
+		}
+	}
+	if !raised.Active {
+		t.Fatal("trusted boolean true did not trigger eq 1")
+	}
+	observe(false)
+	resolved, _ := service.Alarms.Get(raised.ID)
+	if resolved.Active || resolved.State != alarm.Resolved {
+		t.Fatal("trusted boolean false did not recover eq 1")
+	}
+}
+
+func TestAlarmConfigurationReadFailureIsNotEmptySuccess(t *testing.T) {
+	base, token, h, _ := startInputServer(t, t.TempDir(), data.NewID())
+	service := runtime.NewService(nil, time.Minute, time.Second, 100)
+	defer service.Close()
+	api := emsapi.New(service, time.Minute)
+	h.SetEMS(api)
+	root := snapshotRoot(t, base, token)
+	record, _ := service.Alarms.Raise(time.Now(), "source", alarm.Warning, "A alarm", "active", root, "")
+	api.Buses = func() ([]bridge.BusConfig, error) { return nil, errors.New("configuration read failed") }
+	for _, path := range []string{"/ems/alarms", "/alarm-stats", "/alarm-events?occurrence_id=" + record.ID} {
+		status, body := call(t, http.MethodGet, base+path, token, nil, nil)
+		if status != 503 {
+			t.Fatalf("configuration failure became empty/hidden data: %s %d %s", path, status, body)
+		}
+	}
+}
+
+func TestLegacyAlarmStatisticsAreExplicitlyIncomplete(t *testing.T) {
+	dir := t.TempDir()
+	base, token, h, _ := startInputServer(t, dir, data.NewID())
+	service := runtime.NewService(nil, time.Minute, time.Second, 100)
+	defer service.Close()
+	h.SetEMS(emsapi.New(service, time.Minute))
+	root := snapshotRoot(t, base, token)
+	line, _ := json.Marshal(map[string]any{"time": time.Now(), "key": "legacy-A", "transition": "raised", "severity": "warning", "title": "old record", "device_id": root, "state": "active"})
+	if err := os.WriteFile(filepath.Join(dir, "alarm-events.jsonl"), append(line, '\n'), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Legacy bool `json:"legacy_incomplete"`
+	}
+	status, body := call(t, http.MethodGet, base+"/alarm-stats", token, nil, &result)
+	if status != 200 || !result.Legacy {
+		t.Fatalf("legacy counts presented as exact occurrence history: %d %s", status, body)
 	}
 }
 
@@ -227,6 +440,22 @@ func TestAlarmDeviceScopeResolvesSameChannelStations(t *testing.T) {
 	status, body := call(t, http.MethodGet, base+"/ems/alarms", operator, nil, &listed)
 	if status != 200 || len(listed.Alarms) != 1 || listed.Alarms[0].ID != first.ID {
 		t.Fatalf("runtime station identity not scoped correctly: %d %s", status, body)
+	}
+	var projected struct {
+		Alarms []struct {
+			ID     string `json:"id"`
+			Target struct {
+				Kind      string   `json:"kind"`
+				ChannelID string   `json:"channel_id"`
+				ServerID  int      `json:"server_id"`
+				Points    []string `json:"point_ids"`
+			} `json:"target"`
+			Permissions map[string]bool `json:"permissions"`
+		} `json:"alarms"`
+	}
+	status, body = call(t, http.MethodGet, base+"/ems/alarms", operator, nil, &projected)
+	if status != 200 || len(projected.Alarms) != 1 || projected.Alarms[0].Target.Kind != "device" || projected.Alarms[0].Target.ChannelID != bus || projected.Alarms[0].Target.ServerID != 1 || len(projected.Alarms[0].Target.Points) != 1 || projected.Alarms[0].Target.Points[0] != a || !projected.Alarms[0].Permissions["ack"] {
+		t.Fatalf("alarm navigation or action metadata missing: %d %s", status, body)
 	}
 	status, _ = call(t, http.MethodPost, base+"/ems/alarms/"+second.ID+"/ack", operator, map[string]any{"note": "forbidden"}, nil)
 	if status != 404 {

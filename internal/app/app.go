@@ -221,6 +221,7 @@ func Start(ctx context.Context, cfg Config) (*App, error) {
 	watcher.MaxAge = emsService.MaxAge
 	watcher.Buses = nodeSource.Buses
 	emsService.OnObservations = watcher.Observe
+	emsHandler.BeginAlarmConfiguration = watcher.BeginConfiguration
 	emsHandler.Buses = nodeSource.Buses
 	emsHandler.Configure = appapi.NewChannelAdmin(nc)
 	nodeBridge := bridge.New(emsService, nodeSource, openEMSChannel)

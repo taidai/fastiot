@@ -70,7 +70,9 @@ type Handler struct {
 	// Profiles is the built-in device profile registry.
 	Profiles *profile.Registry
 	// PersistMaintenance is wired by the product API to save maintenance windows.
-	PersistMaintenance func()
+	PersistMaintenance      func()
+	AlarmEvidenceError      func() error
+	BeginAlarmConfiguration func() func()
 	// RestartChannel reopens one channel transport.
 	RestartChannel func(string) error
 }
@@ -776,45 +778,95 @@ func (h *Handler) busy(protocol, address string) bool {
 	return false
 }
 
-func (h *Handler) AlarmVisible(access Access, value alarm.Alarm) bool {
-	if access.AllowNode == nil {
-		return true
-	}
+type alarmLocation struct {
+	Kind           string   `json:"kind"`
+	NodeID         string   `json:"node_id,omitempty"`
+	DeviceID       string   `json:"device_id,omitempty"`
+	PointID        string   `json:"point_id,omitempty"`
+	ChannelID      string   `json:"channel_id,omitempty"`
+	ServerID       byte     `json:"server_id,omitempty"`
+	PointIDs       []string `json:"point_ids,omitempty"`
+	MappingChanged bool     `json:"mapping_changed,omitempty"`
+}
+
+func locateAlarm(value alarm.Alarm, configs []bridge.BusConfig) alarmLocation {
+	location := alarmLocation{Kind: "node", NodeID: value.DeviceID, DeviceID: value.DeviceID}
 	if value.PointID != "" {
-		return access.allows(value.PointID)
-	}
-	if value.DeviceID != "" && access.allows(value.DeviceID) {
-		return true
-	}
-	if h.Buses == nil {
-		return false
-	}
-	configs, err := h.Buses()
-	if err != nil {
-		return false
+		location.Kind = "point"
+		location.NodeID = value.PointID
+		location.PointID = value.PointID
+		location.PointIDs = []string{value.PointID}
 	}
 	for _, config := range configs {
 		for _, device := range config.Devices {
-			if device.ID != value.DeviceID {
-				continue
-			}
-			if len(device.Points) == 0 {
-				return false
-			}
-			for _, point := range device.Points {
-				if !access.allows(point.ID) {
-					return false
+			matches := device.ID == value.DeviceID
+			if value.PointID != "" {
+				matches = false
+				for _, point := range device.Points {
+					if point.ID == value.PointID {
+						matches = true
+					}
 				}
 			}
-			return true
+			if !matches {
+				continue
+			}
+			if value.PointID != "" && value.DeviceID != device.ID {
+				location.MappingChanged = true
+				return location
+			}
+			location.DeviceID, location.ChannelID, location.ServerID = device.ID, config.ChannelID, device.ServerID
+			if value.PointID == "" {
+				location.Kind = "device"
+				location.NodeID = ""
+				for _, point := range device.Points {
+					location.PointIDs = append(location.PointIDs, point.ID)
+				}
+			}
+			return location
 		}
 	}
-	return false
+	return location
+}
+
+func alarmLocationVisible(access Access, location alarmLocation) bool {
+	if access.AllowNode == nil {
+		return true
+	}
+	if location.Kind != "device" {
+		return location.NodeID != "" && access.allows(location.NodeID)
+	}
+	if len(location.PointIDs) == 0 {
+		return false
+	}
+	for _, id := range location.PointIDs {
+		if !access.allows(id) {
+			return false
+		}
+	}
+	return true
+}
+
+func (h *Handler) AlarmVisibility(access Access) (func(alarm.Alarm) bool, error) {
+	var configs []bridge.BusConfig
+	if h.Buses != nil {
+		var err error
+		configs, err = h.Buses()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return func(value alarm.Alarm) bool { return alarmLocationVisible(access, locateAlarm(value, configs)) }, nil
 }
 
 func (h *Handler) alarmTarget(w http.ResponseWriter, access Access, id string) bool {
+	visible, err := h.AlarmVisibility(access)
+	if err != nil {
+		writeError(w, 503, "alarm_objects_unavailable")
+		return false
+	}
 	value, found := h.Service.Alarms.Get(id)
-	if !found || !h.AlarmVisible(access, value) {
+	if !found || !visible(value) {
 		writeError(w, http.StatusNotFound, "alarm_not_found")
 		return false
 	}
@@ -823,10 +875,25 @@ func (h *Handler) alarmTarget(w http.ResponseWriter, access Access, id string) b
 
 func (h *Handler) alarms(w http.ResponseWriter, r *http.Request, access Access) {
 	state := r.URL.Query().Get("state")
-	visible := []alarm.Alarm{}
+	var configs []bridge.BusConfig
+	if h.Buses != nil {
+		var err error
+		configs, err = h.Buses()
+		if err != nil {
+			writeError(w, 503, "alarm_objects_unavailable")
+			return
+		}
+	}
+	type alarmView struct {
+		alarm.Alarm
+		Target      alarmLocation   `json:"target"`
+		Permissions map[string]bool `json:"permissions"`
+	}
+	visible := []alarmView{}
 	for _, value := range h.Service.Alarms.List() {
-		if h.AlarmVisible(access, value) && (state != "active" || value.Active) {
-			visible = append(visible, value)
+		location := locateAlarm(value, configs)
+		if alarmLocationVisible(access, location) && (state != "active" || value.Active) {
+			visible = append(visible, alarmView{value, location, map[string]bool{"ack": access.can(access.AlarmAck), "maintain": access.can(access.AlarmMaintain)}})
 		}
 	}
 	ids := map[string]bool{}
@@ -839,6 +906,14 @@ func (h *Handler) alarms(w http.ResponseWriter, r *http.Request, access Access) 
 		}
 	}
 	writeJSON(w, map[string]any{"alarms": visible})
+}
+
+func (h *Handler) alarmEvidenceConfirmed(w http.ResponseWriter) bool {
+	if h.AlarmEvidenceError != nil && h.AlarmEvidenceError() != nil {
+		writeError(w, 503, "alarm_evidence_unconfirmed")
+		return false
+	}
+	return true
 }
 
 func (h *Handler) ackAlarm(w http.ResponseWriter, r *http.Request, access Access, id string) {
@@ -862,6 +937,9 @@ func (h *Handler) ackAlarm(w http.ResponseWriter, r *http.Request, access Access
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
+	if !h.alarmEvidenceConfirmed(w) {
+		return
+	}
 	writeJSON(w, alarm)
 }
 
@@ -876,6 +954,9 @@ func (h *Handler) closeAlarm(w http.ResponseWriter, access Access, id string) {
 	alarm, err := h.Service.Alarms.Close(time.Now(), id)
 	if err != nil {
 		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if !h.alarmEvidenceConfirmed(w) {
 		return
 	}
 	writeJSON(w, alarm)
@@ -1104,6 +1185,9 @@ func (h *Handler) maintainAlarm(w http.ResponseWriter, r *http.Request, access A
 		return
 	}
 	h.persistMaintenance()
+	if !h.alarmEvidenceConfirmed(w) {
+		return
+	}
 	writeJSON(w, alarm)
 }
 
@@ -1121,6 +1205,9 @@ func (h *Handler) releaseAlarm(w http.ResponseWriter, access Access, id string) 
 		return
 	}
 	h.persistMaintenance()
+	if !h.alarmEvidenceConfirmed(w) {
+		return
+	}
 	writeJSON(w, alarm)
 }
 

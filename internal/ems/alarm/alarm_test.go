@@ -52,6 +52,27 @@ func TestRapidRecurrenceCreatesIndependentOccurrence(t *testing.T) {
 	}
 }
 
+func TestClosedOccurrenceCannotChangeConditionMaintenance(t *testing.T) {
+	engine := New()
+	first := raise(t, engine, t0, "k", "timeout")
+	if _, err := engine.Clear(t0.Add(time.Second), first.Key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.Close(t0.Add(2*time.Second), first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.Shelve(t0.Add(3*time.Second), first.ID, "old", "operator", t0.Add(time.Hour)); err == nil {
+		t.Fatal("closed occurrence installed maintenance for a future occurrence")
+	}
+	if _, err := engine.Release(t0.Add(3*time.Second), first.ID); err == nil {
+		t.Fatal("closed occurrence released condition maintenance")
+	}
+	next := raise(t, engine, t0.Add(4*time.Second), first.Key, "timeout")
+	if !next.Active || next.ID == first.ID {
+		t.Fatal("old handling suppressed a new occurrence")
+	}
+}
+
 func TestOccurrenceKeepsLifecycleTimesAndRevision(t *testing.T) {
 	engine := New()
 	first := raise(t, engine, t0, "k", "timeout")

@@ -266,6 +266,31 @@ func TestStateHistoryAndExport(t *testing.T) {
 	}
 }
 
+func TestAlarmNavigationDoesNotReplaceOriginalDevice(t *testing.T) {
+	service := runtime.NewService(nil, time.Minute, time.Second, 100)
+	defer service.Close()
+	handler := New(service, time.Minute)
+	handler.Buses = func() ([]bridge.BusConfig, error) {
+		return []bridge.BusConfig{{ChannelID: "c1", Devices: []channel.Device{{ID: "new-device", ServerID: 2, Points: []channel.Point{{ID: "p1"}}}}}}, nil
+	}
+	_, _ = service.Alarms.Raise(time.Now(), "condition:old-device", alarm.Warning, "old alarm", "old evidence", "old-device", "p1")
+	response := call(t, handler, Access{AllowNode: func(id string) bool { return id == "p1" }}, http.MethodGet, "/api/ems/alarms", "")
+	var result struct {
+		Alarms []struct {
+			Target struct {
+				DeviceID       string `json:"device_id"`
+				MappingChanged bool   `json:"mapping_changed"`
+			} `json:"target"`
+		} `json:"alarms"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != 200 || len(result.Alarms) != 1 || result.Alarms[0].Target.DeviceID != "old-device" || !result.Alarms[0].Target.MappingChanged {
+		t.Fatalf("original alarm redirected to replacement device: %s", response.Body.String())
+	}
+}
+
 func TestAlarmLifecycleAPI(t *testing.T) {
 	service := runtime.NewService(nil, 5*time.Second, time.Second, 100)
 	defer service.Close()

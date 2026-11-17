@@ -27,7 +27,7 @@ function pointDetail(node: Node) {
 type Drill = { kind: "alarms" | "offline" | "stale" } | null
 
 export default function HealthSummary({ alarmCount, offlineChannels, stalePoints, onOpenChannels, onOpenAlarms }: {
-  alarmCount: number
+  alarmCount: number | null
   offlineChannels: Node[]
   stalePoints: Node[]
   onOpenChannels: () => void
@@ -36,7 +36,7 @@ export default function HealthSummary({ alarmCount, offlineChannels, stalePoints
   const [drill, setDrill] = useState<Drill>(null)
 
   return <div className="health-summary">
-    <button type="button" className={`health-pill ${alarmCount ? "has-warning" : ""}`} onClick={() => setDrill({ kind: "alarms" })}>告警 <b>{alarmCount}</b></button>
+    <button type="button" className={`health-pill ${alarmCount ? "has-warning" : ""}`} onClick={() => setDrill({ kind: "alarms" })}>告警 <b>{alarmCount ?? "—"}</b></button>
     <i>·</i>
     <button type="button" className={`health-pill ${offlineChannels.length ? "has-error" : ""}`} onClick={() => setDrill({ kind: "offline" })}>核心设备离线 <b>{offlineChannels.length}</b></button>
     <i>·</i>
@@ -48,7 +48,7 @@ export default function HealthSummary({ alarmCount, offlineChannels, stalePoints
         <span className="section-kicker">通信详情</span>
         <h3>{drill.kind === "alarms" ? "活动报警" : drill.kind === "offline" ? "核心设备离线" : "核心测点陈旧"}</h3>
         {drill.kind === "alarms" && <div className="health-drill-body">
-          <p>{alarmCount ? `当前有 ${alarmCount} 项活动报警。` : "当前没有活动报警。"}</p>
+          <p>{alarmCount === null ? "报警数据不可确认，请打开报警页重试。" : alarmCount ? `当前有 ${alarmCount} 项活动报警。` : "当前范围内没有活动报警；这不代表设备正常。"}</p>
           <button className="secondary-button" onClick={onOpenAlarms}>打开报警与事件 →</button>
         </div>}
         {drill.kind === "offline" && <div className="health-drill-body">

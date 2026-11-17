@@ -12,7 +12,7 @@ export type AlarmSoundSettings = {
 
 type DayStats = { date: string; raised: number; unhandled: number; handled: number }
 type Ranking = { device_id: string; name: string; count: number }
-type Stats = { today: DayStats; yesterday: DayStats; trend: DayStats[]; ranking: Ranking[]; since?: string }
+type Stats = { today: DayStats; yesterday: DayStats; trend: DayStats[]; ranking: Ranking[]; since?: string; legacy_incomplete?: boolean }
 
 const defaultSound: AlarmSoundSettings = {
   enabled: true, volume: 60, silenceEnabled: false, silenceFrom: "22:00", silenceTo: "07:00",
@@ -76,6 +76,7 @@ export default function AlarmStatsPanel({ token, onError, sound, onSound, onTest
   const max = Math.max(1, ...(stats?.trend.map((item) => item.raised) || [1]))
 
   return <div className="alarm-stats-page min-w-0">
+    {stats?.legacy_incomplete && <InlineNotice tone="warning">包含缺少独立过程身份的旧格式记录；旧记录按条件汇总，不是精确的发生过程总数，无法补造丢失的过程和处理证据。</InlineNotice>}
     <div className="alarm-stats-top !grid-cols-1 sm:!grid-cols-3">
       <EmsCard className="alarm-stat-card"><span>今日告警</span><strong>{stats?.today.raised ?? "—"}</strong><small>未处理 {stats?.today.unhandled ?? "—"} · 已处理 {stats?.today.handled ?? "—"}</small></EmsCard>
       <EmsCard className="alarm-stat-card"><span>昨日告警</span><strong>{stats?.yesterday.raised ?? "—"}</strong><small>未处理 {stats?.yesterday.unhandled ?? "—"} · 已处理 {stats?.yesterday.handled ?? "—"}</small></EmsCard>

@@ -20,19 +20,22 @@ import (
 )
 
 type Watcher struct {
-	NC         *nats.Conn
-	Alarms     *alarm.Engine
-	Interval   time.Duration
-	State      *state.Store
-	MaxAge     time.Duration
-	Buses      func() ([]bridge.BusConfig, error)
-	mu         sync.Mutex
-	raised     map[string]bool
-	pending    map[string]time.Time
-	configs    map[string]typeEntry
-	views      map[string]NodeView
-	mappings   map[string]physicalMapping
-	lastRaised map[string]time.Time
+	NC                 *nats.Conn
+	Alarms             *alarm.Engine
+	Interval           time.Duration
+	State              *state.Store
+	MaxAge             time.Duration
+	Buses              func() ([]bridge.BusConfig, error)
+	mu                 sync.Mutex
+	generation         uint64
+	changing           int
+	configurationReady bool
+	raised             map[string]bool
+	pending            map[string]time.Time
+	configs            map[string]typeEntry
+	views              map[string]NodeView
+	mappings           map[string]physicalMapping
+	lastRaised         map[string]time.Time
 }
 
 type typeEntry struct {
@@ -40,7 +43,10 @@ type typeEntry struct {
 	config      alarmtype.Config
 	fingerprint string
 }
-type physicalMapping struct{ device, stamp string }
+type physicalMapping struct {
+	device, stamp string
+	kind          signal.Kind
+}
 
 func NewWatcher(nc *nats.Conn, alarms *alarm.Engine) *Watcher {
 	return &Watcher{NC: nc, Alarms: alarms, Interval: 2 * time.Second, MaxAge: 15 * time.Second, raised: map[string]bool{}, pending: map[string]time.Time{}, configs: map[string]typeEntry{}, views: map[string]NodeView{}, mappings: map[string]physicalMapping{}, lastRaised: map[string]time.Time{}}
@@ -68,7 +74,26 @@ func (w *Watcher) Run(ctx context.Context) error {
 	}
 }
 
+func (w *Watcher) BeginConfiguration() func() {
+	w.mu.Lock()
+	w.generation++
+	w.changing++
+	w.configurationReady = false
+	for key := range w.configs {
+		w.Alarms.MarkUnknown(time.Now(), key, "configuration_pending")
+		delete(w.lastRaised, key)
+	}
+	w.mu.Unlock()
+	return func() { w.mu.Lock(); w.changing--; w.generation++; w.mu.Unlock() }
+}
+
 func (w *Watcher) Scan(now time.Time) error {
+	w.mu.Lock()
+	generation, changing := w.generation, w.changing
+	w.mu.Unlock()
+	if changing > 0 {
+		return nil
+	}
 	nodes := []data.NodeEdge{}
 	for _, typ := range []string{"decisionTable", "modbus", "variable", "modbusIo", "device", "group"} {
 		list, err := client.GetNodes(w.NC, "all", "all", typ, false)
@@ -121,7 +146,7 @@ func (w *Watcher) Scan(now time.Time) error {
 		for _, bus := range buses {
 			for _, device := range bus.Devices {
 				for _, point := range device.Points {
-					mapping := physicalMapping{device.ID, point.ConfigStamp}
+					mapping := physicalMapping{device.ID, point.ConfigStamp, point.Kind}
 					if previous, exists := mappings[point.ID]; exists && previous != mapping {
 						mapping = physicalMapping{}
 					}
@@ -132,6 +157,9 @@ func (w *Watcher) Scan(now time.Time) error {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if generation != w.generation || w.changing > 0 {
+		return nil
+	}
 	active := map[string]bool{}
 	for _, finding := range Evaluate(views, now) {
 		active[finding.Key] = true
@@ -157,6 +185,7 @@ func (w *Watcher) Scan(now time.Time) error {
 		}
 	}
 	w.configs, w.views, w.mappings = configs, byID, mappings
+	w.configurationReady = true
 	snapshot := state.Capture{At: now}
 	if w.State != nil {
 		snapshot = w.State.Capture(func() time.Time { return now }, w.MaxAge)
@@ -168,6 +197,9 @@ func (w *Watcher) Scan(now time.Time) error {
 func (w *Watcher) Observe(snapshot state.Capture) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if !w.configurationReady {
+		return
+	}
 	w.evaluateTypes(snapshot, true)
 }
 
@@ -190,19 +222,34 @@ func (w *Watcher) evaluateTypes(snapshot state.Capture, physicalOnly bool) {
 			continue
 		}
 		sample := alarmtype.Sample{}
+		var evidence *alarm.InputEvidence
 		deviceID, pointID := config.PointID, config.PointID
 		if physical {
 			mapping := w.mappings[config.PointID]
 			deviceID = mapping.device
 			value, ok := values[state.Key{DeviceID: mapping.device, PointID: config.PointID}]
-			if ok && mapping.stamp != "" && value.ConfigStamp == mapping.stamp && value.Quality == signal.Good && value.Value.Kind == signal.Number {
-				sample = alarmtype.Sample{Present: true, Value: value.Value.Num, ValueTime: value.SourceTime}
+			if ok && mapping.stamp != "" && value.ConfigStamp == mapping.stamp && value.Quality == signal.Good && value.Value.Kind == mapping.kind {
+				switch value.Value.Kind {
+				case signal.Number:
+					sample = alarmtype.Sample{Present: true, Value: value.Value.Num, ValueTime: value.SourceTime}
+				case signal.Bool:
+					sample = alarmtype.Sample{Present: true, Value: data.BoolToFloat(value.Value.Bool), ValueTime: value.SourceTime}
+				}
+				if sample.Present {
+					kind := "number"
+					if value.Value.Kind == signal.Bool {
+						kind = "bool"
+					}
+					evidence = &alarm.InputEvidence{PointID: config.PointID, Value: sample.Value, Kind: kind, Unit: value.Unit, Quality: "good", Source: "observation", SourceTime: value.SourceTime, ReceivedTime: value.ReceivedTime, ConfigStamp: value.ConfigStamp}
+				}
 			}
 		} else if found {
 			sample = alarmtype.Sample{Present: source.HasValue, Offline: source.Offline, Value: source.Value, ValueTime: source.ValueTime}
 			if source.Type == data.NodeTypeModbus {
 				pointID = ""
 				sample.Present = source.Num["lastGoodPoll"] > 0
+			} else if sample.Present {
+				evidence = &alarm.InputEvidence{PointID: config.PointID, Value: sample.Value, Kind: "number", Unit: source.Text["units"], Quality: "good", Source: "legacy_variable", SourceTime: source.ValueTime}
 			}
 		}
 		condition := config.Evaluate(now, sample)
@@ -214,7 +261,7 @@ func (w *Watcher) evaluateTypes(snapshot state.Capture, physicalOnly bool) {
 		if condition == alarmtype.Normal {
 			delete(w.pending, key)
 			delete(w.lastRaised, key)
-			w.clearType(now, key, config.RecordRecovery)
+			w.clearType(now, key, config.RecordRecovery, evidence)
 			continue
 		}
 		first, seen := w.pending[key]
@@ -222,7 +269,7 @@ func (w *Watcher) evaluateTypes(snapshot state.Capture, physicalOnly bool) {
 			w.pending[key] = now
 			first = now
 		}
-		if now.Sub(first) < time.Duration(config.DelaySeconds)*time.Second {
+		if !w.Alarms.ConditionActive(key) && now.Sub(first) < time.Duration(config.DelaySeconds)*time.Second {
 			continue
 		}
 		if previous, ok := w.lastRaised[key]; ok && previous.Equal(sample.ValueTime) {
@@ -233,7 +280,13 @@ func (w *Watcher) evaluateTypes(snapshot state.Capture, physicalOnly bool) {
 			name = config.PointID
 		}
 		detail := fmt.Sprintf("%s · 当前 %g · 条件 %s", name, sample.Value, config.Summary())
-		raised, err := w.Alarms.Raise(now, key, alarm.Severity(config.Severity), config.Name, detail, deviceID, pointID)
+		var raised alarm.Alarm
+		var err error
+		if evidence != nil {
+			raised, err = w.Alarms.RaiseObserved(now, key, alarm.Severity(config.Severity), config.Name, detail, deviceID, pointID, *evidence)
+		} else {
+			raised, err = w.Alarms.Raise(now, key, alarm.Severity(config.Severity), config.Name, detail, deviceID, pointID)
+		}
 		if err != nil || !raised.Active {
 			continue
 		}
@@ -244,8 +297,14 @@ func (w *Watcher) evaluateTypes(snapshot state.Capture, physicalOnly bool) {
 	}
 }
 
-func (w *Watcher) clearType(now time.Time, key string, recordRecovery bool) {
-	cleared, err := w.Alarms.Clear(now, key)
+func (w *Watcher) clearType(now time.Time, key string, recordRecovery bool, evidence *alarm.InputEvidence) {
+	var cleared alarm.Alarm
+	var err error
+	if evidence != nil {
+		cleared, err = w.Alarms.ClearObserved(now, key, *evidence)
+	} else {
+		cleared, err = w.Alarms.Clear(now, key)
+	}
 	if err != nil {
 		return
 	}

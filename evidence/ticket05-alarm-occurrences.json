@@ -1,0 +1,86 @@
+{
+  "ticket": "05-alarm-occurrences-and-navigation",
+  "verified_on": "2026-11-17",
+  "base": "32efaf331581e69b2978400bea645453ff02e5f3",
+  "branch": "feat/ticket05-alarm-occurrences",
+  "scope": "Independent alarm occurrences, trusted recovery, scoped operator handling, process evidence and original-object navigation",
+  "environment": "Isolated loopback-only software Modbus TCP, explicitly named synthetic/non-measured sources. No production equipment or real control. Protocol writes remained zero.",
+  "browser_journey": {
+    "configuration": "A_HIGH and B_HIGH definitions were created through the actual alarm-type forms with threshold >40. Underlying isolated A/B groups, read-only channels and points were prepared through public product APIs.",
+    "operator_scope": "A-only personal operator saw A records; guessed B acknowledgement returned404. Both UI and backend used actual object scope, not an administrator token for operator requests.",
+    "acknowledgement": "Actual confirmation dialog retained actor, note and time while the source remained45 and the process stayed active. No value, command or automatic-control grant was changed.",
+    "rapid_recurrence": "Actual TCP source changed45→20→46. Initial journey observed300ms between recovery and new occurrence; final build observed299ms. Old process retained acknowledgement and recovery, new process had a different ID and no actor/note.",
+    "unknown_input": "Failed A reads preserved the active occurrence and displayed recovery not yet confirmed. No zero value or physical recovery was invented.",
+    "navigation_red": "A channel alarm previously opened B's latest point history.",
+    "navigation_green": "Device/channel alarms show explicit scope and relevant point choices. A's scope listed only A's point; selecting it opened A history. Invalid explicit targets never fall back to an unrelated recent point.",
+    "query_failure": "Injected GET /ems/alarms503 removed current cards and counts, closed a pending acknowledgement dialog and displayed unavailable with retry; no system-normal claim.",
+    "permission_revocation": "With an actual account downgrade and a delayed older alarm response, the old UI kept its acknowledgement dialog despite displaying Viewer. After the fix, policy identity invalidated the query immediately; the delayed response did not reopen the dialog or restore acknowledgement buttons.",
+    "history_withdrawal": "Deleting a selected isolated point while another remained previously left its legend and line visible. After filtering/pruning selection against current scope, a fresh withdrawal removed the selected point, legend and polylines.",
+    "responsive": {"desktop": {"width":1600,"scroll_width":1600}, "mobile": {"width":375,"scroll_width":375,"card_bounds":[24.67,350.67]}, "viewport_reset":true},
+    "final_console": "No console errors; no failed requests in the final recent network buffer. Earlier invalid fixture setup, deliberately injected failures and permission denials were expected test cases.",
+    "screenshots": ["evidence/ticket05-alarm-occurrences-desktop.jpg","evidence/ticket05-recovery-evidence-mobile.jpg"]
+  },
+  "final_actual_observation": {
+    "old_occurrence": "alarm-4BQVJJKA2FNLIIHMGU4JVO63V5",
+    "new_occurrence": "alarm-P4MGDAWOQ7P5V42RUYXK77WBEL",
+    "old_state": "resolved",
+    "new_state": "active",
+    "new_actor": null,
+    "operator": "final-a-71678ba4-2dec-4c07-91d2-e695094f6575@fixture.local",
+    "note": "最终验收：个人账号接手A，不清物理故障",
+    "acknowledged_at": "2026-11-17T14:06:59.613549134Z",
+    "recovered_at": "2026-11-17T14:07:33.264077157Z",
+    "new_created_at": "2026-11-17T14:07:33.56368509Z",
+    "recurrence_gap_ms": 299,
+    "recovery_event": {
+      "transition":"resolved",
+      "revision":373,
+      "time":"2026-11-17T14:07:33.264081116Z",
+      "detail":"恢复观测 20 C",
+      "device_id":"2qd920wxymskphkh9vac7wg2s8/1",
+      "point_id":"tt1krj9xtxq0mjhh49m7gr4dfw",
+      "input":{"value":20,"unit":"C","kind":"number","quality":"good","source":"observation","source_time":"2026-11-17T14:07:33.264077157Z","received_time":"2026-11-17T14:07:33.264081116Z","config_stamp":"512dbbddbeb71c923326d82f882619f7a7c2a118792e4f9aabd8ae332615c14c"}
+    },
+    "note_on_source": "observation describes the acquisition pathway. The TCP endpoint in this acceptance environment was a software simulator, not physical hardware."
+  },
+  "verification": {
+    "go_full":"go test -p 1 -count=1 ./... passed",
+    "race":"go test -race -p 1 -count=1 -run 'TestObservationCallback|TestAlarmObservations|TestAlarmStatisticsRespectOccurrenceTransitionOrder|TestRapidRecurrence' ./internal/ems/runtime ./internal/ems/alarm ./internal/appapi passed",
+    "frontend":["npm --prefix frontend run build","npm --prefix frontend run check:observations","npm --prefix frontend run check:navigation","npm --prefix frontend run check:consistency","npm --prefix frontend run check:acceptance"],
+    "frontend_result":"passed; existing Vite >500kB chunk-size warning remains",
+    "suite_note":"Go packages run serially because existing integration fixtures share fixed ports. No failing run was treated as a pass."
+  },
+  "final_review": {
+    "method":"One fresh-context parallel Standards/Spec review, followed by one verified fix pass; no re-review",
+    "standards_findings":4,
+    "spec_findings":8,
+    "unique_findings":11,
+    "fixed":[
+      {"issue":"Closed occurrence maintenance","proof":"TestClosedOccurrenceCannotChangeConditionMaintenance RED/GREEN; closed or superseded IDs cannot suppress or release a future condition"},
+      {"issue":"Permission-only update and delayed response","proof":"Actual browser RED/GREEN; query identity includes effective policy and action dialogs require current capabilities"},
+      {"issue":"History selection after scope withdrawal","proof":"Actual browser RED/GREEN; current scope filters and prunes selection, account identity remounts history"},
+      {"issue":"Original device replaced by current mapping","proof":"TestAlarmNavigationDoesNotReplaceOriginalDevice RED/GREEN; recorded identity retained, mapping_changed explicitly reported"},
+      {"issue":"Unlabelled legacy event counts","proof":"TestLegacyAlarmStatisticsAreExplicitlyIncomplete RED/GREEN; legacy_incomplete flag and UI warning, no invented historical occurrences"},
+      {"issue":"Configuration-read failure becomes zero statistics","proof":"TestAlarmConfigurationReadFailureIsNotEmptySuccess RED/GREEN; one configuration snapshot and propagated503 for list/stats/events"},
+      {"issue":"Trusted digital observations ignored","proof":"TestTrustedDigitalAlarmPreservesBooleanConditions RED/GREEN; matching Boolean sources use the supported0/1 alarm comparison"},
+      {"issue":"Established severity changes delayed again","proof":"TestActiveAlarmSeverityDoesNotRestartActivationDelay RED/GREEN; activation delay applies only before a process is active"},
+      {"issue":"Silent evidence write failure","proof":"TestAlarmEvidenceWriteFailureIsReported RED/GREEN; handling returns503 alarm_evidence_unconfirmed and history remains unavailable after known loss"},
+      {"issue":"Old channel configuration certifies recovery","proof":"TestAlarmObservationsPreserveRecoveryBetweenScans extended RED/GREEN for address edit; authorized configuration writes invalidate cached evaluation, generation guards discard stale scans"},
+      {"issue":"Original recovery observation missing","proof":"Same acquisition/API regression RED/GREEN; atomic event input snapshot preserves20, original source/receipt time, quality and stamp. Final browser visibly displays this evidence."}
+    ],
+    "additional_fix_check":"Configuration refresh with an unchanged still-valid sample was tested RED/GREEN so it does not remain stuck unknown.",
+    "deferred_minors":[],
+    "not_claimed":"Complete history/export/retention, arbitrary external consumers, physical-control safety sign-off or all T32 scenarios"
+  },
+  "rulings": [
+    {"decision":"Use the approved host plan and a small ignored execution record instead of another planning document","cost_if_wrong":"Future execution must consult the local ticket, committed tests and this evidence"},
+    {"decision":"Stable condition keys for producers, unique occurrence IDs for handling; no fallback alias","cost_if_wrong":"Old callers must adopt returned IDs rather than target whichever process is current"},
+    {"decision":"Lifecycle events cannot be suppressed by flood protection","cost_if_wrong":"Frequent true recoveries create more real records; notifications may be controlled separately"},
+    {"decision":"Keep one App-owned query hook and update the existing source-location check accordingly","cost_if_wrong":"Additional consumers must not mount independent alarm pollers"},
+    {"decision":"Treat unavailable input as unknown, not normal; configuration retirement is administrative","cost_if_wrong":"Operators may need explicit verification rather than seeing a convenient recovered state"},
+    {"decision":"Serialize accepted-observation delivery and pause threshold evaluation through supported configuration mutations","cost_if_wrong":"Configuration changes can temporarily mark related evaluation unknown until refresh; callbacks must remain bounded"},
+    {"decision":"Latch known evidence-write loss as unavailable/unconfirmed rather than silently return zero or success","cost_if_wrong":"Storage maintenance is required; lost evidence is not reconstructed and full crash/disk recovery is outside this ticket"}
+  ],
+  "limits":["Single Go service, no new notification channels or alarm management center","Only isolated read-only software sources in acceptance","No production devices, hardware writes, HA or old ziot changes","No claim that acknowledgement repairs physical faults or grants automatic control","No automatic tasks06/07, push, PR or GitHub issue publication"],
+  "preservation":{"verified_unchanged_originals_or_backups":90,"intentional_manifest_differences":["local task04 ticket completion","local task05 ticket completion"],"missing":0,"fixtures_stopped":true,"launch_restored":true,"backup":".scratch/task03-premerge-r26evcnm","stash":"1816cdbed35c43a05e1da30d9419de49eaec3ce7","policy":"Keep all original assets and backups; do not apply/pop/drop preserved unfinished work"}
+}

@@ -15,6 +15,7 @@ import AllocatorsView from "./AllocatorsView"
 import PointsView from "./PointsView"
 import VirtualInputs from "./VirtualInputs"
 import CalculationPoints from "./CalculationPoints"
+import { useAlarms } from "./useAlarms"
 import AggregatesView from "./AggregatesView"
 import CommunicationView from "./CommunicationView"
 import ModbusTools from "./ModbusTools"
@@ -41,7 +42,6 @@ import {
   businessId,
   Document,
   EmsAlarm,
-  fetchAlarms,
   listUsers,
   login,
   nameOf,
@@ -248,8 +248,6 @@ export default function App() {
   const [displayOpen, setDisplayOpen] = useState(false)
   const displayRef = useRef<HTMLDivElement>(null)
   const [clock, setClock] = useState(() => new Date())
-  const [alarmCount, setAlarmCount] = useState(0)
-  const [alarms, setAlarms] = useState<EmsAlarm[]>([])
   const [assistantOpen, setAssistantOpen] = useState(false)
   const [tariffDraft, setTariffDraft] = useState("")
   const [kpiConfig, setKpiConfig] = useState<KpiConfig>(loadKpiConfig)
@@ -388,28 +386,8 @@ export default function App() {
     return siteID ? siteSnapshot(base, siteID) : base
   }, [snapshot, stationID, siteID])
 
-  const refreshAlarms = useCallback(async () => {
-    if (!token) return
-    try {
-      const result = await fetchAlarms(token)
-      const scope = new Set((activeSnapshot?.nodes || []).map((node) => node.id))
-      const visible = (result.alarms || []).filter((alarm) => {
-        const refs = [alarm.point_id, alarm.device_id, alarm.group_id].filter(Boolean) as string[]
-        return refs.length === 0 || refs.some((id) => scope.has(id))
-      })
-      setAlarms(visible)
-      setAlarmCount(visible.filter((alarm) => alarm.active && !(alarm.maintenance_until && new Date(alarm.maintenance_until).getTime() > Date.now())).length)
-    } catch {
-      // 顶栏报警计数失败不阻塞工作台
-    }
-  }, [token, activeSnapshot])
-
-  useEffect(() => {
-    if (!token) return
-    void refreshAlarms()
-    const timer = window.setInterval(() => void refreshAlarms(), 5000)
-    return () => window.clearInterval(timer)
-  }, [token, refreshAlarms])
+  const alarmQuery = useAlarms(token, activeSnapshot?.nodes || [], snapshot?.user.policy)
+  const { alarms, count: alarmCount, refresh: refreshAlarms } = alarmQuery
 
   const siteNodes = useMemo(() => snapshot?.nodes.filter((node) => node.type === "site") ?? [], [snapshot])
   useEffect(() => {
@@ -616,7 +594,7 @@ export default function App() {
             <small>显示设置保存在本机浏览器；电价保存在本站业务节点，用于“今日用电 × 电价”的电费估算。</small>
           </div>}
         </div>
-        <button className="console-icon" title="活动报警" aria-label="活动报警" onClick={() => setPage("alarms")}><Icon name="bell" size={25} />{alarmCount > 0 && <em>{alarmCount}</em>}</button>
+        <button className="console-icon" title="活动报警" aria-label="活动报警" onClick={() => setPage("alarms")}><Icon name="bell" size={25} />{alarmCount === null ? <em>?</em> : alarmCount > 0 && <em>{alarmCount}</em>}</button>
         <span className="console-user">{roleNames[view.user.policy.role] || "用户"}</span>
         <time>{clock.toLocaleTimeString("zh-CN", { hour12: false })}</time>
         {isAdmin && <button className="console-profile" aria-label="账号与权限" title={view.user.email || view.user.user_id} onClick={() => openPage("users")}><Icon name="user" size={23} /><span>{(view.user.email || view.user.user_id).split("@")[0]}</span></button>}
@@ -697,11 +675,11 @@ export default function App() {
       {page === "opcua" && canConfigure && <OpcuaView token={token} onError={setError} />}
       {page === "unitWiring" && canConfigure && <UnitWiringView token={token} nodes={view.nodes} onError={setError} />}
 
-      {page === "alarms" && <AlarmsView token={token} rootID={view.roots[0]} nodes={view.nodes} alarms={alarms} onRefreshAlarms={refreshAlarms} canOperate={canOperate} canConfigure={canConfigure} onError={setError} openHistory={(id) => { setHistoryPoint(id); setPage("history") }} />}
+      {page === "alarms" && <AlarmsView token={token} rootID={view.roots[0]} nodes={view.nodes} alarms={alarms} loading={alarmQuery.loading} queryError={alarmQuery.error} onRefreshAlarms={refreshAlarms} canOperate={canOperate} canConfigure={canConfigure} onError={setError} openHistory={(id) => { setHistoryPoint(id); setPage("history") }} />}
 
       {page === "health" && <HealthView token={token} onError={setError} />}
 
-      {page === "history" && <HistoryView key={historyPoint || "history"} token={token} points={points} initialPoint={historyPoint || undefined} onError={setError} isAdmin={canConfigure} onOpenPoints={() => openPage(canConfigure ? "points" : "health")} />}
+      {page === "history" && <HistoryView key={`${token}/${historyPoint || "history"}`} token={token} points={points} initialPoint={historyPoint || undefined} onError={setError} isAdmin={canConfigure} onOpenPoints={() => openPage(canConfigure ? "points" : "health")} />}
 
       {page === "rules" && canConfigure && <section className="rules-page">
         <div className="page-toolbar">
@@ -756,7 +734,7 @@ export default function App() {
 type Run = (action: () => Promise<unknown>) => Promise<boolean>
 
 function DevicesView({ snapshot, points, siteName, groups, rules, activeRules, errors, alarmCount, busy, isAdmin, canConfigure, canOperate, run, openPoint, goRules, goHistory, goChannels, goEnergyUnits, goDispatchTrace, goAlarms, dispatch, latestAlarm, tariff, kpiConfig, onError }: {
-  snapshot: Snapshot; points: Node[]; siteName: string; groups: Node[]; rules: number; activeRules: number; errors: number; alarmCount: number
+  snapshot: Snapshot; points: Node[]; siteName: string; groups: Node[]; rules: number; activeRules: number; errors: number; alarmCount: number | null
   busy: boolean; isAdmin: boolean; canConfigure: boolean; canOperate: boolean; run: Run; goRules: () => void; goHistory: () => void; goChannels: () => void; goEnergyUnits: () => void; goDispatchTrace: () => void; goAlarms: () => void; dispatch: DispatchInfo | null
   latestAlarm: EmsAlarm | null
   tariff: number | null

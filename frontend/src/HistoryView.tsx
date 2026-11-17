@@ -103,10 +103,13 @@ export default function HistoryView({ token, points, initialPoint, onError, isAd
   isAdmin?: boolean
   onOpenPoints?: () => void
 }) {
-  const [selected, setSelected] = useState<string[]>(() => {
-    const first = initialPoint && points.some((item) => item.id === initialPoint) ? initialPoint : recentPoint(points)
+  const [requestedSelection, setSelected] = useState<string[]>(() => {
+    const first = initialPoint ? points.some((item) => item.id === initialPoint) ? initialPoint : "" : recentPoint(points)
     return first ? [first] : []
   })
+  const scope = points.map(item => item.id).sort().join(",")
+  const selected = useMemo(() => requestedSelection.filter(id => scope.split(",").includes(id)), [requestedSelection, scope])
+  useEffect(() => { setSelected(current => current.filter(id => scope.split(",").includes(id))) }, [scope])
   const [range, setRange] = useState("24h")
   const [interval, setInterval] = useState("raw")
   const [seriesData, setSeriesData] = useState<Record<string, Point[]>>({})
@@ -316,6 +319,7 @@ export default function HistoryView({ token, points, initialPoint, onError, isAd
   }
 
   return <section className="history-page min-w-0">
+    {initialPoint && !points.some(item => item.id === initialPoint) && <InlineNotice tone="warning">指定的原点位不可用、已删除或不在当前权限范围内；未自动切换到其他点位。</InlineNotice>}
     <EmsCard className="!block !p-0"><IonCardContent className="grid min-w-0 gap-4">
       <div className="flex min-w-0 flex-wrap items-end gap-3">
         <div className="w-full min-w-0 sm:w-56"><EmsSelect label="对比点位" aria-label="添加对比点位" value="" onIonChange={(event) => addPoint(event.detail.value)}>

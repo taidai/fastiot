@@ -125,6 +125,9 @@ export async function request<T>(token: string, path: string, method = "GET", bo
 
 // 服务端错误码 → 面向值班员的业务文案；未知码按状态给出可操作提示。
 const errorTexts: Record<string, string> = {
+  alarm_evidence_unconfirmed: "处理可能已生效，但过程留痕未确认；请重新读取并联系维护人员，不要重复提交",
+  alarm_history_unavailable: "报警过程记录不可用，不能据此判断没有报警",
+  alarm_objects_unavailable: "报警对象配置暂不可读，当前范围和状态无法确认",
   invalid_input_definition: "输入定义不合法，请核对类型、单位、用途、范围与有效期",
   invalid_input_value: "输入值类型不符或超出允许范围，原值未改变",
   input_not_writable: "此输入尚未应用、未开放运行修改或属于配置常量",
@@ -216,8 +219,20 @@ export function businessId(node: Node) {
   return point(node, "businessId")?.text || node.id
 }
 
+export type AlarmInputEvidence = { point_id: string; value: number; kind: string; unit?: string; quality: string; source: string; source_time?: string; received_time?: string; config_stamp?: string }
+
 export type EmsAlarm = {
   id: string
+  key: string
+  revision: number
+  input_state?: "abnormal" | "normal" | "unknown"
+  input_reason?: string
+  input?: AlarmInputEvidence
+  acked_at?: string
+  resolved_at?: string
+  closed_at?: string
+  target?: { kind: "point" | "device" | "node"; node_id?: string; device_id?: string; point_id?: string; channel_id?: string; server_id?: number; point_ids?: string[]; mapping_changed?: boolean }
+  permissions?: { ack: boolean; maintain: boolean }
   severity: "info" | "warning" | "critical"
   title: string
   detail: string
@@ -238,8 +253,10 @@ export type EmsAlarm = {
   maintained_by?: string
 }
 
-export async function fetchAlarms(token: string) {
-  return request<{ alarms: EmsAlarm[] }>(token, "/ems/alarms")
+export type AlarmEvent = { time: string; occurrence_id?: string; revision?: number; transition: string; severity: string; title: string; detail?: string; point_id?: string; state: string; acked_by?: string; ack_note?: string; maintained_by?: string; maintenance_reason?: string; input_state?: string; input_reason?: string; input?: AlarmInputEvidence }
+
+export async function fetchAlarms(token: string, signal?: AbortSignal) {
+  return request<{ alarms: EmsAlarm[] }>(token, "/ems/alarms", "GET", undefined, signal)
 }
 
 export async function ackAlarm(token: string, id: string, note = "") {

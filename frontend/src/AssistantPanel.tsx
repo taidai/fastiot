@@ -40,7 +40,7 @@ function freshRows(points: Node[]) {
 
 export default function AssistantPanel({ points, alarmCount, errors, rules, activeRules, stationName, open, onClose }: {
   points: Node[]
-  alarmCount: number
+  alarmCount: number | null
   errors: number
   rules: number
   activeRules: number
@@ -66,6 +66,7 @@ export default function AssistantPanel({ points, alarmCount, errors, rules, acti
   function answer(question: string): string {
     const q = question.trim().toLowerCase()
     if (!q) return "请先输入一个问题。"
+    if (/报警|告警|异常|故障/.test(q) && alarmCount === null) return "报警数据尚未读取成功，当前状态不可确认。请打开报警页重试；不能据此判断系统正常。"
 
     if (/报警|告警|异常|故障/.test(q) && /规则|调度|决策|自动/.test(q)) {
       return `当前有 ${alarmCount} 条活动报警，${errors} 个对象上报错误或命令失败。`

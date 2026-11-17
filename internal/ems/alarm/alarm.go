@@ -31,37 +31,58 @@ const (
 	Closed       State = "closed"
 )
 
-// Alarm is one deduplicated issue on one object.
-type Alarm struct {
-	ID                string    `json:"id"`
-	Key               string    `json:"key"`
-	Severity          Severity  `json:"severity"`
-	Title             string    `json:"title"`
-	Detail            string    `json:"detail"`
-	DeviceID          string    `json:"device_id,omitempty"`
-	PointID           string    `json:"point_id,omitempty"`
-	RootCause         string    `json:"root_cause,omitempty"`
-	GroupID           string    `json:"group_id,omitempty"`
-	Active            bool      `json:"active"`
-	State             State     `json:"state"`
-	InputState        string    `json:"input_state,omitempty"`
-	InputReason       string    `json:"input_reason,omitempty"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
-	AckedAt           time.Time `json:"acked_at,omitzero"`
-	ResolvedAt        time.Time `json:"resolved_at,omitzero"`
-	ClosedAt          time.Time `json:"closed_at,omitzero"`
-	Revision          uint64    `json:"revision"`
-	Count             int       `json:"count,omitempty"`
-	LastRaisedAt      time.Time `json:"last_raised_at,omitempty"`
-	AckedBy           string    `json:"acked_by,omitempty"`
-	AckNote           string    `json:"ack_note,omitempty"`
-	MaintenanceUntil  time.Time `json:"maintenance_until,omitempty"`
-	MaintenanceReason string    `json:"maintenance_reason,omitempty"`
-	MaintainedBy      string    `json:"maintained_by,omitempty"`
+type InputEvidence struct {
+	PointID      string    `json:"point_id"`
+	Value        float64   `json:"value"`
+	Kind         string    `json:"kind"`
+	Unit         string    `json:"unit,omitempty"`
+	Quality      string    `json:"quality"`
+	Source       string    `json:"source"`
+	SourceTime   time.Time `json:"source_time,omitzero"`
+	ReceivedTime time.Time `json:"received_time,omitzero"`
+	ConfigStamp  string    `json:"config_stamp,omitempty"`
 }
 
-// Engine holds alarms by key. Safe for concurrent use.
+// Alarm is one occurrence of a condition on an object.
+type Alarm struct {
+	ID                string         `json:"id"`
+	Key               string         `json:"key"`
+	Severity          Severity       `json:"severity"`
+	Title             string         `json:"title"`
+	Detail            string         `json:"detail"`
+	DeviceID          string         `json:"device_id,omitempty"`
+	PointID           string         `json:"point_id,omitempty"`
+	RootCause         string         `json:"root_cause,omitempty"`
+	GroupID           string         `json:"group_id,omitempty"`
+	Active            bool           `json:"active"`
+	State             State          `json:"state"`
+	InputState        string         `json:"input_state,omitempty"`
+	InputReason       string         `json:"input_reason,omitempty"`
+	Input             *InputEvidence `json:"input,omitempty"`
+	CreatedAt         time.Time      `json:"created_at"`
+	UpdatedAt         time.Time      `json:"updated_at"`
+	AckedAt           time.Time      `json:"acked_at,omitzero"`
+	ResolvedAt        time.Time      `json:"resolved_at,omitzero"`
+	ClosedAt          time.Time      `json:"closed_at,omitzero"`
+	Revision          uint64         `json:"revision"`
+	Count             int            `json:"count,omitempty"`
+	LastRaisedAt      time.Time      `json:"last_raised_at,omitempty"`
+	AckedBy           string         `json:"acked_by,omitempty"`
+	AckNote           string         `json:"ack_note,omitempty"`
+	MaintenanceUntil  time.Time      `json:"maintenance_until,omitempty"`
+	MaintenanceReason string         `json:"maintenance_reason,omitempty"`
+	MaintainedBy      string         `json:"maintained_by,omitempty"`
+}
+
+func cloneAlarm(value Alarm) Alarm {
+	if value.Input != nil {
+		input := *value.Input
+		value.Input = &input
+	}
+	return value
+}
+
+// Engine holds alarm occurrences. Safe for concurrent use.
 type Maintenance struct {
 	Until  time.Time `json:"until"`
 	Reason string    `json:"reason"`
@@ -90,6 +111,18 @@ func New() *Engine {
 
 // Raise updates a continuous condition or creates a new occurrence after recovery.
 func (e *Engine) Raise(now time.Time, key string, severity Severity, title, detail, deviceID, pointID string) (Alarm, error) {
+	return e.raise(now, key, severity, title, detail, deviceID, pointID, nil)
+}
+
+func (e *Engine) RaiseObserved(now time.Time, key string, severity Severity, title, detail, deviceID, pointID string, input InputEvidence) (Alarm, error) {
+	return e.raise(now, key, severity, title, detail, deviceID, pointID, &input)
+}
+
+func (e *Engine) raise(now time.Time, key string, severity Severity, title, detail, deviceID, pointID string, input *InputEvidence) (Alarm, error) {
+	observedAt := now
+	if input != nil {
+		observedAt = input.SourceTime
+	}
 	if key == "" {
 		return Alarm{}, errors.New("alarm key is empty")
 	}
@@ -105,7 +138,7 @@ func (e *Engine) Raise(now time.Time, key string, severity Severity, title, deta
 	notifyChange := false
 	defer func() {
 		if notifyChange && e.OnChange != nil {
-			e.OnChange(notify, transition)
+			e.OnChange(cloneAlarm(notify), transition)
 		}
 	}()
 	e.mu.Lock()
@@ -113,7 +146,7 @@ func (e *Engine) Raise(now time.Time, key string, severity Severity, title, deta
 	existing, found := e.alarms[e.current[key]]
 	if e.maintained(now, key) {
 		if found {
-			return *existing, nil
+			return cloneAlarm(*existing), nil
 		}
 		return Alarm{Key: key}, nil
 	}
@@ -121,8 +154,8 @@ func (e *Engine) Raise(now time.Time, key string, severity Severity, title, deta
 		created := &Alarm{
 			ID: "alarm-" + rand.Text(), Key: key, Severity: severity, Title: title, Detail: detail,
 			DeviceID: deviceID, PointID: pointID, RootCause: rootCause,
-			Active: true, State: Active, InputState: "abnormal", Count: 1, LastRaisedAt: now,
-			CreatedAt: now, UpdatedAt: now, Revision: 1,
+			Active: true, State: Active, InputState: "abnormal", Count: 1, LastRaisedAt: observedAt,
+			CreatedAt: observedAt, UpdatedAt: now, Revision: 1, Input: input,
 		}
 		e.alarms[created.ID] = created
 		e.current[key] = created.ID
@@ -135,15 +168,16 @@ func (e *Engine) Raise(now time.Time, key string, severity Severity, title, deta
 			}
 		}
 		notify, transition, notifyChange = *created, "raised", true
-		return *created, nil
+		return cloneAlarm(*created), nil
 	}
 	changed := existing.Severity != severity || existing.Title != title || existing.Detail != detail || existing.InputState != "abnormal"
 	existing.InputState, existing.InputReason = "abnormal", ""
-	if changed || now.After(existing.LastRaisedAt) {
+	existing.Input = input
+	if changed || observedAt.After(existing.LastRaisedAt) {
 		existing.Revision++
 	}
-	if now.After(existing.LastRaisedAt) {
-		existing.LastRaisedAt = now
+	if observedAt.After(existing.LastRaisedAt) {
+		existing.LastRaisedAt = observedAt
 		existing.UpdatedAt = now
 		existing.Count++
 	}
@@ -154,7 +188,7 @@ func (e *Engine) Raise(now time.Time, key string, severity Severity, title, deta
 		existing.UpdatedAt = now
 		notify, transition, notifyChange = *existing, "changed", true
 	}
-	return *existing, nil
+	return cloneAlarm(*existing), nil
 }
 
 // maintained reports whether the key is inside a maintenance window.
@@ -201,13 +235,13 @@ func (e *Engine) Shelve(now time.Time, key, reason, user string, until time.Time
 	notifyChange := false
 	defer func() {
 		if notifyChange && e.OnChange != nil {
-			e.OnChange(notify, "maintenance")
+			e.OnChange(cloneAlarm(notify), "maintenance")
 		}
 	}()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	alarm, found := e.alarms[key]
-	if !found || e.current[alarm.Key] != key {
+	if !found || alarm.State == Closed || e.current[alarm.Key] != key {
 		return Alarm{}, errors.New("unknown or superseded alarm occurrence")
 	}
 	e.maintenance[alarm.Key] = Maintenance{Until: until, Reason: strings.TrimSpace(reason), By: user}
@@ -217,7 +251,7 @@ func (e *Engine) Shelve(now time.Time, key, reason, user string, until time.Time
 	alarm.UpdatedAt = now
 	alarm.Revision++
 	notify, notifyChange = *alarm, true
-	return *alarm, nil
+	return cloneAlarm(*alarm), nil
 }
 
 // Release ends a maintenance window.
@@ -226,13 +260,13 @@ func (e *Engine) Release(now time.Time, key string) (Alarm, error) {
 	notifyChange := false
 	defer func() {
 		if notifyChange && e.OnChange != nil {
-			e.OnChange(notify, "released")
+			e.OnChange(cloneAlarm(notify), "released")
 		}
 	}()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	alarm, found := e.alarms[key]
-	if !found || e.current[alarm.Key] != key {
+	if !found || alarm.State == Closed || e.current[alarm.Key] != key {
 		return Alarm{}, errors.New("unknown or superseded alarm occurrence")
 	}
 	delete(e.maintenance, alarm.Key)
@@ -242,7 +276,7 @@ func (e *Engine) Release(now time.Time, key string) (Alarm, error) {
 	alarm.UpdatedAt = now
 	alarm.Revision++
 	notify, notifyChange = *alarm, true
-	return *alarm, nil
+	return cloneAlarm(*alarm), nil
 }
 
 func (e *Engine) Retire(now time.Time, key, reason string) {
@@ -250,7 +284,7 @@ func (e *Engine) Retire(now time.Time, key, reason string) {
 	changed := false
 	defer func() {
 		if changed && e.OnChange != nil {
-			e.OnChange(notify, "retired")
+			e.OnChange(cloneAlarm(notify), "retired")
 		}
 	}()
 	e.mu.Lock()
@@ -261,6 +295,7 @@ func (e *Engine) Retire(now time.Time, key, reason string) {
 	}
 	current.Active, current.State = false, Closed
 	current.InputState, current.InputReason = "unknown", reason
+	current.Input = nil
 	current.ClosedAt, current.UpdatedAt = now, now
 	current.Revision++
 	notify, changed = *current, true
@@ -271,7 +306,7 @@ func (e *Engine) MarkUnknown(now time.Time, key, reason string) {
 	changed := false
 	defer func() {
 		if changed && e.OnChange != nil {
-			e.OnChange(notify, "input_unknown")
+			e.OnChange(cloneAlarm(notify), "input_unknown")
 		}
 	}()
 	e.mu.Lock()
@@ -281,6 +316,7 @@ func (e *Engine) MarkUnknown(now time.Time, key, reason string) {
 		return
 	}
 	current.InputState, current.InputReason = "unknown", reason
+	current.Input = nil
 	current.UpdatedAt = now
 	current.Revision++
 	notify, changed = *current, true
@@ -288,11 +324,19 @@ func (e *Engine) MarkUnknown(now time.Time, key, reason string) {
 
 // Clear marks an alarm as resolved. It stays listed until closed.
 func (e *Engine) Clear(now time.Time, key string) (Alarm, error) {
+	return e.clear(now, key, nil)
+}
+
+func (e *Engine) ClearObserved(now time.Time, key string, input InputEvidence) (Alarm, error) {
+	return e.clear(now, key, &input)
+}
+
+func (e *Engine) clear(now time.Time, key string, input *InputEvidence) (Alarm, error) {
 	var notify Alarm
 	notifyChange := false
 	defer func() {
 		if notifyChange && e.OnChange != nil {
-			e.OnChange(notify, "resolved")
+			e.OnChange(cloneAlarm(notify), "resolved")
 		}
 	}()
 	e.mu.Lock()
@@ -302,16 +346,21 @@ func (e *Engine) Clear(now time.Time, key string) (Alarm, error) {
 		return Alarm{}, fmt.Errorf("unknown alarm %s", key)
 	}
 	if !alarm.Active {
-		return *alarm, nil
+		return cloneAlarm(*alarm), nil
 	}
 	alarm.Active = false
 	alarm.State = Resolved
 	alarm.InputState, alarm.InputReason = "normal", ""
 	alarm.ResolvedAt = now
+	alarm.Input = input
+	if input != nil {
+		alarm.ResolvedAt = input.SourceTime
+		alarm.Detail = fmt.Sprintf("恢复观测 %g %s", input.Value, input.Unit)
+	}
 	alarm.UpdatedAt = now
 	alarm.Revision++
 	notify, notifyChange = *alarm, true
-	return *alarm, nil
+	return cloneAlarm(*alarm), nil
 }
 
 // Acknowledge records who accepted an active alarm. It does not clear it.
@@ -325,7 +374,7 @@ func (e *Engine) AcknowledgeWithNote(now time.Time, key, user, note string) (Ala
 	notifyChange := false
 	defer func() {
 		if notifyChange && e.OnChange != nil {
-			e.OnChange(notify, "acknowledged")
+			e.OnChange(cloneAlarm(notify), "acknowledged")
 		}
 	}()
 	e.mu.Lock()
@@ -347,7 +396,7 @@ func (e *Engine) AcknowledgeWithNote(now time.Time, key, user, note string) (Ala
 	alarm.UpdatedAt = now
 	alarm.Revision++
 	notify, notifyChange = *alarm, true
-	return *alarm, nil
+	return cloneAlarm(*alarm), nil
 }
 
 // Close removes a resolved alarm from the active list. An active alarm must be
@@ -357,7 +406,7 @@ func (e *Engine) Close(now time.Time, key string) (Alarm, error) {
 	notifyChange := false
 	defer func() {
 		if notifyChange && e.OnChange != nil {
-			e.OnChange(notify, "closed")
+			e.OnChange(cloneAlarm(notify), "closed")
 		}
 	}()
 	e.mu.Lock()
@@ -370,14 +419,21 @@ func (e *Engine) Close(now time.Time, key string) (Alarm, error) {
 		return Alarm{}, fmt.Errorf("alarm %s is still active", key)
 	}
 	if alarm.State == Closed {
-		return *alarm, nil
+		return cloneAlarm(*alarm), nil
 	}
 	alarm.State = Closed
 	alarm.ClosedAt = now
 	alarm.UpdatedAt = now
 	alarm.Revision++
 	notify, notifyChange = *alarm, true
-	return *alarm, nil
+	return cloneAlarm(*alarm), nil
+}
+
+func (e *Engine) ConditionActive(key string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	current := e.alarms[e.current[key]]
+	return current != nil && current.Active
 }
 
 // Get returns one alarm.
@@ -388,7 +444,7 @@ func (e *Engine) Get(key string) (Alarm, bool) {
 	if !ok {
 		return Alarm{}, false
 	}
-	return *alarm, true
+	return cloneAlarm(*alarm), true
 }
 
 // List returns alarms with active ones first, then by creation time.
@@ -397,7 +453,7 @@ func (e *Engine) List() []Alarm {
 	defer e.mu.Unlock()
 	alarms := make([]Alarm, 0, len(e.order))
 	for _, key := range e.order {
-		alarms = append(alarms, *e.alarms[key])
+		alarms = append(alarms, cloneAlarm(*e.alarms[key]))
 	}
 	sort.SliceStable(alarms, func(i, j int) bool {
 		if alarms[i].Active != alarms[j].Active {

@@ -50,6 +50,7 @@ type Handler struct {
 	audit            *audit.Store
 	dataDir          string
 	alarmEventsMu    sync.Mutex
+	alarmEventsError error
 
 	sessionMu      sync.Mutex
 	sessions       map[string]sessionState
@@ -82,6 +83,7 @@ func (h *Handler) SetEMS(handler *emsapi.Handler) {
 	if handler != nil && handler.Service != nil {
 		handler.Service.Commands().SetProfiles(h.commandProfile)
 		handler.Service.Alarms.OnChange = h.recordAlarmChange
+		handler.AlarmEvidenceError = h.alarmEvidenceError
 	}
 }
 
@@ -281,6 +283,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		!strings.HasPrefix(path, "ems/screen/") &&
 		!strings.HasPrefix(path, "ems/acceptance/") &&
 		!strings.HasPrefix(path, "ems/allocators/") {
+		if h.ems.BeginAlarmConfiguration != nil && canAction(identity, ActionConfigure) && ((path == "ems/channels" && r.Method == http.MethodPost) || (strings.HasPrefix(path, "ems/channels/") && r.Method == http.MethodDelete)) {
+			finish := h.ems.BeginAlarmConfiguration()
+			defer finish()
+		}
 		actions := map[string]bool{}
 		for _, action := range allActions {
 			actions[action] = canAction(identity, action)
@@ -298,9 +304,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	parts := strings.Split(path, "/")
 	physicalConfiguration := parts[0] == "modbus" && (len(parts) == 1 || r.Method == http.MethodPut || (len(parts) > 2 && parts[2] == "io") || (len(parts) == 4 && parts[2] == "units" && parts[3] == "apply"))
-	if r.Method != http.MethodGet && (physicalConfiguration || parts[0] == "templates" || parts[0] == "rules" || parts[0] == "nodes" || parts[0] == "projects" || strings.HasPrefix(path, "ems/screen/")) {
+	alarmConfiguration := physicalConfiguration || parts[0] == "alarm-types" || parts[0] == "templates" || (parts[0] == "nodes" && (len(parts) < 3 || parts[2] == "move")) || parts[0] == "projects"
+	if r.Method != http.MethodGet && (alarmConfiguration || parts[0] == "nodes" || parts[0] == "rules" || strings.HasPrefix(path, "ems/screen/")) {
 		h.virtualInputMu.Lock()
 		defer h.virtualInputMu.Unlock()
+	}
+	if r.Method != http.MethodGet && alarmConfiguration && h.ems != nil && h.ems.BeginAlarmConfiguration != nil && (canAction(identity, ActionConfigure) || (r.Method == http.MethodDelete && canAction(identity, ActionDelete))) {
+		finish := h.ems.BeginAlarmConfiguration()
+		defer finish()
 	}
 	switch {
 	case path == "ws":
