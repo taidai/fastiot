@@ -16,15 +16,16 @@ import (
 const alarmEventsFile = "alarm-events.jsonl"
 
 type alarmEvent struct {
-	Time       time.Time `json:"time"`
-	Key        string    `json:"key"`
-	Transition string    `json:"transition"`
-	Severity   string    `json:"severity"`
-	Title      string    `json:"title"`
-	Detail     string    `json:"detail,omitempty"`
-	DeviceID   string    `json:"device_id,omitempty"`
-	RootCause  string    `json:"root_cause,omitempty"`
-	State      string    `json:"state"`
+	Time         time.Time `json:"time"`
+	Key          string    `json:"key"`
+	OccurrenceID string    `json:"occurrence_id,omitempty"`
+	Transition   string    `json:"transition"`
+	Severity     string    `json:"severity"`
+	Title        string    `json:"title"`
+	Detail       string    `json:"detail,omitempty"`
+	DeviceID     string    `json:"device_id,omitempty"`
+	RootCause    string    `json:"root_cause,omitempty"`
+	State        string    `json:"state"`
 }
 
 type AlarmDayStats struct {
@@ -53,7 +54,7 @@ func (h *Handler) recordAlarmChange(value alarm.Alarm, transition string) {
 		return
 	}
 	event := alarmEvent{
-		Time: value.UpdatedAt, Key: value.Key, Transition: transition,
+		Time: value.UpdatedAt, Key: value.Key, OccurrenceID: value.ID, Transition: transition,
 		Severity: string(value.Severity), Title: value.Title, Detail: value.Detail,
 		DeviceID: value.DeviceID, RootCause: value.RootCause, State: string(value.State),
 	}
@@ -113,10 +114,14 @@ func (h *Handler) alarmStatsData(identity Identity, days int) AlarmStats {
 		raised := map[string]bool{}
 		state := map[string]string{}
 		for _, event := range byDate[key] {
-			if event.Transition == "raised" {
-				raised[event.Key] = true
+			id := event.OccurrenceID
+			if id == "" {
+				id = "legacy:" + event.Key
 			}
-			state[event.Key] = event.State
+			if event.Transition == "raised" {
+				raised[id] = true
+			}
+			state[id] = event.State
 		}
 		agg.Raised = len(raised)
 		for key := range raised {

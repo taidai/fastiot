@@ -3,6 +3,7 @@
 package alarm
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"sort"
@@ -10,10 +11,6 @@ import (
 	"sync"
 	"time"
 )
-
-// defaultFloodWindow is how long a rapid re-activation of the same key is
-// treated as flapping rather than a new occurrence.
-const defaultFloodWindow = 60 * time.Second
 
 // Severity is the operational weight of an alarm.
 type Severity string
@@ -36,8 +33,8 @@ const (
 
 // Alarm is one deduplicated issue on one object.
 type Alarm struct {
-	ID                string    `json:"id"`  // stable key
-	Key               string    `json:"key"` // dedupe key, same as ID
+	ID                string    `json:"id"`
+	Key               string    `json:"key"`
 	Severity          Severity  `json:"severity"`
 	Title             string    `json:"title"`
 	Detail            string    `json:"detail"`
@@ -49,6 +46,10 @@ type Alarm struct {
 	State             State     `json:"state"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
+	AckedAt           time.Time `json:"acked_at,omitzero"`
+	ResolvedAt        time.Time `json:"resolved_at,omitzero"`
+	ClosedAt          time.Time `json:"closed_at,omitzero"`
+	Revision          uint64    `json:"revision"`
 	Count             int       `json:"count,omitempty"`
 	LastRaisedAt      time.Time `json:"last_raised_at,omitempty"`
 	AckedBy           string    `json:"acked_by,omitempty"`
@@ -67,9 +68,9 @@ type Maintenance struct {
 
 type Engine struct {
 	OnChange    func(Alarm, string)
-	FloodWindow time.Duration
 	mu          sync.Mutex
 	alarms      map[string]*Alarm
+	current     map[string]string
 	maintenance map[string]Maintenance
 	roots       map[string]string
 	order       []string
@@ -79,18 +80,13 @@ type Engine struct {
 func New() *Engine {
 	return &Engine{
 		alarms:      make(map[string]*Alarm),
+		current:     make(map[string]string),
 		maintenance: make(map[string]Maintenance),
 		roots:       make(map[string]string),
-		FloodWindow: defaultFloodWindow,
 	}
 }
 
-// Raise creates or refreshes an alarm. Repeating the same condition does not
-// create duplicates; a resolved alarm that recurs becomes active again. Alarms
-// sharing a root cause (point or device) are grouped under the first one raised
-// for that cause. A rapid re-activation of the same key within the flood window
-// is suppressed: the occurrence count and last-raised time are updated instead
-// of starting a new record.
+// Raise updates a continuous condition or creates a new occurrence after recovery.
 func (e *Engine) Raise(now time.Time, key string, severity Severity, title, detail, deviceID, pointID string) (Alarm, error) {
 	if key == "" {
 		return Alarm{}, errors.New("alarm key is empty")
@@ -102,10 +98,6 @@ func (e *Engine) Raise(now time.Time, key string, severity Severity, title, deta
 	if rootCause == "" {
 		rootCause = deviceID
 	}
-	window := e.FloodWindow
-	if window <= 0 {
-		window = defaultFloodWindow
-	}
 	var notify Alarm
 	var transition string
 	notifyChange := false
@@ -116,56 +108,48 @@ func (e *Engine) Raise(now time.Time, key string, severity Severity, title, deta
 	}()
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	existing, found := e.alarms[key]
+	existing, found := e.alarms[e.current[key]]
 	if e.maintained(now, key) {
 		if found {
 			return *existing, nil
 		}
 		return Alarm{Key: key}, nil
 	}
-	if !found {
+	if !found || !existing.Active {
 		created := &Alarm{
-			ID: key, Key: key, Severity: severity, Title: title, Detail: detail,
+			ID: "alarm-" + rand.Text(), Key: key, Severity: severity, Title: title, Detail: detail,
 			DeviceID: deviceID, PointID: pointID, RootCause: rootCause,
 			Active: true, State: Active, Count: 1, LastRaisedAt: now,
-			CreatedAt: now, UpdatedAt: now,
+			CreatedAt: now, UpdatedAt: now, Revision: 1,
 		}
-		e.alarms[key] = created
-		e.order = append(e.order, key)
+		e.alarms[created.ID] = created
+		e.current[key] = created.ID
+		e.order = append(e.order, created.ID)
 		if rootCause != "" {
-			if primary, grouped := e.roots[rootCause]; grouped && primary != key {
+			if primary, grouped := e.roots[rootCause]; grouped && e.alarms[primary].Active {
 				created.GroupID = primary
 			} else {
-				e.roots[rootCause] = key
+				e.roots[rootCause] = created.ID
 			}
 		}
 		notify, transition, notifyChange = *created, "raised", true
 		return *created, nil
 	}
 	changed := existing.Severity != severity || existing.Title != title || existing.Detail != detail
-	if !existing.Active {
-		if !existing.LastRaisedAt.IsZero() && now.Sub(existing.LastRaisedAt) <= window {
-			existing.Active = true
-			existing.State = Active
-			existing.UpdatedAt = now
-			existing.LastRaisedAt = now
-			existing.Count++
-			return *existing, nil
-		}
-		existing.Active = true
-		existing.State = Active
-		existing.CreatedAt = now
-		existing.AckedBy = ""
-		existing.Count = 1
+	if changed || now.After(existing.LastRaisedAt) {
+		existing.Revision++
+	}
+	if now.After(existing.LastRaisedAt) {
 		existing.LastRaisedAt = now
-		changed = true
-		notify, transition, notifyChange = *existing, "raised", true
+		existing.UpdatedAt = now
+		existing.Count++
 	}
 	if changed {
 		existing.Severity = severity
 		existing.Title = title
 		existing.Detail = detail
 		existing.UpdatedAt = now
+		notify, transition, notifyChange = *existing, "changed", true
 	}
 	return *existing, nil
 }
@@ -219,15 +203,16 @@ func (e *Engine) Shelve(now time.Time, key, reason, user string, until time.Time
 	}()
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.maintenance[key] = Maintenance{Until: until, Reason: strings.TrimSpace(reason), By: user}
 	alarm, found := e.alarms[key]
-	if !found {
-		return Alarm{Key: key, MaintenanceUntil: until, MaintenanceReason: strings.TrimSpace(reason), MaintainedBy: user}, nil
+	if !found || e.current[alarm.Key] != key {
+		return Alarm{}, errors.New("unknown or superseded alarm occurrence")
 	}
+	e.maintenance[alarm.Key] = Maintenance{Until: until, Reason: strings.TrimSpace(reason), By: user}
 	alarm.MaintenanceUntil = until
 	alarm.MaintenanceReason = strings.TrimSpace(reason)
 	alarm.MaintainedBy = user
 	alarm.UpdatedAt = now
+	alarm.Revision++
 	notify, notifyChange = *alarm, true
 	return *alarm, nil
 }
@@ -243,15 +228,16 @@ func (e *Engine) Release(now time.Time, key string) (Alarm, error) {
 	}()
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	delete(e.maintenance, key)
 	alarm, found := e.alarms[key]
-	if !found {
-		return Alarm{Key: key}, nil
+	if !found || e.current[alarm.Key] != key {
+		return Alarm{}, errors.New("unknown or superseded alarm occurrence")
 	}
+	delete(e.maintenance, alarm.Key)
 	alarm.MaintenanceUntil = time.Time{}
 	alarm.MaintenanceReason = ""
 	alarm.MaintainedBy = ""
 	alarm.UpdatedAt = now
+	alarm.Revision++
 	notify, notifyChange = *alarm, true
 	return *alarm, nil
 }
@@ -267,7 +253,7 @@ func (e *Engine) Clear(now time.Time, key string) (Alarm, error) {
 	}()
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	alarm, found := e.alarms[key]
+	alarm, found := e.alarms[e.current[key]]
 	if !found {
 		return Alarm{}, fmt.Errorf("unknown alarm %s", key)
 	}
@@ -276,7 +262,9 @@ func (e *Engine) Clear(now time.Time, key string) (Alarm, error) {
 	}
 	alarm.Active = false
 	alarm.State = Resolved
+	alarm.ResolvedAt = now
 	alarm.UpdatedAt = now
+	alarm.Revision++
 	notify, notifyChange = *alarm, true
 	return *alarm, nil
 }
@@ -308,9 +296,11 @@ func (e *Engine) AcknowledgeWithNote(now time.Time, key, user, note string) (Ala
 		return Alarm{}, fmt.Errorf("alarm %s is not active", key)
 	}
 	alarm.State = Acknowledged
+	alarm.AckedAt = now
 	alarm.AckedBy = user
 	alarm.AckNote = strings.TrimSpace(note)
 	alarm.UpdatedAt = now
+	alarm.Revision++
 	notify, notifyChange = *alarm, true
 	return *alarm, nil
 }
@@ -338,7 +328,9 @@ func (e *Engine) Close(now time.Time, key string) (Alarm, error) {
 		return *alarm, nil
 	}
 	alarm.State = Closed
+	alarm.ClosedAt = now
 	alarm.UpdatedAt = now
+	alarm.Revision++
 	notify, notifyChange = *alarm, true
 	return *alarm, nil
 }

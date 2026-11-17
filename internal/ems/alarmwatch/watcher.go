@@ -169,9 +169,9 @@ func (w *Watcher) evaluateTypes(nodes []data.NodeEdge, byID map[string]NodeView,
 			}
 			detail = fmt.Sprintf("%s · 当前 %g · 条件 %s", name, source.Value, config.Summary())
 		}
-		_, _ = w.Alarms.Raise(now, key, alarm.Severity(config.Severity), config.Name, detail, config.PointID, "")
-		if config.Confirm == "auto" {
-			_, _ = w.Alarms.Acknowledge(now, key, "system")
+		raised, _ := w.Alarms.Raise(now, key, alarm.Severity(config.Severity), config.Name, detail, config.PointID, "")
+		if config.Confirm == "auto" && raised.Active && raised.State == alarm.Active {
+			_, _ = w.Alarms.Acknowledge(now, raised.ID, "system")
 		}
 		delete(w.pending, key)
 	}
@@ -179,19 +179,21 @@ func (w *Watcher) evaluateTypes(nodes []data.NodeEdge, byID map[string]NodeView,
 		if _, ok := configs[key]; ok {
 			continue
 		}
-		_, _ = w.Alarms.Clear(now, key)
-		_, _ = w.Alarms.Close(now, key)
+		if cleared, err := w.Alarms.Clear(now, key); err == nil {
+			_, _ = w.Alarms.Close(now, cleared.ID)
+		}
 		delete(w.known, key)
 	}
 	return nil
 }
 
 func (w *Watcher) clearType(now time.Time, key string, recordRecovery bool) {
-	if _, err := w.Alarms.Clear(now, key); err != nil {
+	cleared, err := w.Alarms.Clear(now, key)
+	if err != nil {
 		return
 	}
 	if !recordRecovery {
-		_, _ = w.Alarms.Close(now, key)
+		_, _ = w.Alarms.Close(now, cleared.ID)
 	}
 }
 

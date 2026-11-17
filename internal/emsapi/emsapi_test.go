@@ -279,7 +279,14 @@ func TestAlarmLifecycleAPI(t *testing.T) {
 		t.Fatalf("active alarms = %d %s", active.Code, active.Body.String())
 	}
 
-	ack := call(t, handler, Access{UserID: "operator", AlarmAck: true}, http.MethodPost, "/api/ems/alarms/device-offline:d1/ack", "")
+	var listed struct {
+		Alarms []alarm.Alarm `json:"alarms"`
+	}
+	if err := json.Unmarshal(active.Body.Bytes(), &listed); err != nil || len(listed.Alarms) != 1 {
+		t.Fatal("missing alarm occurrence")
+	}
+	id := listed.Alarms[0].ID
+	ack := call(t, handler, Access{UserID: "operator", AlarmAck: true}, http.MethodPost, "/api/ems/alarms/"+id+"/ack", "")
 	if ack.Code != http.StatusOK || !strings.Contains(ack.Body.String(), "acknowledged") {
 		t.Fatalf("ack = %d %s", ack.Code, ack.Body.String())
 	}
@@ -287,7 +294,7 @@ func TestAlarmLifecycleAPI(t *testing.T) {
 	if _, err := service.Alarms.Clear(time.Now(), "device-offline:d1"); err != nil {
 		t.Fatal(err)
 	}
-	closed := call(t, handler, Access{UserID: "operator", AlarmAck: true}, http.MethodPost, "/api/ems/alarms/device-offline:d1/close", "")
+	closed := call(t, handler, Access{UserID: "operator", AlarmAck: true}, http.MethodPost, "/api/ems/alarms/"+id+"/close", "")
 	if closed.Code != http.StatusOK || !strings.Contains(closed.Body.String(), "closed") {
 		t.Fatalf("close = %d %s", closed.Code, closed.Body.String())
 	}

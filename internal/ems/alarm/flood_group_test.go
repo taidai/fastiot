@@ -35,7 +35,7 @@ func TestGroupingByRootCause(t *testing.T) {
 		t.Fatalf("first alarm for a root cause must be a primary, group_id = %q", first.GroupID)
 	}
 	second := raiseWithPoint(t, engine, t0.Add(time.Second), "b", "d1", "p1")
-	if second.GroupID != "a" {
+	if second.GroupID != first.ID {
 		t.Fatalf("second alarm with same root cause must group under first, group_id = %q", second.GroupID)
 	}
 	unrelated := raiseWithPoint(t, engine, t0.Add(2*time.Second), "c", "d1", "p2")
@@ -47,7 +47,7 @@ func TestGroupingByRootCause(t *testing.T) {
 	}
 }
 
-func TestFloodSuppressionUpdatesCountNotRecord(t *testing.T) {
+func TestRapidFlapPreservesBothOccurrencesAndEvents(t *testing.T) {
 	engine := New()
 	raised := 0
 	engine.OnChange = func(_ Alarm, transition string) {
@@ -64,17 +64,17 @@ func TestFloodSuppressionUpdatesCountNotRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	flapped := raiseWithPoint(t, engine, t0.Add(2*time.Second), "k", "d1", "p1")
-	if !flapped.Active || flapped.Count != 2 {
+	if !flapped.Active || flapped.Count != 1 || flapped.ID == first.ID {
 		t.Fatalf("flapped alarm = %+v", flapped)
 	}
-	if !flapped.CreatedAt.Equal(t0) {
-		t.Fatalf("flood-suppressed alarm must keep original creation time, got %v", flapped.CreatedAt)
+	if !flapped.CreatedAt.Equal(t0.Add(2 * time.Second)) {
+		t.Fatalf("new occurrence has wrong creation time: %v", flapped.CreatedAt)
 	}
-	if raised != 1 {
-		t.Fatalf("suppressed flap must not fire a raised transition, raised events = %d", raised)
+	if raised != 2 {
+		t.Fatalf("each occurrence must fire a raised transition, raised events = %d", raised)
 	}
-	if engine.Active() != 1 || len(engine.List()) != 1 {
-		t.Fatalf("flood suppression must not create new records: active=%d list=%d", engine.Active(), len(engine.List()))
+	if engine.Active() != 1 || len(engine.List()) != 2 {
+		t.Fatalf("flood protection lost occurrence history: active=%d list=%d", engine.Active(), len(engine.List()))
 	}
 }
 
@@ -100,7 +100,7 @@ func TestGenuineRecurrenceAfterFloodWindow(t *testing.T) {
 	}
 }
 
-func TestCountAccumulatesAcrossRepeatedFlaps(t *testing.T) {
+func TestRepeatedFlapsKeepSeparateOccurrences(t *testing.T) {
 	engine := New()
 	raiseWithPoint(t, engine, t0, "k", "d1", "p1")
 	for i := 1; i <= 3; i++ {
@@ -109,8 +109,8 @@ func TestCountAccumulatesAcrossRepeatedFlaps(t *testing.T) {
 		}
 		at := t0.Add(time.Duration(i)*time.Second + 500*time.Millisecond)
 		alarm := raiseWithPoint(t, engine, at, "k", "d1", "p1")
-		if alarm.Count != i+1 {
-			t.Fatalf("count = %d, want %d", alarm.Count, i+1)
+		if alarm.Count != 1 || len(engine.List()) != i+1 {
+			t.Fatalf("recurrence lost: count=%d records=%d", alarm.Count, len(engine.List()))
 		}
 	}
 }

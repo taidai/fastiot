@@ -176,14 +176,19 @@ func TestEngineRaisesAndClearsOfflineAlarm(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		engine.Cycle(context.Background(), func() time.Time { return t0.Add(time.Duration(i) * time.Second) })
 	}
-	raised, ok := engine.Alarms.Get("device-offline:pcs1")
-	if !ok || !raised.Active || raised.Severity != alarm.Critical {
-		t.Fatalf("expected active critical alarm, got %+v ok=%v", raised, ok)
+	var raised alarm.Alarm
+	for _, value := range engine.Alarms.List() {
+		if value.Key == "device-offline:pcs1" {
+			raised = value
+		}
+	}
+	if raised.ID == "" || !raised.Active || raised.Severity != alarm.Critical {
+		t.Fatalf("expected active critical alarm, got %+v", raised)
 	}
 
 	bus.fail[1] = false
 	engine.Cycle(context.Background(), func() time.Time { return t0.Add(4 * time.Second) })
-	cleared, _ := engine.Alarms.Get("device-offline:pcs1")
+	cleared, _ := engine.Alarms.Get(raised.ID)
 	if cleared.Active || cleared.State != alarm.Resolved {
 		t.Fatalf("alarm should resolve after recovery, got %+v", cleared)
 	}

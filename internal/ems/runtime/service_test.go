@@ -106,7 +106,11 @@ func TestServiceRaisesOfflineAlarm(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		alarm, ok := service.Alarms.Get("device-offline:d1")
-		return ok && alarm.Active
+		for _, value := range service.Alarms.List() {
+			if value.Key == "device-offline:d1" && value.Active {
+				return true
+			}
+		}
+		return false
 	})
 }
