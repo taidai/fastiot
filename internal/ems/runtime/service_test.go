@@ -6,6 +6,7 @@ import (
 
 	"fastiot/internal/ems/channel"
 	"fastiot/internal/ems/signal"
+	"fastiot/internal/ems/state"
 )
 
 func waitFor(t *testing.T, condition func() bool) {
@@ -95,6 +96,32 @@ func TestRemoveChannelStopsPolling(t *testing.T) {
 	}
 	if len(service.Channels()) != 0 {
 		t.Fatal("channel list should be empty")
+	}
+}
+
+func TestObservationCallbackPreservesRapidChangesAndFailures(t *testing.T) {
+	service := NewService(nil, time.Minute, time.Second, 100)
+	defer service.Close()
+	var captured []state.Capture
+	service.OnObservations = func(snapshot state.Capture) { captured = append(captured, snapshot) }
+	published := 0
+	service.OnResults = func(_ string, values []channel.Result) { published += len(values) }
+	at := time.Now()
+	for i, value := range []float64{45, 20, 46} {
+		now := at.Add(time.Duration(i) * time.Millisecond)
+		service.Observe(now, []channel.Result{{DeviceID: "d1", PointID: "p1", Value: signal.Value{Kind: signal.Number, Num: value}, Quality: signal.Good, SourceTime: now}})
+	}
+	service.Observe(at.Add(3*time.Millisecond), []channel.Result{{DeviceID: "d1", PointID: "p1", Quality: signal.Invalid, Error: "read_failed"}})
+	if len(captured) != 4 || published != 3 {
+		t.Fatalf("observation sequence lost: captures=%d published=%d", len(captured), published)
+	}
+	for i, want := range []float64{45, 20, 46} {
+		if len(captured[i].Values) != 1 || captured[i].Values[0].Value.Num != want {
+			t.Fatalf("capture %d lost its original value", i)
+		}
+	}
+	if captured[3].Values[0].Quality != signal.Invalid {
+		t.Fatal("failed observation did not notify alarm evaluation")
 	}
 }
 

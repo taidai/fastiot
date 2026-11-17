@@ -34,7 +34,11 @@ func (h *Handler) deliveryEvidence(w http.ResponseWriter, r *http.Request, ident
 		writeError(w, http.StatusServiceUnavailable, "nodes_unavailable")
 		return
 	}
-	stats := h.alarmStatsData(identity, 30)
+	stats, err := h.alarmStatsData(identity, 30)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "alarm_history_unavailable")
+		return
+	}
 	channelStats, deviceStats := h.ems.QualityReport()
 	names := map[string]string{}
 	if nodes, err := h.visibleNodes(identity); err == nil {

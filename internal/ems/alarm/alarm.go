@@ -44,6 +44,8 @@ type Alarm struct {
 	GroupID           string    `json:"group_id,omitempty"`
 	Active            bool      `json:"active"`
 	State             State     `json:"state"`
+	InputState        string    `json:"input_state,omitempty"`
+	InputReason       string    `json:"input_reason,omitempty"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
 	AckedAt           time.Time `json:"acked_at,omitzero"`
@@ -119,7 +121,7 @@ func (e *Engine) Raise(now time.Time, key string, severity Severity, title, deta
 		created := &Alarm{
 			ID: "alarm-" + rand.Text(), Key: key, Severity: severity, Title: title, Detail: detail,
 			DeviceID: deviceID, PointID: pointID, RootCause: rootCause,
-			Active: true, State: Active, Count: 1, LastRaisedAt: now,
+			Active: true, State: Active, InputState: "abnormal", Count: 1, LastRaisedAt: now,
 			CreatedAt: now, UpdatedAt: now, Revision: 1,
 		}
 		e.alarms[created.ID] = created
@@ -135,7 +137,8 @@ func (e *Engine) Raise(now time.Time, key string, severity Severity, title, deta
 		notify, transition, notifyChange = *created, "raised", true
 		return *created, nil
 	}
-	changed := existing.Severity != severity || existing.Title != title || existing.Detail != detail
+	changed := existing.Severity != severity || existing.Title != title || existing.Detail != detail || existing.InputState != "abnormal"
+	existing.InputState, existing.InputReason = "abnormal", ""
 	if changed || now.After(existing.LastRaisedAt) {
 		existing.Revision++
 	}
@@ -242,6 +245,47 @@ func (e *Engine) Release(now time.Time, key string) (Alarm, error) {
 	return *alarm, nil
 }
 
+func (e *Engine) Retire(now time.Time, key, reason string) {
+	var notify Alarm
+	changed := false
+	defer func() {
+		if changed && e.OnChange != nil {
+			e.OnChange(notify, "retired")
+		}
+	}()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	current := e.alarms[e.current[key]]
+	if current == nil || current.State == Closed {
+		return
+	}
+	current.Active, current.State = false, Closed
+	current.InputState, current.InputReason = "unknown", reason
+	current.ClosedAt, current.UpdatedAt = now, now
+	current.Revision++
+	notify, changed = *current, true
+}
+
+func (e *Engine) MarkUnknown(now time.Time, key, reason string) {
+	var notify Alarm
+	changed := false
+	defer func() {
+		if changed && e.OnChange != nil {
+			e.OnChange(notify, "input_unknown")
+		}
+	}()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	current := e.alarms[e.current[key]]
+	if current == nil || !current.Active || (current.InputState == "unknown" && current.InputReason == reason) {
+		return
+	}
+	current.InputState, current.InputReason = "unknown", reason
+	current.UpdatedAt = now
+	current.Revision++
+	notify, changed = *current, true
+}
+
 // Clear marks an alarm as resolved. It stays listed until closed.
 func (e *Engine) Clear(now time.Time, key string) (Alarm, error) {
 	var notify Alarm
@@ -262,6 +306,7 @@ func (e *Engine) Clear(now time.Time, key string) (Alarm, error) {
 	}
 	alarm.Active = false
 	alarm.State = Resolved
+	alarm.InputState, alarm.InputReason = "normal", ""
 	alarm.ResolvedAt = now
 	alarm.UpdatedAt = now
 	alarm.Revision++

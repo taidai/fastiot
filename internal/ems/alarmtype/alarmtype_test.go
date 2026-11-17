@@ -5,6 +5,22 @@ import (
 	"time"
 )
 
+func TestUnknownInputCannotProveRecovery(t *testing.T) {
+	now := time.Now()
+	config := Config{Trigger: "gt", Value: 40}
+	for _, sample := range []Sample{{}, {Present: true, Value: 20, ValueTime: now.Add(-20 * time.Second)}, {Present: true, Value: 20, ValueTime: now.Add(time.Second)}, {Present: true, Offline: true, Value: 20, ValueTime: now}} {
+		if got := config.Evaluate(now, sample); got != Unknown {
+			t.Fatalf("untrusted input became a normal condition: %v", got)
+		}
+	}
+	if config.Evaluate(now, Sample{Present: true, Value: 20, ValueTime: now}) != Normal {
+		t.Fatal("valid normal observation cannot recover")
+	}
+	if config.Evaluate(now, Sample{Present: true, Value: 45, ValueTime: now}) != Abnormal {
+		t.Fatal("valid abnormal observation missed")
+	}
+}
+
 func TestActiveThresholdsAndStaleness(t *testing.T) {
 	now := time.Now()
 	base := Config{Code: "T_HIGH", Name: "温度高", Severity: "warning", Trigger: "gt", PointID: "t", Value: 40, Confirm: "manual"}

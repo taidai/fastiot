@@ -26,7 +26,9 @@ type Service struct {
 	MaxAge  time.Duration
 	// OnResults is called after each channel cycle with the values read. The
 	// bridge uses it to publish values back to product nodes.
-	OnResults func(deviceID string, results []channel.Result)
+	OnResults      func(deviceID string, results []channel.Result)
+	OnObservations func(state.Capture)
+	observationMu  sync.Mutex
 
 	mu       sync.Mutex
 	channels map[string]*channel.Channel
@@ -115,8 +117,13 @@ func (s *Service) Observe(now time.Time, results []channel.Result) {
 	if len(results) == 0 {
 		return
 	}
+	s.observationMu.Lock()
 	accepted := s.State.Apply(now, results)
 	s.History.Record(toHistory(now, accepted))
+	if s.OnObservations != nil {
+		s.OnObservations(s.State.Capture(func() time.Time { return now }, s.MaxAge))
+	}
+	s.observationMu.Unlock()
 	if s.OnResults != nil && len(accepted) > 0 {
 		s.OnResults("", accepted)
 	}
@@ -220,9 +227,11 @@ func (s *Service) runChannel(ctx context.Context, ch *channel.Channel, period ti
 		Channel: ch,
 		Period:  period,
 		OnCycle: func(now time.Time, results []channel.Result, _ []channel.WriteResult) {
+			s.observationMu.Lock()
 			s.mu.Lock()
 			if s.channels[ch.ID] != ch || ctx.Err() != nil {
 				s.mu.Unlock()
+				s.observationMu.Unlock()
 				return
 			}
 			received := time.Now()
@@ -232,6 +241,10 @@ func (s *Service) runChannel(ctx context.Context, ch *channel.Channel, period ti
 				s.State.SetHealth(entry.ID, ch.Health(entry.ID, now, s.MaxAge), now)
 			}
 			s.mu.Unlock()
+			if s.OnObservations != nil {
+				s.OnObservations(s.State.Capture(func() time.Time { return received }, s.MaxAge))
+			}
+			s.observationMu.Unlock()
 			s.updateDeviceAlarms(now, ch)
 			if s.OnResults != nil && len(accepted) > 0 {
 				s.OnResults(ch.ID, accepted)

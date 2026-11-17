@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"fastiot/internal/contract"
+	"fastiot/internal/ems/alarm"
 	"fastiot/internal/ems/bridge"
 	"fastiot/internal/ems/channel"
 	"fastiot/internal/ems/framelog"
@@ -130,7 +131,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, access Acces
 	case len(parts) == 3 && parts[0] == "channels" && parts[2] == "restart" && r.Method == http.MethodPost:
 		h.restartChannel(w, access, parts[1])
 	case path == "alarms" && r.Method == http.MethodGet:
-		h.alarms(w, r)
+		h.alarms(w, r, access)
 	case len(parts) == 3 && parts[0] == "alarms" && parts[2] == "ack" && r.Method == http.MethodPost:
 		h.ackAlarm(w, r, access, parts[1])
 	case len(parts) == 3 && parts[0] == "alarms" && parts[2] == "close" && r.Method == http.MethodPost:
@@ -775,25 +776,77 @@ func (h *Handler) busy(protocol, address string) bool {
 	return false
 }
 
-func (h *Handler) alarms(w http.ResponseWriter, r *http.Request) {
-	state := r.URL.Query().Get("state")
-	alarms := h.Service.Alarms.List()
-	if state == "active" {
-		active := make([]any, 0, len(alarms))
-		for _, alarm := range alarms {
-			if alarm.Active {
-				active = append(active, alarm)
-			}
-		}
-		writeJSON(w, map[string]any{"alarms": active})
-		return
+func (h *Handler) AlarmVisible(access Access, value alarm.Alarm) bool {
+	if access.AllowNode == nil {
+		return true
 	}
-	writeJSON(w, map[string]any{"alarms": alarms})
+	if value.PointID != "" {
+		return access.allows(value.PointID)
+	}
+	if value.DeviceID != "" && access.allows(value.DeviceID) {
+		return true
+	}
+	if h.Buses == nil {
+		return false
+	}
+	configs, err := h.Buses()
+	if err != nil {
+		return false
+	}
+	for _, config := range configs {
+		for _, device := range config.Devices {
+			if device.ID != value.DeviceID {
+				continue
+			}
+			if len(device.Points) == 0 {
+				return false
+			}
+			for _, point := range device.Points {
+				if !access.allows(point.ID) {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	return false
+}
+
+func (h *Handler) alarmTarget(w http.ResponseWriter, access Access, id string) bool {
+	value, found := h.Service.Alarms.Get(id)
+	if !found || !h.AlarmVisible(access, value) {
+		writeError(w, http.StatusNotFound, "alarm_not_found")
+		return false
+	}
+	return true
+}
+
+func (h *Handler) alarms(w http.ResponseWriter, r *http.Request, access Access) {
+	state := r.URL.Query().Get("state")
+	visible := []alarm.Alarm{}
+	for _, value := range h.Service.Alarms.List() {
+		if h.AlarmVisible(access, value) && (state != "active" || value.Active) {
+			visible = append(visible, value)
+		}
+	}
+	ids := map[string]bool{}
+	for _, value := range visible {
+		ids[value.ID] = true
+	}
+	for i := range visible {
+		if !ids[visible[i].GroupID] {
+			visible[i].GroupID = ""
+		}
+	}
+	writeJSON(w, map[string]any{"alarms": visible})
 }
 
 func (h *Handler) ackAlarm(w http.ResponseWriter, r *http.Request, access Access, id string) {
 	if !access.can(access.AlarmAck) {
 		writeError(w, http.StatusForbidden, "operator_required")
+		return
+	}
+	if !h.alarmTarget(w, access, id) {
 		return
 	}
 	var input struct {
@@ -815,6 +868,9 @@ func (h *Handler) ackAlarm(w http.ResponseWriter, r *http.Request, access Access
 func (h *Handler) closeAlarm(w http.ResponseWriter, access Access, id string) {
 	if !access.can(access.AlarmAck) {
 		writeError(w, http.StatusForbidden, "operator_required")
+		return
+	}
+	if !h.alarmTarget(w, access, id) {
 		return
 	}
 	alarm, err := h.Service.Alarms.Close(time.Now(), id)
@@ -1027,6 +1083,9 @@ func (h *Handler) maintainAlarm(w http.ResponseWriter, r *http.Request, access A
 		writeError(w, http.StatusForbidden, "operator_required")
 		return
 	}
+	if !h.alarmTarget(w, access, id) {
+		return
+	}
 	var input struct {
 		Until  string `json:"until"`
 		Reason string `json:"reason"`
@@ -1051,6 +1110,9 @@ func (h *Handler) maintainAlarm(w http.ResponseWriter, r *http.Request, access A
 func (h *Handler) releaseAlarm(w http.ResponseWriter, access Access, id string) {
 	if !access.can(access.AlarmMaintain) {
 		writeError(w, http.StatusForbidden, "operator_required")
+		return
+	}
+	if !h.alarmTarget(w, access, id) {
 		return
 	}
 	alarm, err := h.Service.Alarms.Release(time.Now(), id)

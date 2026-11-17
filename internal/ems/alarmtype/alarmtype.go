@@ -4,6 +4,7 @@ package alarmtype
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"time"
 )
@@ -64,6 +65,33 @@ func (c Config) Validate() error {
 		return fmt.Errorf("unsupported confirm mode %q", c.Confirm)
 	}
 	return nil
+}
+
+type Condition string
+
+const (
+	Unknown  Condition = "unknown"
+	Normal   Condition = "normal"
+	Abnormal Condition = "abnormal"
+)
+
+func (c Config) Evaluate(now time.Time, sample Sample) Condition {
+	if c.Trigger == "offline" {
+		if sample.Offline {
+			return Abnormal
+		}
+		if sample.Present {
+			return Normal
+		}
+		return Unknown
+	}
+	if !sample.Present || sample.Offline || sample.ValueTime.IsZero() || sample.ValueTime.After(now) || now.Sub(sample.ValueTime) >= 15*time.Second || math.IsNaN(sample.Value) || math.IsInf(sample.Value, 0) {
+		return Unknown
+	}
+	if c.Active(now, sample) {
+		return Abnormal
+	}
+	return Normal
 }
 
 // Active reports whether the trigger condition currently holds. A missing or

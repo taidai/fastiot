@@ -319,6 +319,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.historySettings(w, r, identity)
 	case path == "profile-verifications" && r.Method == http.MethodGet:
 		h.profileVerifications(w, r, identity)
+	case path == "alarm-events" && r.Method == http.MethodGet:
+		h.alarmOccurrenceEvents(w, r, identity)
 	case path == "alarm-stats" && r.Method == http.MethodGet:
 		h.alarmStats(w, r, identity)
 	case path == "device-ledger" && r.Method == http.MethodGet:
