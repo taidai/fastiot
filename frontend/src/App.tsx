@@ -261,6 +261,7 @@ export default function App() {
   const policy = snapshot?.user.policy
   const isAdminUser = !!policy?.admin
   const canConfigureUser = isAdminUser || policy?.role === "implementer"
+  const canExportUser = isAdminUser || (policy?.actions?.length ? policy.actions.includes("export") : policy?.role === "implementer")
   const visiblePages = useMemo(
     () => visiblePagesFor(workbench, isAdminUser, canConfigureUser),
     [workbench, isAdminUser, canConfigureUser],
@@ -679,7 +680,7 @@ export default function App() {
 
       {page === "health" && <HealthView token={token} onError={setError} />}
 
-      {page === "history" && <HistoryView key={`${token}/${historyPoint || "history"}`} token={token} points={points} initialPoint={historyPoint || undefined} onError={setError} isAdmin={canConfigure} onOpenPoints={() => openPage(canConfigure ? "points" : "health")} />}
+      {page === "history" && <HistoryView key={`${token}/${historyPoint || "history"}`} token={token} points={points} initialPoint={historyPoint || undefined} onError={setError} isAdmin={canConfigure} canExport={canExportUser} onOpenPoints={() => openPage(canConfigure ? "points" : "health")} />}
 
       {page === "rules" && canConfigure && <section className="rules-page">
         <div className="page-toolbar">

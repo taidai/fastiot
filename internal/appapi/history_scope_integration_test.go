@@ -205,10 +205,33 @@ func TestMultiPointHistoryQueryAndExportShareScope(t *testing.T) {
 	if last[0] != bPoint || last[2] != at.Add(599*time.Second).Format(time.RFC3339Nano) || last[3] != at.Add(599*time.Second+5*time.Millisecond).Format(time.RFC3339Nano) || last[5] != "good" || last[6] != "599" {
 		t.Fatalf("CSV evidence mismatch: %v", last)
 	}
-	limited := inputAccount(t, &pointConfigFixture{base: base, token: token}, a, "viewer", nil)
+	limited := inputAccount(t, &pointConfigFixture{base: base, token: token}, a, "viewer", []string{ActionExport})
 	status, body = call(t, http.MethodGet, base+"/history/export?"+query.Encode(), limited, nil, nil)
 	if status == 200 || strings.Contains(body, bPoint) {
 		t.Fatalf("unauthorized point appeared in exported data: %d %s", status, body)
+	}
+}
+
+func TestHistoryExportRequiresExportAction(t *testing.T) {
+	base, token, service, point, device := historyRuntimePoint(t, 10)
+	at := time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC)
+	service.History.Record([]emshistory.Sample{{DeviceID: device, PointID: point, Value: signal.Num(7), Quality: signal.Good, SourceTime: at, ReceivedTime: at.Add(5 * time.Millisecond), Unit: "C", TimeSource: "platform_acquisition"}})
+	f := &pointConfigFixture{base: base, token: token}
+	root := snapshotRoot(t, base, token)
+	query := url.Values{"node_id": []string{point}, "start": []string{at.Format(time.RFC3339)}, "end": []string{at.Format(time.RFC3339)}}
+
+	for _, role := range []string{"viewer", "operator"} {
+		account := inputAccount(t, f, root, role, nil)
+		status, body := call(t, http.MethodGet, base+"/history/export?"+query.Encode(), account, nil, nil)
+		if status != http.StatusForbidden {
+			t.Fatalf("%s exported history without the export action: %d %s", role, status, body)
+		}
+	}
+
+	exporter := inputAccount(t, f, root, "viewer", []string{ActionExport})
+	status, body := call(t, http.MethodGet, base+"/history/export?"+query.Encode(), exporter, nil, nil)
+	if status != http.StatusOK || !strings.Contains(body, point) {
+		t.Fatalf("explicit export grant did not export: %d %s", status, body)
 	}
 }
 

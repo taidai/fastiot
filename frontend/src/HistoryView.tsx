@@ -159,12 +159,13 @@ function Trend({ series, alarms, start, end, onOpenPoints }: { series: TrendSeri
   </div>
 }
 
-export default function HistoryView({ token, points, initialPoint, onError, isAdmin = false, onOpenPoints }: {
+export default function HistoryView({ token, points, initialPoint, onError, isAdmin = false, canExport = true, onOpenPoints }: {
   token: string
   points: Node[]
   initialPoint?: string
   onError: (message: string) => void
   isAdmin?: boolean
+  canExport?: boolean
   onOpenPoints?: () => void
 }) {
   const [requestedSelection, setSelected] = useState<string[]>(() => {
@@ -419,7 +420,7 @@ export default function HistoryView({ token, points, initialPoint, onError, isAd
           })}
         </div>
         <EmsButton variant="secondary" size="small" disabled={selected.length === 0 || loading} onClick={() => setQueryKey(key => key + 1)}>读取历史</EmsButton>
-        <EmsButton variant="secondary" size="small" disabled={!queryResult || selected.length === 0 || exportState.busy} onClick={() => void exportSelected()}>{exportState.busy ? "导出中…" : "导出所选 CSV"}</EmsButton>
+        {canExport && <EmsButton variant="secondary" size="small" disabled={!queryResult || selected.length === 0 || exportState.busy} onClick={() => void exportSelected()}>{exportState.busy ? "导出中…" : "导出所选 CSV"}</EmsButton>}
       </div>
 
       <div className="flex min-w-0 flex-wrap items-end gap-3">
