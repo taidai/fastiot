@@ -104,12 +104,9 @@ func (h *Handler) reuseProjectHandler(w http.ResponseWriter, identity Identity, 
 	writeJSON(w, result)
 }
 
-func (h *Handler) loadReuseSource(identity Identity, source string) ([]data.NodeEdge, error) {
+func (h *Handler) loadReuseSource(source string) ([]data.NodeEdge, error) {
 	if source == "" {
 		return nil, fmt.Errorf("source_required")
-	}
-	if !h.allows(identity, source) {
-		return nil, fmt.Errorf("source_forbidden")
 	}
 	nodes, err := h.loadSubtree(source)
 	if err != nil || len(nodes) == 0 {
@@ -145,7 +142,7 @@ func (h *Handler) loadSubtree(rootID string) ([]data.NodeEdge, error) {
 }
 
 func (h *Handler) buildReusePreview(identity Identity, source string) (reusePreview, error) {
-	nodes, err := h.loadReuseSource(identity, source)
+	nodes, err := h.loadReuseSource(source)
 	if err != nil {
 		return reusePreview{}, err
 	}
@@ -178,7 +175,7 @@ func (h *Handler) createProjectFromSource(identity Identity, req reuseRequest) (
 	if strings.TrimSpace(req.Name) == "" {
 		return reuseResult{}, fmt.Errorf("name_required")
 	}
-	nodes, err := h.loadReuseSource(identity, req.Source)
+	nodes, err := h.loadReuseSource(req.Source)
 	if err != nil {
 		return reuseResult{}, err
 	}

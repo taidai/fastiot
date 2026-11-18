@@ -222,8 +222,22 @@ func (h *Handler) authorizeRoute(w http.ResponseWriter, r *http.Request, identit
 	})
 	if !allowed {
 		writeError(w, http.StatusForbidden, route.Reason)
+		return false
 	}
-	return allowed
+	if route.UnknownTarget != nil && !identity.Policy.Admin {
+		writeError(w, route.UnknownTarget.Status, route.UnknownTarget.Reason)
+		return false
+	}
+	for _, target := range route.Targets {
+		if target.Alarm {
+			continue
+		}
+		if !h.allows(identity, target.ID) {
+			writeError(w, target.Status, target.Reason)
+			return false
+		}
+	}
+	return true
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -697,7 +711,7 @@ func (h *Handler) createNode(w http.ResponseWriter, r *http.Request, identity Id
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	if input.Description == "" || !h.allows(identity, input.Parent) {
+	if input.Description == "" || input.Parent == "" {
 		writeError(w, http.StatusBadRequest, "invalid_node")
 		return
 	}
@@ -739,7 +753,7 @@ func (h *Handler) writeValue(w http.ResponseWriter, r *http.Request, identity Id
 		writeError(w, http.StatusBadRequest, "invalid_value")
 		return
 	}
-	node, ok := h.node(w, identity, id)
+	node, ok := h.routeNode(w, id)
 	if !ok {
 		return
 	}
@@ -813,7 +827,7 @@ func (h *Handler) writeValue(w http.ResponseWriter, r *http.Request, identity Id
 }
 
 func (h *Handler) setManual(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
-	node, ok := h.node(w, identity, id)
+	node, ok := h.routeNode(w, id)
 	if !ok {
 		return
 	}
@@ -848,7 +862,7 @@ func (h *Handler) createRule(w http.ResponseWriter, r *http.Request, identity Id
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	if input.Description == "" || !h.allows(identity, input.Parent) || input.Document.Validate() != nil {
+	if input.Description == "" || input.Parent == "" || input.Document.Validate() != nil {
 		writeError(w, http.StatusBadRequest, "invalid_rule")
 		return
 	}
@@ -941,10 +955,6 @@ func (h *Handler) setTariff(w http.ResponseWriter, r *http.Request, identity Ide
 		writeError(w, http.StatusBadRequest, "invalid_tariff")
 		return
 	}
-	if !h.allows(identity, input.Root) {
-		writeError(w, http.StatusForbidden, "no_access")
-		return
-	}
 	point := data.NewPointFloat("easyemsTariff", "", input.Price)
 	point.Origin = identity.UserID
 	if err := client.SendNodePoint(h.nc, input.Root, point, true); err != nil {
@@ -1002,7 +1012,7 @@ func (h *Handler) createUser(w http.ResponseWriter, r *http.Request, identity Id
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	if !h.allows(identity, input.Parent) || input.Email == "" || len(input.Password) < 12 ||
+	if input.Parent == "" || input.Email == "" || len(input.Password) < 12 ||
 		(input.Role != "admin" && input.Role != "implementer" && input.Role != "operator" && input.Role != "viewer") ||
 		!validActions(input.Actions) {
 		writeError(w, http.StatusBadRequest, "invalid_user")
@@ -1156,6 +1166,12 @@ func (h *Handler) node(w http.ResponseWriter, identity Identity, id string) (dat
 		writeError(w, http.StatusForbidden, "forbidden")
 		return data.NodeEdge{}, false
 	}
+	return h.routeNode(w, id)
+}
+
+// routeNode fetches a target after the route guard has checked its scope.
+// Derived references must still use node so their own scope is checked.
+func (h *Handler) routeNode(w http.ResponseWriter, id string) (data.NodeEdge, bool) {
 	nodes, err := client.GetNodes(h.nc, "all", id, "", false)
 	if err != nil || len(nodes) == 0 {
 		writeError(w, http.StatusNotFound, "not_found")
@@ -1165,7 +1181,7 @@ func (h *Handler) node(w http.ResponseWriter, identity Identity, id string) (dat
 }
 
 func (h *Handler) rule(w http.ResponseWriter, identity Identity, id string) (data.NodeEdge, bool) {
-	node, ok := h.node(w, identity, id)
+	node, ok := h.routeNode(w, id)
 	if !ok {
 		return node, false
 	}

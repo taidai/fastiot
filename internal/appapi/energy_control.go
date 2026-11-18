@@ -78,7 +78,7 @@ func (h *Handler) resolveEnergyDevice(node data.NodeEdge) (deviceNode data.NodeE
 
 // energyControl 处理 /energy-units/{id}/events 与 /energy-units/{id}/mode。
 func (h *Handler) energyControl(w http.ResponseWriter, r *http.Request, identity Identity, energyUnitID, action string) {
-	node, ok := h.node(w, identity, energyUnitID)
+	node, ok := h.routeNode(w, energyUnitID)
 	if !ok {
 		return
 	}

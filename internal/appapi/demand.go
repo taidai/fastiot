@@ -56,10 +56,6 @@ func (h *Handler) demandHandler(w http.ResponseWriter, identity Identity, siteID
 		writeError(w, http.StatusBadRequest, "site_required")
 		return
 	}
-	if !h.allows(identity, siteID) {
-		writeError(w, http.StatusForbidden, "forbidden")
-		return
-	}
 	plants, err := client.GetNodes(h.nc, siteID, "all", NodeTypePlant, false)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "plants_unavailable")
@@ -128,11 +124,11 @@ func (p plan96) targetAt(t time.Time) (float64, bool) {
 }
 
 func (h *Handler) plan96Handler(w http.ResponseWriter, identity Identity, siteID string) {
-	if !h.allows(identity, siteID) {
+	if siteID == "" {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
-	node, ok := h.node(w, identity, siteID)
+	node, ok := h.routeNode(w, siteID)
 	if !ok {
 		return
 	}
@@ -163,7 +159,11 @@ func (h *Handler) savePlan96Handler(w http.ResponseWriter, identity Identity, re
 			return
 		}
 	}
-	node, ok := h.node(w, identity, req.Site)
+	if req.Site == "" {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	node, ok := h.routeNode(w, req.Site)
 	if !ok {
 		return
 	}

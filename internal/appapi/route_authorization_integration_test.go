@@ -2,6 +2,7 @@ package appapi
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -286,5 +287,167 @@ func TestRoleDefaultsForEveryActionOverHTTP(t *testing.T) {
 				t.Errorf("%s %s = %d, want 403: %s", role, action, status, body)
 			}
 		}
+	}
+}
+
+func TestDirectScopeTargetsOverHTTP(t *testing.T) {
+	base, admin, h, _ := startInputServer(t, t.TempDir(), data.NewID())
+	service := runtime.NewService(nil, time.Minute, time.Second, 100)
+	t.Cleanup(service.Close)
+	h.SetEMS(emsapi.New(service, time.Minute))
+	fixture := &pointConfigFixture{base: base, token: admin}
+	root := snapshotRoot(t, base, admin)
+	a := createNodeAPI(t, base, admin, "group", root, "A", 0)
+	b := createNodeAPI(t, base, admin, "group", root, "B", 0)
+	pointA := createNodeAPI(t, base, admin, "variable", a, "A temperature", 0)
+	pointB := createNodeAPI(t, base, admin, "variable", b, "B temperature", 0)
+	implementer := inputAccount(t, fixture, a, "implementer", nil)
+	alarmA, err := service.Alarms.Raise(time.Now(), "temperature:A", alarm.Warning, "A", "46", a, pointA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alarmB, err := service.Alarms.Raise(time.Now(), "temperature:B", alarm.Warning, "B", "46", b, pointB)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	status, body := call(t, http.MethodPost, base+"/nodes/"+pointB+"/value", implementer, map[string]any{"value": 1, "point_type": "invalid"}, nil)
+	if status != http.StatusForbidden || !strings.Contains(body, "forbidden") {
+		t.Errorf("path target outside scope: %d %s", status, body)
+	}
+	status, body = call(t, http.MethodPost, base+"/nodes/"+pointA+"/value", implementer, map[string]any{"value": 1, "point_type": "invalid"}, nil)
+	if status != http.StatusBadRequest {
+		t.Errorf("path target inside scope: %d %s", status, body)
+	}
+	status, body = call(t, http.MethodGet, base+"/projects/versions?site="+b, implementer, nil, nil)
+	if status != http.StatusForbidden {
+		t.Errorf("query target outside scope: %d %s", status, body)
+	}
+	status, body = call(t, http.MethodGet, base+"/projects/versions?site="+a, implementer, nil, nil)
+	if status != http.StatusOK {
+		t.Errorf("query target inside scope: %d %s", status, body)
+	}
+	status, body = call(t, http.MethodGet, base+"/history?node_id="+pointB, implementer, nil, nil)
+	if status != http.StatusForbidden || !strings.Contains(body, "history_forbidden") {
+		t.Errorf("history target outside scope: %d %s", status, body)
+	}
+	status, body = call(t, http.MethodPost, base+"/nodes", implementer, map[string]any{"parent": b, "type": "variable", "description": "outside"}, nil)
+	if status != http.StatusBadRequest || !strings.Contains(body, "invalid_node") {
+		t.Errorf("body target outside scope: %d %s", status, body)
+	}
+	status, body = call(t, http.MethodPost, base+"/nodes", implementer, map[string]any{"parent": a, "type": "variable", "description": "inside"}, nil)
+	if status != http.StatusOK {
+		t.Errorf("body target inside scope: %d %s", status, body)
+	}
+	status, body = call(t, http.MethodPost, base+"/ems/alarms/"+alarmB.ID+"/ack", implementer, map[string]any{}, nil)
+	if status != http.StatusNotFound || !strings.Contains(body, "alarm_not_found") {
+		t.Errorf("alarm target outside scope: %d %s", status, body)
+	}
+	status, body = call(t, http.MethodPost, base+"/ems/alarms/"+alarmA.ID+"/ack", implementer, map[string]any{}, nil)
+	if status != http.StatusOK {
+		t.Errorf("alarm target inside scope: %d %s", status, body)
+	}
+}
+
+func TestBodyScopeFailsClosedWhenJSONIsUnresolved(t *testing.T) {
+	base, admin, _, _ := startInputServer(t, t.TempDir(), data.NewID())
+	fixture := &pointConfigFixture{base: base, token: admin}
+	root := snapshotRoot(t, base, admin)
+	a := createNodeAPI(t, base, admin, "group", root, "A", 0)
+	b := createNodeAPI(t, base, admin, "group", root, "B", 0)
+	implementer := inputAccount(t, fixture, a, "implementer", nil)
+	for _, test := range []struct {
+		name, token, parent string
+		want                int
+	}{
+		{"unresolved scope denied", implementer, b, http.StatusBadRequest},
+		{"admin body still reaches handler", admin, a, http.StatusOK},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			body := strings.Repeat(" ", 1<<20+1) + `{"parent":` + strconv.Quote(test.parent) + `,"type":"variable","description":"large"}`
+			request, err := http.NewRequest(http.MethodPost, base+"/nodes", strings.NewReader(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Header.Set("Authorization", "Bearer "+test.token)
+			request.Header.Set("Content-Type", "application/json")
+			response, err := http.DefaultClient.Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response.Body.Close()
+			if response.StatusCode != test.want {
+				t.Errorf("status = %d, want %d", response.StatusCode, test.want)
+			}
+		})
+	}
+}
+
+func callRawJSON(t *testing.T, method, url, token, body string) (int, string) {
+	t.Helper()
+	request, err := http.NewRequest(method, url, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response.StatusCode, string(raw)
+}
+
+func TestBodyScopeMatchesJSONFieldFoldingAndOrder(t *testing.T) {
+	base, admin, _, _ := startInputServer(t, t.TempDir(), data.NewID())
+	fixture := &pointConfigFixture{base: base, token: admin}
+	root := snapshotRoot(t, base, admin)
+	a := createNodeAPI(t, base, admin, "group", root, "A", 0)
+	b := createNodeAPI(t, base, admin, "group", root, "B", 0)
+	point := createNodeAPI(t, base, admin, "variable", a, "temperature", 0)
+	implementer := inputAccount(t, fixture, a, "implementer", nil)
+
+	status, body := callRawJSON(t, http.MethodPost, base+"/nodes/"+point+"/move", implementer,
+		`{"OLD_PARENT":`+strconv.Quote(a)+`,"NEW_PARENT":`+strconv.Quote(b)+`}`)
+	if status != http.StatusForbidden || !strings.Contains(body, "destination_forbidden") {
+		t.Errorf("uppercase move target bypassed scope: %d %s", status, body)
+	}
+	status, body = callRawJSON(t, http.MethodPost, base+"/nodes", implementer,
+		`{"parent":`+strconv.Quote(a)+`,"PARENT":`+strconv.Quote(b)+`,"type":"variable","description":"last outside"}`)
+	if status != http.StatusBadRequest || !strings.Contains(body, "invalid_node") {
+		t.Errorf("last duplicate target outside scope: %d %s", status, body)
+	}
+	status, body = callRawJSON(t, http.MethodPost, base+"/nodes", implementer,
+		`{"parent":`+strconv.Quote(b)+`,"PARENT":`+strconv.Quote(a)+`,"type":"variable","description":"last inside"}`)
+	if status != http.StatusOK {
+		t.Errorf("last duplicate target inside scope: %d %s", status, body)
+	}
+}
+
+func TestMissingBodyTargetsKeepValidation(t *testing.T) {
+	base, admin, _, _ := startInputServer(t, t.TempDir(), data.NewID())
+	root := snapshotRoot(t, base, admin)
+	implementer := inputAccount(t, &pointConfigFixture{base: base, token: admin}, root, "implementer", nil)
+	for _, test := range []struct {
+		name, token, path, reason string
+		body                      any
+	}{
+		{"node", implementer, "/nodes", "invalid_node", map[string]any{"type": "variable", "description": "missing parent"}},
+		{"rule", implementer, "/rules", "invalid_rule", map[string]any{"description": "missing parent", "document": map[string]any{"table": map[string]any{"rows": []any{}}}}},
+		{"modbus", implementer, "/modbus", "invalid_modbus_connection", map[string]any{"description": "missing parent", "protocol": "TCP", "uri": "127.0.0.1:502", "poll_period": 1000, "timeout": 500}},
+		{"template", implementer, "/templates", "invalid_template", map[string]any{"description": "missing parent"}},
+		{"user", admin, "/users", "invalid_user", map[string]any{"email": "person@example.test", "password": "long-test-password", "role": "viewer"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			status, body := call(t, http.MethodPost, base+test.path, test.token, test.body, nil)
+			if status != http.StatusBadRequest || !strings.Contains(body, test.reason) {
+				t.Errorf("missing parent: %d %s", status, body)
+			}
+		})
 	}
 }

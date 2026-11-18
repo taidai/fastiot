@@ -78,7 +78,7 @@ func (h *Handler) projectDir(siteID string) string {
 
 // snapshotSite 冻结当前工程配置；运行时值与凭据不进入版本。
 func (h *Handler) snapshotSite(identity Identity, siteID, note string) (projectVersion, error) {
-	nodes, err := h.loadReuseSource(identity, siteID)
+	nodes, err := h.loadReuseSource(siteID)
 	if err != nil {
 		return projectVersion{}, err
 	}
@@ -223,7 +223,7 @@ func (h *Handler) publishHandler(w http.ResponseWriter, identity Identity, siteI
 }
 
 func (h *Handler) versionsHandler(w http.ResponseWriter, identity Identity, siteID string) {
-	if !h.allows(identity, siteID) {
+	if siteID == "" {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
@@ -236,7 +236,7 @@ func (h *Handler) versionsHandler(w http.ResponseWriter, identity Identity, site
 }
 
 func (h *Handler) rollbackHandler(w http.ResponseWriter, identity Identity, siteID, versionID string) {
-	if !h.allows(identity, siteID) {
+	if siteID == "" {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
@@ -255,7 +255,7 @@ func (h *Handler) rollbackHandler(w http.ResponseWriter, identity Identity, site
 			return
 		}
 	}
-	currentNodes, err := h.loadReuseSource(identity, siteID)
+	currentNodes, err := h.loadReuseSource(siteID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

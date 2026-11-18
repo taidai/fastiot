@@ -14,7 +14,7 @@ import (
 
 // createEnergyDevice 处理 POST /energy-units/{id}/devices。
 func (h *Handler) createEnergyDevice(w http.ResponseWriter, r *http.Request, identity Identity, energyUnitID string) {
-	node, ok := h.node(w, identity, energyUnitID)
+	node, ok := h.routeNode(w, energyUnitID)
 	if !ok {
 		return
 	}
@@ -64,7 +64,7 @@ func (h *Handler) createEnergyDevice(w http.ResponseWriter, r *http.Request, ide
 
 // listEnergyDevices 列出一个 EnergyUnit 下的设备（含功率点位映射）。
 func (h *Handler) listEnergyDevices(w http.ResponseWriter, identity Identity, energyUnitID string) {
-	node, ok := h.node(w, identity, energyUnitID)
+	node, ok := h.routeNode(w, energyUnitID)
 	if !ok {
 		return
 	}

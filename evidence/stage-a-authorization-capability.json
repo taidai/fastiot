@@ -11,6 +11,7 @@
     "profile_csv": "EMS profile points.csv requires the export action",
     "ems_access": "EMS API consumes the same resolved action set; legacy boolean fields remain only as an adapter for trusted internal callers",
     "route_table": "internal/authz declares every authenticated product and EMS route with its required action and stable refusal code; each HTTP entry applies the declaration once; unknown dynamic operations retain handler 404 behavior and unresolved impact bodies fail closed",
+    "scope_targets": "104 routes declare direct path/query/JSON-body/alarm targets with their original scope refusal semantics; product and EMS entries enforce them before handler side effects; unresolved JSON targets fail closed, while list filters and derived references remain in their domain modules",
     "channel_configuration": "ChannelAdmin relies on the route action instead of a second Admin-only check; the alarm configuration boundary runs only after authorization"
   },
   "frontend": {
@@ -25,10 +26,10 @@
     "frontend": ["npm run build", "check:navigation", "check:consistency", "check:observations", "check:acceptance", "check:capabilities"],
     "route_matrix": "Real HTTP covers configure-only channel creation, delete-only channel deletion, denied delete without configuration side effects, frames, alarm acknowledgement/close/maintenance/release; direct EMS HTTP covers the same action set",
     "action_role_matrix": "Real HTTP with real identities covers every one of the 14 actions against admin, implementer, operator and viewer role defaults; project read routes retain configure and oversized unresolved impact previews fail closed for non-admin callers",
+    "scope_matrix": "Real HTTP proves same-action A/B isolation for path, query, JSON-body, history and alarm targets with original refusal codes; JSON extraction follows case-insensitive field matching and last-duplicate-wins; unresolved JSON targets fail closed, required-target validation is preserved, and scoped EMS large bodies retain their original 400 invalid_json result",
     "browser": "Real debug backend + own dev server: viewer and operator have no workbench and no history export; an export-only viewer has the export button but no workbench; implementer has both workbenches and export; API viewer history export is 403 while the explicit export grant passes authorization"
   },
   "remaining_stage_a": [
-    "Declare route scope-target resolvers in the shared table; object scope is still enforced by the owning handlers",
     "Complete target-state reasons across remaining command/config controls",
     "Deduplicate the schedule polling and freshness work is Stage B, not this slice"
   ],

@@ -79,7 +79,7 @@ func (h *Handler) createModbus(w http.ResponseWriter, r *http.Request, identity 
 		return
 	}
 	normalizeSerial(&input)
-	if input.Description == "" || !h.allows(identity, input.Parent) || validateModbusConnection(input) != nil {
+	if input.Description == "" || input.Parent == "" || validateModbusConnection(input) != nil {
 		writeError(w, http.StatusBadRequest, "invalid_modbus_connection")
 		return
 	}
@@ -108,7 +108,7 @@ func (h *Handler) createModbus(w http.ResponseWriter, r *http.Request, identity 
 }
 
 func (h *Handler) createModbusIO(w http.ResponseWriter, r *http.Request, identity Identity, busID string) {
-	bus, ok := h.node(w, identity, busID)
+	bus, ok := h.routeNode(w, busID)
 	if !ok {
 		return
 	}
@@ -142,7 +142,7 @@ func newModbusIONode(busID string, input ModbusIOInput) data.NodeEdge {
 }
 
 func (h *Handler) importModbusCSV(w http.ResponseWriter, r *http.Request, identity Identity, busID string) {
-	bus, ok := h.node(w, identity, busID)
+	bus, ok := h.routeNode(w, busID)
 	if !ok {
 		return
 	}
@@ -502,7 +502,7 @@ func (h *Handler) testModbus(w http.ResponseWriter, r *http.Request, identity Id
 }
 
 func (h *Handler) updateModbus(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
-	node, ok := h.node(w, identity, id)
+	node, ok := h.routeNode(w, id)
 	if !ok {
 		return
 	}
@@ -548,7 +548,7 @@ func (h *Handler) updateModbus(w http.ResponseWriter, r *http.Request, identity 
 }
 
 func (h *Handler) updateModbusIO(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
-	node, ok := h.node(w, identity, id)
+	node, ok := h.routeNode(w, id)
 	if !ok {
 		return
 	}
@@ -601,7 +601,7 @@ func (h *Handler) updateModbusIOFields(id string, input ModbusIOInput, origin st
 }
 
 func (h *Handler) exportModbusCSV(w http.ResponseWriter, identity Identity, busID string) {
-	bus, ok := h.node(w, identity, busID)
+	bus, ok := h.routeNode(w, busID)
 	if !ok {
 		return
 	}

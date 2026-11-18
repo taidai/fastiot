@@ -47,7 +47,7 @@ type preflightReport struct {
 
 // deliveryGates 只读门槛：供页面轮询，不写存储。
 func (h *Handler) deliveryGates(w http.ResponseWriter, identity Identity, siteID string) {
-	if !h.checkSite(w, identity, siteID) {
+	if !h.routeSite(w, siteID) {
 		return
 	}
 	report, err := h.buildPreflight(identity, siteID)
@@ -60,7 +60,7 @@ func (h *Handler) deliveryGates(w http.ResponseWriter, identity Identity, siteID
 
 // runPreflight 生成快照：写 preflight.jsonl 与审计，返回同一次计算的结果。
 func (h *Handler) runPreflight(w http.ResponseWriter, identity Identity, siteID string) {
-	if !h.checkSite(w, identity, siteID) {
+	if !h.routeSite(w, siteID) {
 		return
 	}
 	report, err := h.buildPreflight(identity, siteID)
@@ -92,7 +92,7 @@ func (h *Handler) runPreflight(w http.ResponseWriter, identity Identity, siteID 
 
 // latestPreflight 返回最近一次快照；没有历史时 404，不伪造空报告。
 func (h *Handler) latestPreflight(w http.ResponseWriter, identity Identity, siteID string) {
-	if !h.checkSite(w, identity, siteID) {
+	if !h.routeSite(w, siteID) {
 		return
 	}
 	report, err := h.readLatestPreflight(siteID)

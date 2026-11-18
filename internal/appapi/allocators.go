@@ -13,7 +13,7 @@ import (
 
 // getAllocator returns the configuration stored on one business node.
 func (h *Handler) getAllocator(w http.ResponseWriter, identity Identity, id string) {
-	if _, ok := h.node(w, identity, id); !ok {
+	if _, ok := h.routeNode(w, id); !ok {
 		return
 	}
 	config, err := decision.LoadAllocator(h.nc, id)
@@ -26,7 +26,7 @@ func (h *Handler) getAllocator(w http.ResponseWriter, identity Identity, id stri
 
 // putAllocator saves a validated allocator as a point on its business node.
 func (h *Handler) putAllocator(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
-	node, ok := h.node(w, identity, id)
+	node, ok := h.routeNode(w, id)
 	if !ok {
 		return
 	}
@@ -59,7 +59,7 @@ func (h *Handler) putAllocator(w http.ResponseWriter, r *http.Request, identity 
 // simulateAllocator computes a distribution for a request without dispatching
 // it. It reads current member state only and never writes a point.
 func (h *Handler) simulateAllocator(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
-	if _, ok := h.node(w, identity, id); !ok {
+	if _, ok := h.routeNode(w, id); !ok {
 		return
 	}
 	config, err := decision.LoadAllocator(h.nc, id)
@@ -84,7 +84,7 @@ func (h *Handler) simulateAllocator(w http.ResponseWriter, r *http.Request, iden
 // allocatorHistory returns the recorded allocation snapshots for one allocator,
 // newest first.
 func (h *Handler) allocatorHistory(w http.ResponseWriter, identity Identity, id string) {
-	node, ok := h.node(w, identity, id)
+	node, ok := h.routeNode(w, id)
 	if !ok {
 		return
 	}

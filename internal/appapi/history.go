@@ -67,9 +67,9 @@ func parseHistoryTime(text string) (time.Time, error) {
 	}
 	return time.Parse(time.RFC3339, text)
 }
-func historyNode(identity Identity, h *Handler, id string) (data.NodeEdge, error) {
+func historyNode(h *Handler, id string) (data.NodeEdge, error) {
 	nodes, err := client.GetNodes(h.nc, "all", id, "", false)
-	if err != nil || len(nodes) == 0 || !h.allows(identity, id) {
+	if err != nil || len(nodes) == 0 {
 		return data.NodeEdge{}, errors.New("history_forbidden")
 	}
 	node := nodes[0]
@@ -357,7 +357,7 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request, identity Ident
 	matched := 0
 	legacy := data.Points{}
 	for _, id := range ids {
-		node, err := historyNode(identity, h, id)
+		node, err := historyNode(h, id)
 		if err != nil {
 			if err.Error() == "history_not_supported" {
 				writeError(w, 400, err.Error())

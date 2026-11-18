@@ -199,7 +199,7 @@ func refreshCapabilitiesAt(nc *nats.Conn, now time.Time) {
 
 // capabilityInputs 读写动态能力来源配置。
 func (h *Handler) capabilityInputs(w http.ResponseWriter, r *http.Request, identity Identity, energyUnitID string) {
-	node, ok := h.node(w, identity, energyUnitID)
+	node, ok := h.routeNode(w, energyUnitID)
 	if !ok {
 		return
 	}

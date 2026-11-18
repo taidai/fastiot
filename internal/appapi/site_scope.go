@@ -74,12 +74,12 @@ func siteSubtreeIDs(nodes []data.NodeEdge, siteID string) map[string]bool {
 	return ids
 }
 
-// checkSite 校验一个可选的 site 参数；为空表示项目级（不按站点过滤）。
-func (h *Handler) checkSite(w http.ResponseWriter, identity Identity, siteID string) bool {
+// routeSite validates an optional site after the route guard has checked it.
+func (h *Handler) routeSite(w http.ResponseWriter, siteID string) bool {
 	if siteID == "" {
 		return true
 	}
-	node, ok := h.node(w, identity, siteID)
+	node, ok := h.routeNode(w, siteID)
 	if !ok {
 		return false
 	}

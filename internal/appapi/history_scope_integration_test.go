@@ -42,7 +42,7 @@ func TestHistoryCursorAndAggregateStayConsistent(t *testing.T) {
 	if got := len(service.History.Query(device.ID, point, at, at.Add(599*time.Second), 1000)); got != 600 {
 		t.Fatalf("history fixture lost samples: %d", got)
 	}
-	node, err := historyNode(Identity{Anchors: []string{snapshotRoot(t, base, token)}}, h, point)
+	node, err := historyNode(h, point)
 	if err != nil {
 		t.Fatal(err)
 	}

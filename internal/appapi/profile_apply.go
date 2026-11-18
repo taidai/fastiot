@@ -140,7 +140,7 @@ func applyProfile(server int, prof profile.Profile, points []unitModelPointView,
 
 // applyProfilesHandler 处理 POST /api/modbus/{channel}/units/apply。
 func (h *Handler) applyProfilesHandler(w http.ResponseWriter, r *http.Request, identity Identity, channelID string) {
-	channel, ok := h.node(w, identity, channelID)
+	channel, ok := h.routeNode(w, channelID)
 	if !ok {
 		return
 	}

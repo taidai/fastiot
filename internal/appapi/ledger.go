@@ -42,7 +42,7 @@ type DeviceLedgerResponse struct {
 
 func (h *Handler) deviceLedger(w http.ResponseWriter, r *http.Request, identity Identity) {
 	siteID := r.URL.Query().Get("site")
-	if !h.checkSite(w, identity, siteID) {
+	if !h.routeSite(w, siteID) {
 		return
 	}
 	devices, err := h.ledgerDevices(identity, siteID)

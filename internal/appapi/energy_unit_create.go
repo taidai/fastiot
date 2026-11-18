@@ -90,7 +90,7 @@ func (h *Handler) createEnergyUnit(w http.ResponseWriter, r *http.Request, ident
 			return
 		}
 	} else {
-		node, ok := h.node(w, identity, parent)
+		node, ok := h.routeNode(w, parent)
 		if !ok {
 			return
 		}

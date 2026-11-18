@@ -81,7 +81,7 @@ type unitModelCommand struct {
 }
 
 func (h *Handler) unitModel(w http.ResponseWriter, r *http.Request, identity Identity, channelID string, server int) {
-	channel, ok := h.node(w, identity, channelID)
+	channel, ok := h.routeNode(w, channelID)
 	if !ok {
 		return
 	}
@@ -368,7 +368,7 @@ func (h *Handler) commandProfile(deviceID string) (device.Profile, bool) {
 }
 
 func (h *Handler) unitCommands(w http.ResponseWriter, r *http.Request, identity Identity, channelID string, server int, requestID string) {
-	channel, ok := h.node(w, identity, channelID)
+	channel, ok := h.routeNode(w, channelID)
 	if !ok {
 		return
 	}

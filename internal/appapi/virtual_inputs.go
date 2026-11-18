@@ -107,7 +107,7 @@ func (h *Handler) virtualInputs(w http.ResponseWriter, r *http.Request, identity
 		writeError(w, 404, "not_found")
 		return
 	}
-	node, ok := h.node(w, identity, path[0])
+	node, ok := h.routeNode(w, path[0])
 	if !ok {
 		return
 	}
@@ -199,7 +199,11 @@ func (h *Handler) createVirtualInput(w http.ResponseWriter, r *http.Request, ide
 		writeError(w, 400, "invalid_input_definition")
 		return
 	}
-	parent, ok := h.node(w, identity, input.Parent)
+	if input.Parent == "" {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	parent, ok := h.routeNode(w, input.Parent)
 	if !ok {
 		return
 	}

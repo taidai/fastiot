@@ -16,7 +16,7 @@ func (h *Handler) putSafety(w http.ResponseWriter, r *http.Request, identity Ide
 		Node   string        `json:"node"`
 		Safety safety.Config `json:"safety"`
 	}
-	if !decodeJSON(w, r, &input) || input.Node == "" || !h.allows(identity, input.Node) {
+	if !decodeJSON(w, r, &input) || input.Node == "" {
 		writeError(w, http.StatusBadRequest, "invalid_safety")
 		return
 	}

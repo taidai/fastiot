@@ -100,7 +100,7 @@ func (h *Handler) RunForecastTick(now time.Time) {
 
 // forecastInputs 读写预测来源配置。
 func (h *Handler) forecastInputs(w http.ResponseWriter, r *http.Request, identity Identity, energyUnitID string) {
-	node, ok := h.node(w, identity, energyUnitID)
+	node, ok := h.routeNode(w, energyUnitID)
 	if !ok {
 		return
 	}

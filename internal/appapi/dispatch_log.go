@@ -62,7 +62,7 @@ func GetDispatchRecord(nc *nats.Conn, energyUnitID, dispatchID string) (decision
 
 // dispatchRecords 列出某个能源设备的调度追溯记录（最新在前）。
 func (h *Handler) dispatchRecords(w http.ResponseWriter, identity Identity, energyUnitID string) {
-	node, ok := h.node(w, identity, energyUnitID)
+	node, ok := h.routeNode(w, energyUnitID)
 	if !ok {
 		return
 	}

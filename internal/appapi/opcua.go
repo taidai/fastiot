@@ -222,9 +222,12 @@ func (h *Handler) opcuaChannels(w http.ResponseWriter, r *http.Request, identity
 				writeError(w, http.StatusBadGateway, "root_unavailable")
 				return
 			}
+			if _, ok := h.node(w, identity, root.ID); !ok {
+				return
+			}
 			input.Parent = root.ID
 		}
-		if _, ok := h.node(w, identity, input.Parent); !ok {
+		if _, ok := h.routeNode(w, input.Parent); !ok {
 			return
 		}
 		id, err := CreateDomainNode(h.nc, input.Parent, NodeTypeOpcua, map[string]string{
@@ -248,7 +251,7 @@ func (h *Handler) opcuaChannels(w http.ResponseWriter, r *http.Request, identity
 
 // opcuaPoints 处理某通道下的测点：GET/POST /opcua/channels/{id}/points。
 func (h *Handler) opcuaPoints(w http.ResponseWriter, r *http.Request, identity Identity, channelID string) {
-	node, ok := h.node(w, identity, channelID)
+	node, ok := h.routeNode(w, channelID)
 	if !ok {
 		return
 	}

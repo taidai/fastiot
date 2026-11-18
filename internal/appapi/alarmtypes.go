@@ -15,7 +15,7 @@ const alarmTypePoint = "easyemsAlarmType"
 
 func (h *Handler) alarmTypes(w http.ResponseWriter, r *http.Request, identity Identity) {
 	root := r.URL.Query().Get("root")
-	if root == "" || !h.allows(identity, root) {
+	if root == "" {
 		writeError(w, http.StatusBadRequest, "invalid_root")
 		return
 	}

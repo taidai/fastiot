@@ -76,7 +76,7 @@ func (h *Handler) listEnergyUnits(w http.ResponseWriter, identity Identity) {
 
 // energyRule 读写一个 EnergyUnit 上的能力级规则。
 func (h *Handler) energyRule(w http.ResponseWriter, r *http.Request, identity Identity, energyUnitID string) {
-	node, ok := h.node(w, identity, energyUnitID)
+	node, ok := h.routeNode(w, energyUnitID)
 	if !ok {
 		return
 	}
@@ -99,7 +99,7 @@ func (h *Handler) energyRule(w http.ResponseWriter, r *http.Request, identity Id
 
 // energyAllocator 读写一个 EnergyUnit 上的能力级分配器成员。
 func (h *Handler) energyAllocator(w http.ResponseWriter, r *http.Request, identity Identity, energyUnitID string) {
-	node, ok := h.node(w, identity, energyUnitID)
+	node, ok := h.routeNode(w, energyUnitID)
 	if !ok {
 		return
 	}
@@ -125,7 +125,7 @@ func (h *Handler) energyAllocator(w http.ResponseWriter, r *http.Request, identi
 // publishCapabilityRule 发布一个 EnergyUnit 的草稿规则：校验后置为
 // published 并记录发布时刻。发布是显式动作，草稿保存不改变运行行为。
 func (h *Handler) publishCapabilityRule(w http.ResponseWriter, r *http.Request, identity Identity, energyUnitID string) {
-	node, ok := h.node(w, identity, energyUnitID)
+	node, ok := h.routeNode(w, energyUnitID)
 	if !ok {
 		return
 	}
@@ -146,7 +146,7 @@ func (h *Handler) publishCapabilityRule(w http.ResponseWriter, r *http.Request, 
 // simulateCapabilityRule 求值一个能力级规则（草稿或已发布），返回命中的
 // 动作。纯函数求值，绝不写设备——这是"模拟测试语义独立"的边界。
 func (h *Handler) simulateCapabilityRule(w http.ResponseWriter, r *http.Request, identity Identity, energyUnitID string) {
-	node, ok := h.node(w, identity, energyUnitID)
+	node, ok := h.routeNode(w, energyUnitID)
 	if !ok {
 		return
 	}
@@ -186,7 +186,7 @@ func (h *Handler) simulateCapabilityRule(w http.ResponseWriter, r *http.Request,
 
 // saveCapabilityRule 把能力级规则写到 EnergyUnit 节点。
 func (h *Handler) saveCapabilityRule(w http.ResponseWriter, identity Identity, energyUnitID string, rule decision.CapabilityRule) {
-	node, ok := h.node(w, identity, energyUnitID)
+	node, ok := h.routeNode(w, energyUnitID)
 	if !ok {
 		return
 	}
@@ -217,7 +217,7 @@ func (h *Handler) saveCapabilityRule(w http.ResponseWriter, identity Identity, e
 
 // saveEnergyAllocator 把能力级分配器成员写到 EnergyUnit 节点。
 func (h *Handler) saveEnergyAllocator(w http.ResponseWriter, identity Identity, energyUnitID string, members []decision.EnergyMember) {
-	node, ok := h.node(w, identity, energyUnitID)
+	node, ok := h.routeNode(w, energyUnitID)
 	if !ok {
 		return
 	}

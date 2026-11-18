@@ -53,7 +53,7 @@ func modbusConnectionFromNode(node data.NodeEdge) (ModbusConnectionInput, bool) 
 // lineTestModbus probes an existing channel's connectivity and station
 // readability without touching configuration or writing any value.
 func (h *Handler) lineTestModbus(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
-	node, ok := h.node(w, identity, id)
+	node, ok := h.routeNode(w, id)
 	if !ok {
 		return
 	}

@@ -64,9 +64,17 @@ func (h *Handler) createResourceGroup(w http.ResponseWriter, r *http.Request, id
 		writeError(w, http.StatusBadRequest, "members_required")
 		return
 	}
-	members, ok := h.checkedEnergyUnits(w, identity, input.Members)
-	if !ok {
-		return
+	members := make([]data.NodeEdge, 0, len(input.Members))
+	for _, id := range input.Members {
+		node, ok := h.routeNode(w, id)
+		if !ok {
+			return
+		}
+		if node.Type != NodeTypeEnergyUnit {
+			writeError(w, http.StatusBadRequest, "requires_energy_unit")
+			return
+		}
+		members = append(members, node)
 	}
 	parent, err := h.resourceGroupParent(identity, members)
 	if err == errNoVisibleParent {
@@ -98,7 +106,7 @@ func (h *Handler) createResourceGroup(w http.ResponseWriter, r *http.Request, id
 
 // dispatchResourceGroup 处理 POST /resource-groups/{id}/dispatch {request_kw}。
 func (h *Handler) dispatchResourceGroup(w http.ResponseWriter, r *http.Request, identity Identity, groupID string) {
-	node, ok := h.node(w, identity, groupID)
+	node, ok := h.routeNode(w, groupID)
 	if !ok {
 		return
 	}

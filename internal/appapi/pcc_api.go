@@ -15,7 +15,7 @@ import (
 
 // savePlantPCC 处理 PUT /plants/{id}/pcc，绑定 PCC 反馈（主表+方向+上下限）。
 func (h *Handler) savePlantPCC(w http.ResponseWriter, r *http.Request, identity Identity, plantID string) {
-	node, ok := h.node(w, identity, plantID)
+	node, ok := h.routeNode(w, plantID)
 	if !ok {
 		return
 	}
@@ -52,7 +52,7 @@ func (h *Handler) savePlantPCC(w http.ResponseWriter, r *http.Request, identity 
 
 // getPlantPCC 处理 GET /plants/{id}/pcc。
 func (h *Handler) getPlantPCC(w http.ResponseWriter, identity Identity, plantID string) {
-	node, ok := h.node(w, identity, plantID)
+	node, ok := h.routeNode(w, plantID)
 	if !ok {
 		return
 	}
@@ -86,7 +86,7 @@ func (h *Handler) listPlants(w http.ResponseWriter, identity Identity) {
 // phaseVerdict 处理 GET /plants/{id}/phase-verdict：三相点位都新鲜时给出
 // 逐相反送判定；执行器能力未知，因此始终如实说明不支持独立调相。
 func (h *Handler) phaseVerdict(w http.ResponseWriter, identity Identity, plantID string) {
-	node, ok := h.node(w, identity, plantID)
+	node, ok := h.routeNode(w, plantID)
 	if !ok {
 		return
 	}

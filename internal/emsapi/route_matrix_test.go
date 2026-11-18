@@ -61,3 +61,20 @@ func TestProtectedRouteActionMatrix(t *testing.T) {
 		})
 	}
 }
+
+func TestChannelCreateLargeBodyKeepsScopedAdminJSONError(t *testing.T) {
+	for _, parent := range []string{"root", "other"} {
+		t.Run(parent, func(t *testing.T) {
+			service := runtime.NewService(nil, time.Minute, time.Second, 100)
+			t.Cleanup(service.Close)
+			handler := New(service, time.Minute)
+			handler.Configure = &fakeConfigurator{}
+			body := strings.Repeat(" ", 1<<20+1) + `{"parent":"` + parent + `","protocol":"tcp","address":"127.0.0.1:1502","devices":[{"server_id":1,"points":[{"name":"power","function":"holdingRegister","address":0,"format":"uint16","scale":1,"kind":"number"}]}]}`
+			access := Access{Admin: true, AllowNode: func(id string) bool { return id == "root" }}
+			response := call(t, handler, access, http.MethodPost, "/api/ems/channels", body)
+			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "invalid_json") {
+				t.Errorf("large body parent %s = %d %s", parent, response.Code, response.Body.String())
+			}
+		})
+	}
+}

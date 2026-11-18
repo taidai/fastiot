@@ -157,7 +157,7 @@ func (h *Handler) computeSiteUnitGoals(siteID string) map[string]decision.Goal {
 
 // siteTarget 读写 Site 的总功率目标（kW，正=放电，负=充电；0=不计划）。
 func (h *Handler) siteTarget(w http.ResponseWriter, r *http.Request, identity Identity, siteID string) {
-	node, ok := h.node(w, identity, siteID)
+	node, ok := h.routeNode(w, siteID)
 	if !ok {
 		return
 	}

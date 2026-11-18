@@ -12,7 +12,7 @@ import (
 )
 
 func (h *Handler) updateNode(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
-	node, ok := h.node(w, identity, id)
+	node, ok := h.routeNode(w, id)
 	if !ok {
 		return
 	}
@@ -49,7 +49,7 @@ func (h *Handler) updateNode(w http.ResponseWriter, r *http.Request, identity Id
 }
 
 func (h *Handler) moveNode(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
-	node, ok := h.node(w, identity, id)
+	node, ok := h.routeNode(w, id)
 	if !ok {
 		return
 	}
@@ -64,11 +64,7 @@ func (h *Handler) moveNode(w http.ResponseWriter, r *http.Request, identity Iden
 		writeError(w, http.StatusConflict, "source_parent_mismatch")
 		return
 	}
-	if !h.allows(identity, input.OldParent) {
-		writeError(w, http.StatusForbidden, "source_forbidden")
-		return
-	}
-	if !h.allows(identity, input.NewParent) {
+	if input.NewParent == "" {
 		writeError(w, http.StatusForbidden, "destination_forbidden")
 		return
 	}
@@ -76,7 +72,7 @@ func (h *Handler) moveNode(w http.ResponseWriter, r *http.Request, identity Iden
 		writeError(w, http.StatusForbidden, "move_cycle")
 		return
 	}
-	destination, ok := h.node(w, identity, input.NewParent)
+	destination, ok := h.routeNode(w, input.NewParent)
 	if !ok {
 		return
 	}
@@ -134,14 +130,14 @@ func (h *Handler) moveNode(w http.ResponseWriter, r *http.Request, identity Iden
 }
 
 func (h *Handler) deleteNode(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
-	node, ok := h.node(w, identity, id)
+	node, ok := h.routeNode(w, id)
 	if !ok {
 		return
 	}
 	var input struct {
 		Parent string `json:"parent"`
 	}
-	if !decodeJSON(w, r, &input) || input.Parent != node.Parent || !h.allows(identity, input.Parent) {
+	if !decodeJSON(w, r, &input) || input.Parent != node.Parent {
 		writeError(w, http.StatusBadRequest, "invalid_parent")
 		return
 	}

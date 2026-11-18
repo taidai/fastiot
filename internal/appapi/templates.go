@@ -29,11 +29,15 @@ func (h *Handler) saveTemplate(w http.ResponseWriter, r *http.Request, identity 
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	if strings.TrimSpace(input.Description) == "" || !h.allows(identity, input.Parent) {
+	if strings.TrimSpace(input.Description) == "" || input.Parent == "" {
 		writeError(w, http.StatusBadRequest, "invalid_template")
 		return
 	}
-	source, ok := h.node(w, identity, input.SourceBusID)
+	if input.SourceBusID == "" {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	source, ok := h.routeNode(w, input.SourceBusID)
 	if !ok {
 		return
 	}
@@ -82,7 +86,7 @@ func (h *Handler) saveTemplate(w http.ResponseWriter, r *http.Request, identity 
 }
 
 func (h *Handler) applyTemplate(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
-	template, ok := h.node(w, identity, id)
+	template, ok := h.routeNode(w, id)
 	if !ok {
 		return
 	}
@@ -96,7 +100,11 @@ func (h *Handler) applyTemplate(w http.ResponseWriter, r *http.Request, identity
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	bus, ok := h.node(w, identity, input.BusID)
+	if input.BusID == "" {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	bus, ok := h.routeNode(w, input.BusID)
 	if !ok {
 		return
 	}

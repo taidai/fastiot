@@ -146,6 +146,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, access Acces
 			writeError(w, http.StatusForbidden, route.Reason)
 			return
 		}
+		if route.UnknownTarget != nil && access.AllowNode != nil && !access.Admin {
+			writeError(w, route.UnknownTarget.Status, route.UnknownTarget.Reason)
+			return
+		}
+		for _, target := range route.Targets {
+			if target.Alarm {
+				if !h.alarmTarget(w, access, target.ID) {
+					return
+				}
+				continue
+			}
+			if !access.allows(target.ID) {
+				writeError(w, target.Status, target.Reason)
+				return
+			}
+		}
 	}
 	if h.BeginAlarmConfiguration != nil && ((path == "ems/channels" && r.Method == http.MethodPost) || (strings.HasPrefix(path, "ems/channels/") && r.Method == http.MethodDelete)) {
 		finish := h.BeginAlarmConfiguration()
@@ -377,10 +393,6 @@ func (h *Handler) channels(w http.ResponseWriter, access Access) {
 }
 
 func (h *Handler) restartChannel(w http.ResponseWriter, access Access, id string) {
-	if !access.allows(id) {
-		writeError(w, http.StatusForbidden, "forbidden")
-		return
-	}
 	if h.RestartChannel == nil {
 		writeError(w, http.StatusNotImplemented, "restart_unavailable")
 		return
@@ -452,10 +464,6 @@ func (h *Handler) createChannel(w http.ResponseWriter, r *http.Request, access A
 		writeError(w, http.StatusBadRequest, "invalid_channel")
 		return
 	}
-	if !access.allows(input.Parent) {
-		writeError(w, http.StatusForbidden, "forbidden")
-		return
-	}
 	if h.Configure == nil {
 		writeError(w, http.StatusNotImplemented, "not_implemented")
 		return
@@ -495,10 +503,6 @@ func convertPoint(input PointInput) (channel.Point, error) {
 }
 
 func (h *Handler) deleteChannel(w http.ResponseWriter, access Access, id string) {
-	if !access.allows(id) {
-		writeError(w, http.StatusForbidden, "forbidden")
-		return
-	}
 	if h.Configure == nil {
 		writeError(w, http.StatusNotImplemented, "not_implemented")
 		return
@@ -935,9 +939,6 @@ func (h *Handler) alarmEvidenceConfirmed(w http.ResponseWriter) bool {
 }
 
 func (h *Handler) ackAlarm(w http.ResponseWriter, r *http.Request, access Access, id string) {
-	if !h.alarmTarget(w, access, id) {
-		return
-	}
 	var input struct {
 		Note string `json:"note"`
 	}
@@ -958,9 +959,6 @@ func (h *Handler) ackAlarm(w http.ResponseWriter, r *http.Request, access Access
 }
 
 func (h *Handler) closeAlarm(w http.ResponseWriter, access Access, id string) {
-	if !h.alarmTarget(w, access, id) {
-		return
-	}
 	alarm, err := h.Service.Alarms.Close(time.Now(), id)
 	if err != nil {
 		writeError(w, http.StatusConflict, err.Error())
@@ -977,10 +975,6 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request, access Access,
 	pointID := r.URL.Query().Get("point_id")
 	if deviceID == "" || pointID == "" {
 		writeError(w, http.StatusBadRequest, "device_id_and_point_id_required")
-		return
-	}
-	if !access.allows(pointID) {
-		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
 	start, err := parseTime(r.URL.Query().Get("start"))
@@ -1162,9 +1156,6 @@ func (h *Handler) QualityReport() ([]contract.QualityStats, []contract.QualitySt
 }
 
 func (h *Handler) maintainAlarm(w http.ResponseWriter, r *http.Request, access Access, id string) {
-	if !h.alarmTarget(w, access, id) {
-		return
-	}
 	var input struct {
 		Until  string `json:"until"`
 		Reason string `json:"reason"`
@@ -1190,9 +1181,6 @@ func (h *Handler) maintainAlarm(w http.ResponseWriter, r *http.Request, access A
 }
 
 func (h *Handler) releaseAlarm(w http.ResponseWriter, access Access, id string) {
-	if !h.alarmTarget(w, access, id) {
-		return
-	}
 	alarm, err := h.Service.Alarms.Release(time.Now(), id)
 	if err != nil {
 		writeError(w, http.StatusConflict, err.Error())

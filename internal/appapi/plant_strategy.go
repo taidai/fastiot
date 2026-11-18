@@ -130,7 +130,7 @@ func (h *Handler) RunPlantStrategy(plantID string) (bool, error) {
 
 // plantStrategy 读写电站分时策略（削峰填谷）。
 func (h *Handler) plantStrategy(w http.ResponseWriter, r *http.Request, identity Identity, plantID string) {
-	node, ok := h.node(w, identity, plantID)
+	node, ok := h.routeNode(w, plantID)
 	if !ok {
 		return
 	}

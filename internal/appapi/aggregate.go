@@ -105,10 +105,6 @@ func (h *Handler) aggregate(w http.ResponseWriter, r *http.Request, identity Ide
 		writeError(w, http.StatusBadRequest, "missing_group")
 		return
 	}
-	if !h.allows(identity, group) {
-		writeError(w, http.StatusForbidden, "no_access")
-		return
-	}
 	config, ok := h.loadAggregate(group)
 	if !ok {
 		writeJSON(w, AggregateResult{Configured: false, Config: AggregateConfig{Group: group}, Quality: "unconfigured", Members: []AggregateMember{}})
@@ -124,7 +120,7 @@ func (h *Handler) aggregate(w http.ResponseWriter, r *http.Request, identity Ide
 }
 
 func (h *Handler) validateAggregate(config AggregateConfig, identity Identity) error {
-	if config.Group == "" || !h.allows(identity, config.Group) {
+	if config.Group == "" {
 		return errText("invalid_group")
 	}
 	if !aggregateOps[config.Op] {
