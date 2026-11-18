@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"fastiot/internal/authz"
 	"fastiot/internal/ems/alarm"
 	"fastiot/internal/ems/bridge"
 	"fastiot/internal/ems/channel"
@@ -258,6 +259,10 @@ func TestStateHistoryAndExport(t *testing.T) {
 	}
 
 	export := call(t, handler, Access{UserID: "viewer"}, http.MethodGet, "/api/ems/history/export?device_id=d1&point_id=temp", "")
+	if export.Code != http.StatusForbidden || !strings.Contains(export.Body.String(), "export_required") {
+		t.Fatalf("export without action = %d %s", export.Code, export.Body.String())
+	}
+	export = call(t, handler, Access{UserID: "viewer", Actions: map[string]bool{authz.Export: true}}, http.MethodGet, "/api/ems/history/export?device_id=d1&point_id=temp", "")
 	if export.Code != http.StatusOK || !strings.Contains(export.Header().Get("Content-Type"), "text/csv") {
 		t.Fatalf("export status = %d type=%s", export.Code, export.Header().Get("Content-Type"))
 	}
@@ -624,5 +629,22 @@ func TestTreeScopeGuardsChannelMutations(t *testing.T) {
 	if configurator.created != 1 || configurator.deleted != 1 || restarted != 1 ||
 		len(channels) != 1 || channels[0].ID != "c2" {
 		t.Fatalf("allowed mutations: config=%+v restarted=%d channels=%+v", configurator, restarted, channels)
+	}
+}
+
+func TestProfileCSVRequiresExportAction(t *testing.T) {
+	handler := New(nil, time.Minute)
+	profiles := handler.Profiles.List()
+	if len(profiles) == 0 {
+		t.Fatal("no default profiles")
+	}
+	path := "/api/ems/profiles/" + profiles[0].ID + "/points.csv"
+	denied := call(t, handler, Access{}, http.MethodGet, path, "")
+	if denied.Code != http.StatusForbidden || !strings.Contains(denied.Body.String(), "export_required") {
+		t.Fatalf("profile CSV without action = %d %s", denied.Code, denied.Body.String())
+	}
+	allowed := call(t, handler, Access{Actions: map[string]bool{authz.Export: true}}, http.MethodGet, path, "")
+	if allowed.Code != http.StatusOK || !strings.Contains(allowed.Header().Get("Content-Type"), "text/csv") {
+		t.Fatalf("profile CSV with action = %d %s", allowed.Code, allowed.Header().Get("Content-Type"))
 	}
 }

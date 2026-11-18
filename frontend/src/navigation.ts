@@ -9,8 +9,7 @@ export type PageDef = {
   key: Page
   label: string
   group: Group
-  adminOnly?: boolean
-  configOnly?: boolean
+  requiredAction?: string
   // 可路由但不进一级导航：由总览、画面、报警内的链接进入（“查证”不是独立任务）。
   hidden?: boolean
 }
@@ -34,36 +33,35 @@ export const pageDefs: PageDef[] = [
   { key: "history", label: "历史", group: "run", hidden: true },
   { key: "dispatchTrace", label: "调度追溯", group: "run", hidden: true },
   { key: "health", label: "通信健康", group: "run", hidden: true },
-  { key: "deploy", label: "验收清单", group: "acceptance", configOnly: true },
-  { key: "ledger", label: "设备验证", group: "acceptance", configOnly: true },
-  { key: "channels", label: "通道", group: "access", configOnly: true },
-  { key: "points", label: "点位表", group: "access", configOnly: true },
-  { key: "aggregate", label: "聚合计算", group: "access", configOnly: true },
-  { key: "opcua", label: "OPC-UA", group: "access", configOnly: true },
-  { key: "energyUnits", label: "储能柜", group: "assets", configOnly: true },
-  { key: "unitWiring", label: "接线", group: "assets", configOnly: true },
-  { key: "resourceGroups", label: "资源集群", group: "assets", configOnly: true },
-  { key: "rules", label: "决策表", group: "strategy", configOnly: true },
-  { key: "allocators", label: "功率分配器", group: "strategy", configOnly: true },
-  { key: "users", label: "账号与权限", group: "system", adminOnly: true },
-  { key: "audit", label: "审计日志", group: "system", adminOnly: true },
+  { key: "deploy", label: "验收清单", group: "acceptance", requiredAction: "configure" },
+  { key: "ledger", label: "设备验证", group: "acceptance", requiredAction: "configure" },
+  { key: "channels", label: "通道", group: "access", requiredAction: "configure" },
+  { key: "points", label: "点位表", group: "access", requiredAction: "configure" },
+  { key: "aggregate", label: "聚合计算", group: "access", requiredAction: "configure" },
+  { key: "opcua", label: "OPC-UA", group: "access", requiredAction: "configure" },
+  { key: "energyUnits", label: "储能柜", group: "assets", requiredAction: "configure" },
+  { key: "unitWiring", label: "接线", group: "assets", requiredAction: "configure" },
+  { key: "resourceGroups", label: "资源集群", group: "assets", requiredAction: "configure" },
+  { key: "rules", label: "决策表", group: "strategy", requiredAction: "configure" },
+  { key: "allocators", label: "功率分配器", group: "strategy", requiredAction: "configure" },
+  { key: "users", label: "账号与权限", group: "system", requiredAction: "account_manage" },
+  { key: "audit", label: "审计日志", group: "system", requiredAction: "audit_view" },
 ]
 
 export const workbenchNames: Record<Workbench, string> = { customer: "客户", delivery: "交付" }
 export const workbenchFullNames: Record<Workbench, string> = { customer: "客户工作台", delivery: "交付工作台" }
 
 // 可路由页面（含隐藏页）：用于路由守卫和权限判断。
-export function visiblePagesFor(workbench: Workbench, isAdmin: boolean, canConfigure: boolean): PageDef[] {
-  if (workbench === "delivery" && !canConfigure) return []
+export function visiblePagesFor(workbench: Workbench, can: (action: string) => boolean): PageDef[] {
   return pageDefs.filter((def) => {
     const group = groupDefs.find((item) => item.key === def.group)
-    return group?.workbench === workbench && (!def.adminOnly || isAdmin) && (!def.configOnly || canConfigure)
+    return group?.workbench === workbench && (!def.requiredAction || can(def.requiredAction))
   })
 }
 
 // 一级导航与页签：隐藏页不出现，空分组不出现。
-export function navGroupsFor(workbench: Workbench, isAdmin: boolean, canConfigure: boolean): Array<GroupDef & { pages: PageDef[] }> {
-  const visible = visiblePagesFor(workbench, isAdmin, canConfigure)
+export function navGroupsFor(workbench: Workbench, can: (action: string) => boolean): Array<GroupDef & { pages: PageDef[] }> {
+  const visible = visiblePagesFor(workbench, can)
   return groupDefs
     .filter((group) => group.workbench === workbench)
     .map((group) => ({ ...group, pages: visible.filter((def) => def.group === group.key && !def.hidden) }))

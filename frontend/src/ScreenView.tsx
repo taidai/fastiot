@@ -177,6 +177,8 @@ export default function ScreenView({ token, snapshot, points, groups, alarms, is
         const value = values[node.id] ?? current?.value
         const updated = current?.time ? new Date(current.time) : null
         const stale = !updated || Date.now() - updated.getTime() > 15000
+        const disabled = (point(node, "disabled")?.value || 0) !== 0
+        const canWrite = writable(node) && canOperate && !disabled
         const tileAlarm = alarmCounts.get(node.id) || 0
         return <article className="panel screen-tile" key={node.id}>
           <div className="screen-tile-head"><strong>{config.title && tiles.length === 1 ? config.title : nameOf(node)}</strong><span className="screen-tile-badges"><span className={`screen-quality ${stale ? "stale" : ""}`}>{stale ? "数据过期" : "正常"}</span>{tileAlarm > 0 && <span className="screen-tile-alarm" title={`${tileAlarm} 项活动报警`}>报警 {tileAlarm}</span>}</span></div>
@@ -185,10 +187,11 @@ export default function ScreenView({ token, snapshot, points, groups, alarms, is
           <TileTrend token={token} nodeId={node.id} />
           <div className="screen-tile-actions">
             <button className="secondary-button" onClick={() => openHistory(node.id)}>历史</button>
-            {writable(node) && canOperate && <div className="screen-control">
+            {canWrite && <div className="screen-control">
               <input aria-label={`${nameOf(node)}目标值`} type="number" value={values[node.id] ?? current?.value ?? 0} onChange={(event) => setValues({ ...values, [node.id]: Number(event.target.value) })} />
               <button className="secondary-button" disabled={busy} onClick={() => setPendingWrite({ node, value: values[node.id] ?? current?.value ?? 0 })}>下发</button>
             </div>}
+            {writable(node) && canOperate && disabled && <span className="text-xs text-ems-muted" title="该点位已停用">已停用，不能下发</span>}
           </div>
         </article>
       })}

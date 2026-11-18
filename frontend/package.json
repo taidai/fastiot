@@ -10,6 +10,7 @@
     "check:consistency": "node consistency-check.mjs",
     "check:observations": "node observations-check.mjs",
     "check:history-gaps": "node history-gaps-check.mjs",
+    "check:capabilities": "node capabilities-check.mjs",
     "check:navigation:browser": "node navigation-browser-check.mjs",
     "check:acceptance": "node acceptance-status-check.mjs"
   },

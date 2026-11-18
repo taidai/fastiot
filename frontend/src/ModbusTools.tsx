@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react"
 import { downloadCSV, importCSV, nameOf, Node, request } from "./api"
+import { Actions } from "./capabilities"
+import { useCapabilities } from "./capabilitiesContext"
 
 type Run = (action: () => Promise<unknown>) => Promise<boolean>
 
@@ -10,6 +12,7 @@ export default function ModbusTools({ token, buses, templates, busy, run }: {
   busy: boolean
   run: Run
 }) {
+  const { can } = useCapabilities()
   const [busID, setBusID] = useState("")
   const [csvFile, setCSVFile] = useState<File | null>(null)
   const [csvResult, setCSVResult] = useState("")
@@ -62,7 +65,7 @@ export default function ModbusTools({ token, buses, templates, busy, run }: {
             setCSVReady(false)
             setCSVResult(`已导入 ${result.imported || 0} 个点位`)
           })}>确认导入</button>
-          <button type="button" className="secondary-button" disabled={busy || !bus} onClick={() => void run(() => downloadCSV(token, `/modbus/${bus.id}/io/export`))}>导出当前点表</button>
+          {can(Actions.export) && <button type="button" className="secondary-button" disabled={busy || !bus} onClick={() => void run(() => downloadCSV(token, `/modbus/${bus.id}/io/export`))}>导出当前点表</button>}
         </div>
         {csvResult && <div className="success-message">{csvResult}</div>}
       </div>

@@ -56,6 +56,8 @@ import {
   type UserAccount,
 } from "./api"
 import { groupDefs, navGroupsFor, pageDefs, visiblePagesFor, workbenchFullNames, workbenchNames, type Group, type Page, type Workbench } from "./navigation"
+import { Actions, hasAction } from "./capabilities"
+import { CapabilityProvider } from "./capabilitiesContext"
 
 const emptyDocument: Document = { table: { rows: [] }, bindings: { points: {}, actions: {} } }
 const roleNames: Record<string, string> = { admin: "管理员", implementer: "实施", operator: "操作员", viewer: "查看者" }
@@ -259,13 +261,16 @@ export default function App() {
   const [stageScale, setStageScale] = useState(() => window.innerWidth >= 1000 ? Math.min((window.innerWidth - 8) / 1632, (window.innerHeight - 8) / 1000) : 1)
 
   const policy = snapshot?.user.policy
+  const actions = useMemo(() => new Set(snapshot?.user.actions || []), [snapshot?.user.actions])
+  const can = useCallback((action: string) => hasAction(actions, action), [actions])
   const isAdminUser = !!policy?.admin
-  const canConfigureUser = isAdminUser || policy?.role === "implementer"
-  const canExportUser = isAdminUser || (policy?.actions?.length ? policy.actions.includes("export") : policy?.role === "implementer")
+  const canConfigureUser = can(Actions.configure)
+  const canExportUser = can(Actions.export)
   const visiblePages = useMemo(
-    () => visiblePagesFor(workbench, isAdminUser, canConfigureUser),
-    [workbench, isAdminUser, canConfigureUser],
+    () => visiblePagesFor(workbench, can),
+    [workbench, can],
   )
+  const deliveryAvailable = useMemo(() => visiblePagesFor("delivery", can).length > 0, [can])
   // 路由守卫：切换工作台或角色变化后，当前页若不在可见集合内，落到该工作台第一个可见页。
   useEffect(() => {
     if (visiblePages.length && !visiblePages.some((def) => def.key === page)) setPage(visiblePages[0].key)
@@ -279,15 +284,15 @@ export default function App() {
   }, [])
   useEffect(() => {
     if (!snapshot?.user.policy) return
-    if (workbench === "delivery" && !canConfigureUser) {
+    if (workbench === "delivery" && !deliveryAvailable) {
       setWorkbench("customer")
       return
     }
     if (!workbenchInitialized.current) {
       workbenchInitialized.current = true
-      if (!window.localStorage.getItem(workbenchStorageKey) && canConfigureUser) setWorkbench("delivery")
+      if (!window.localStorage.getItem(workbenchStorageKey) && deliveryAvailable) setWorkbench("delivery")
     }
-  }, [snapshot, workbench, canConfigureUser])
+  }, [snapshot, workbench, deliveryAvailable])
 
   // 跨工作台跳转：客户页里的“去配置”链接应直接切到交付工作台，而不是被路由守卫弹回原页。
   const openPage = useCallback((next: Page) => {
@@ -458,7 +463,7 @@ export default function App() {
   const view = activeSnapshot || snapshot
   const isAdmin = isAdminUser
   const canConfigure = canConfigureUser
-  const canOperate = canConfigure || view.user.policy.role === "operator"
+  const canOperate = can(Actions.writeValue) || can(Actions.command)
   const points = view.nodes.filter((node) => node.type === "variable" || node.type === "modbusIo")
   const groups = view.nodes.filter((node) => node.type === "group" || view.roots.includes(node.id))
   const rules = view.nodes.filter((node) => node.type === "decisionTable")
@@ -533,12 +538,12 @@ export default function App() {
   const stationName = labelForRoot(view.roots[0])
   const currentSite = siteNodes.find((node) => node.id === siteID)
   const currentSiteName = currentSite ? nameOf(currentSite) : stationName
-  const navGroups = navGroupsFor(workbench, isAdminUser, canConfigureUser)
+  const navGroups = navGroupsFor(workbench, can)
   const pageGroup = pageDefs.find((def) => def.key === page)?.group
   const activeGroup = navGroups.find((group) => group.key === pageGroup)
   const groupIcons: Record<Group, IconName> = { run: "home", access: "devices", assets: "battery", strategy: "sliders", acceptance: "report", system: "gear" }
 
-  return <IonApp><IonContent fullscreen><div className="console-viewport"><div className="console-shell" style={{ "--console-scale": String(stageScale) } as CSSProperties}>
+  return <CapabilityProvider actions={actions}><IonApp><IonContent fullscreen><div className="console-viewport"><div className="console-shell" style={{ "--console-scale": String(stageScale) } as CSSProperties}>
     <header className="console-topbar">
       <div className="console-brand"><img className="brand-mark" src="/zizu-brand.png" alt="" /><strong>FastIOT <small>3.0</small></strong></div>
       {snapshot.roots.length > 1
@@ -550,7 +555,7 @@ export default function App() {
         onChange={(event) => { setSiteID(event.target.value); window.localStorage.setItem("fastems-site", event.target.value) }}>
         {siteNodes.map((site) => <option key={site.id} value={site.id}>{nameOf(site)}</option>)}
       </select>}
-      {canConfigure && <div className="console-workbench" role="group" aria-label="工作台">
+      {deliveryAvailable && <div className="console-workbench" role="group" aria-label="工作台">
         {(["customer", "delivery"] as Workbench[]).map((key) => (
           <button key={key} className={workbench === key ? "active" : ""} aria-pressed={workbench === key} title={workbenchFullNames[key]} onClick={() => switchWorkbench(key)}>{workbenchNames[key]}</button>
         ))}
@@ -702,8 +707,8 @@ export default function App() {
           <div className="empty-state large"><strong>从第一张决策表开始</strong><span>选择多个输入条件，按顺序执行多个输出；第一行命中后停止。</span>{canConfigure && <span>点击右上方“新建决策表”。</span>}</div>}
       </section>}
 
-      {page === "users" && isAdmin && <UsersView snapshot={view} groups={groups} busy={busy} run={run} />}
-      {page === "audit" && isAdmin && <AuditView token={token} onError={setError} />}
+      {page === "users" && can(Actions.accountManage) && <UsersView snapshot={view} groups={groups} busy={busy} run={run} />}
+      {page === "audit" && can(Actions.auditView) && <AuditView token={token} onError={setError} />}
       {page === "delivery" && isAdmin && <DeliveryView token={token} />}
 
       <footer className="console-foot">
@@ -729,7 +734,7 @@ export default function App() {
       {inputsOpen && <><VirtualInputs token={token} nodes={view.nodes} /><CalculationPoints token={token} nodes={view.nodes} /></>}
     </EmsOverlay>
     {commandsOpen && <CommonCommands token={token} canOperate={canOperate} onError={setError} onClose={() => setCommandsOpen(false)} />}
-  </div></div></IonContent></IonApp>
+  </div></div></IonContent></IonApp></CapabilityProvider>
 }
 
 type Run = (action: () => Promise<unknown>) => Promise<boolean>

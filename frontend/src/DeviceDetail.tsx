@@ -6,6 +6,8 @@ import AckDialog from "./AckDialog"
 import { describeObservation, observationTimeLabel } from "./observations"
 import { useObservations } from "./useObservations"
 import type { CommandOutcome, LedgerDevice, UnitCommand, UnitModel } from "./deviceTypes"
+import { Actions } from "./capabilities"
+import { useCapabilities } from "./capabilitiesContext"
 
 type Tab = "overview" | "points" | "commands" | "history" | "alarms" | "verify"
 
@@ -41,6 +43,7 @@ export default function DeviceDetail({ token, device, canConfigure, canOperate, 
   goChannels: () => void
   goAlarms: () => void
 }) {
+  const { can } = useCapabilities()
   const base = `/modbus/${encodeURIComponent(device.channel_id)}/units/${device.server_id}`
   const deviceID = `${device.channel_id}/${device.server_id}`
   const [tab, setTab] = useState<Tab>("overview")
@@ -419,7 +422,7 @@ export default function DeviceDetail({ token, device, canConfigure, canOperate, 
 
         {!loading && tab === "verify" && <div className="device-tab-page device-verify-page">
           <section className="device-panel">
-            <div className="device-panel-head"><h3>验证清单</h3><button className="secondary-button" onClick={() => void downloadCSV(token, "/profile-verifications", "fastiot-profile-verifications.csv").catch((cause) => report(cause, "验证记录导出失败"))}>导出验证记录</button></div>
+            <div className="device-panel-head"><h3>验证清单</h3>{can(Actions.export) && <button className="secondary-button" onClick={() => void downloadCSV(token, "/profile-verifications", "fastiot-profile-verifications.csv").catch((cause) => report(cause, "验证记录导出失败"))}>导出验证记录</button>}</div>
             <div className="device-checklist">
               <Check ok={Boolean(profile)} label="Profile 已绑定" detail={profile ? `${profile.vendor} ${profile.model}` : "未绑定"} />
               <Check ok={Boolean(model?.model) && requiredMissing.length === 0} label="必填点位已映射" detail={requiredMissing.length ? `缺少 ${requiredMissing.join("、")}` : `${mappedCount} 个点位已映射`} />

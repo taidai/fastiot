@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react"
 import { createPortal } from "react-dom"
 import { ApiError, downloadCSV, nameOf, Node, point, request } from "./api"
+import { Actions } from "./capabilities"
+import { useCapabilities } from "./capabilitiesContext"
 
 type Run = (action: () => Promise<unknown>) => Promise<boolean>
 
@@ -223,6 +225,7 @@ export default function CommunicationView({ token, nodes, roots, groups, canConf
   onError: (message: string) => void
   goPoints: () => void
 }) {
+  const { can } = useCapabilities()
   const channels = useMemo(() => nodes.filter((node) => node.type === "modbus"), [nodes])
   const points = useMemo(() => nodes.filter((node) => node.type === "modbusIo"), [nodes])
   const [selectedID, setSelectedID] = useState("")
@@ -707,7 +710,7 @@ export default function CommunicationView({ token, nodes, roots, groups, canConf
               {modelNotice && <div className="success-message" role="status">{modelNotice}</div>}
               <div className="comm-modal-actions">
                 <button className="secondary-button" onClick={() => setModelUnit(null)}>取消</button>
-                {canConfigure && <button className="secondary-button" onClick={() => void downloadCSV(token, "/profile-verifications?format=csv", "fastiot-profile-verifications.csv").catch((cause) => onError(cause instanceof Error ? cause.message : "导出失败"))}>导出验证记录</button>}
+                {can(Actions.export) && <button className="secondary-button" onClick={() => void downloadCSV(token, "/profile-verifications?format=csv", "fastiot-profile-verifications.csv").catch((cause) => onError(cause instanceof Error ? cause.message : "导出失败"))}>导出验证记录</button>}
                 {canConfigure && <button className="primary-button" disabled={modelBusy || !modelDraft.profile_id} onClick={() => void saveUnitModel()}>{modelBusy ? "保存中…" : "保存设备模型"}</button>}
               </div>
             </>}

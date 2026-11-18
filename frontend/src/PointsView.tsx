@@ -7,6 +7,8 @@ import SafetyModal from "./SafetyModal"
 import { describeObservation, observationKey, observationTimeLabel } from "./observations"
 import { useObservations } from "./useObservations"
 import { BatchActionBar, EmsButton, EmsCard, EmsInput, EmsOverlay, EmsRecordList, EmsSelect, EmsSelectOption, EmptyState, FilterToolbar, InlineNotice, MetricStrip, StatusBadge, type EmsTone } from "./components/ems"
+import { Actions } from "./capabilities"
+import { useCapabilities } from "./capabilitiesContext"
 
 type Run = (action: () => Promise<unknown>) => Promise<boolean>
 
@@ -147,6 +149,7 @@ export default function PointsView({ token, nodes, isAdmin, canOperate, busy, ru
   openHistory: (nodeID: string) => void
   goChannels: () => void
 }) {
+  const { can } = useCapabilities()
   const observations = useObservations(token)
   const [query, setQuery] = useState("")
   const [busFilter, setBusFilter] = useState("")
@@ -602,7 +605,7 @@ export default function PointsView({ token, nodes, isAdmin, canOperate, busy, ru
 
       <div className="[&_.ems-batch-bar]:flex-wrap">
         <BatchActionBar count={selected.size} trailing={<>
-          <EmsButton variant="secondary" size="small" disabled={!visible.length} onClick={() => downloadCSV(selectedRows.length ? selectedRows : visible)}>导出 CSV</EmsButton>
+          {can(Actions.export) && <EmsButton variant="secondary" size="small" disabled={!visible.length} onClick={() => downloadCSV(selectedRows.length ? selectedRows : visible)}>导出 CSV</EmsButton>}
           {isAdmin && <EmsButton variant="secondary" size="small" disabled={!selected.size || busy} onClick={openBatchEdit}>批量改缩放/偏移</EmsButton>}
           {isAdmin && <EmsButton variant="secondary" size="small" disabled={!selected.size || busy} onClick={() => batchDisabled(true)}>批量停用</EmsButton>}
           {isAdmin && <EmsButton variant="secondary" size="small" disabled={!selected.size || busy} onClick={() => batchDisabled(false)}>批量启用</EmsButton>}
@@ -714,15 +717,16 @@ export default function PointsView({ token, nodes, isAdmin, canOperate, busy, ru
         {openRow.command && <InlineNotice>最近命令：{({ accepted: "已接受", confirmed: "已回读", unknown: "结果未知", failed: "失败" } as Record<string, string>)[openRow.command] || openRow.command}</InlineNotice>}
         {notice && <InlineNotice tone="success">{notice}</InlineNotice>}
 
-        {!openRow.readOnly && canOperate && <div className="grid gap-2 rounded-xl border border-ems-line bg-white/50 p-3">
+        {!openRow.readOnly && !openRow.disabled && canOperate && <div className="grid gap-2 rounded-xl border border-ems-line bg-white/50 p-3">
           <strong className="text-sm">下发目标值</strong>
           <div className="flex items-end gap-2"><EmsInput label="目标值" aria-label="目标值" type="number" step="any" value={writeValue} onIonInput={(event) => setWriteValue(Number(event.detail.value))} /><EmsButton className="shrink-0" disabled={busy} onClick={writePoint}>下发</EmsButton></div>
           <small className="text-xs text-ems-muted">{openRow.valueSet !== undefined ? `当前目标 ${openRow.valueSet}${openRow.units ? ` ${openRow.units}` : ""}` : "该点位还没有目标值"}</small>
         </div>}
+        {openRow.disabled && <InlineNotice tone="warning">点位已停用，不能下发目标值或接管自动。</InlineNotice>}
 
         <div className="flex flex-wrap gap-2">
           <EmsButton variant="secondary" size="small" onClick={() => openHistory(openRow.node.id)}>查看历史</EmsButton>
-          {canOperate && <EmsButton variant="secondary" size="small" disabled={busy} onClick={toggleManual}>{openRow.manual ? "恢复自动" : "接管自动"}</EmsButton>}
+          {canOperate && !openRow.readOnly && !openRow.disabled && <EmsButton variant="secondary" size="small" disabled={busy} onClick={toggleManual}>{openRow.manual ? "恢复自动" : "接管自动"}</EmsButton>}
           {isAdmin && !openRow.readOnly && <EmsButton variant="secondary" size="small" onClick={() => setSafetyOpen(true)}>安全约束{point(openRow.node, "easyemsSafety")?.text ? "" : " · 未配置"}</EmsButton>}
           {isAdmin && !editing && <EmsButton variant="secondary" size="small" onClick={startEdit}>编辑点位</EmsButton>}
         </div>

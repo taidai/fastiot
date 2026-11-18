@@ -318,7 +318,7 @@ func filterHistoryRecords(records []historyRecord, cursor historyCursor) []histo
 
 func (h *Handler) history(w http.ResponseWriter, r *http.Request, identity Identity, export bool) {
 	if export && !canAction(identity, ActionExport) {
-		writeError(w, http.StatusForbidden, "admin_required")
+		writeError(w, http.StatusForbidden, "export_required")
 		return
 	}
 	start, end, cursor, err := historyWindow(r)

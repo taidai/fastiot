@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"fastiot/internal/authz"
 	"fastiot/internal/calculation"
 	"github.com/simpleiot/simpleiot/client"
 	"github.com/simpleiot/simpleiot/data"
@@ -17,7 +18,7 @@ import (
 
 const calculationType = "calculationPoint"
 const calculationDocument = "calculationDocument"
-const ActionCalculationApply = "calculation_apply"
+const ActionCalculationApply = authz.CalculationApply
 
 type calculationRequest struct {
 	Parent       string                 `json:"parent"`

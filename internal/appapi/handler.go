@@ -20,6 +20,7 @@ import (
 	"github.com/simpleiot/simpleiot/data"
 
 	"fastiot/internal/audit"
+	"fastiot/internal/authz"
 	"fastiot/internal/calculation"
 	"fastiot/internal/decision"
 	"fastiot/internal/emsapi"
@@ -170,79 +171,45 @@ type AccessPolicy struct {
 }
 
 type Identity struct {
-	UserID  string       `json:"user_id"`
-	Email   string       `json:"email,omitempty"`
-	Policy  AccessPolicy `json:"policy"`
-	Anchors []string     `json:"-"`
+	UserID    string       `json:"user_id"`
+	Email     string       `json:"email,omitempty"`
+	Policy    AccessPolicy `json:"policy"`
+	Anchors   []string     `json:"-"`
+	Actions   []string     `json:"actions,omitempty"`
+	Effective authz.Set    `json:"-"`
 }
 
-// Implementers commission the station: channels, devices, points, profiles,
-// rules, screens, allocators and acceptance. Admins additionally manage users
-// and delivery. Operators only run and acknowledge within their scope.
-func canConfigure(identity Identity) bool {
-	return identity.Policy.Admin || identity.Policy.Role == "implementer"
-}
-
-func canOperateIdentity(identity Identity) bool {
-	return identity.Policy.Admin || identity.Policy.Role == "operator" || identity.Policy.Role == "implementer"
-}
-
-// Action constants. A role is only a shortcut that expands to a default action
-// set; an explicit Actions whitelist on the policy overrides the role.
+// Action constants are owned by the shared authz package. These aliases keep
+// the product API call sites readable.
 const (
-	ActionConfigure     = "configure"      // 通道/设备/点位/规则草稿/画面/分配器/聚合/报警类型/验收/模板
-	ActionWriteValue    = "write_value"    // 控制写入（含人工接管）
-	ActionCommand       = "command"        // 命令执行与通信报文诊断
-	ActionRulePublish   = "rule_publish"   // 规则发布/启用/恢复
-	ActionAlarmAck      = "alarm_ack"      // 报警确认/关闭
-	ActionAlarmMaintain = "alarm_maintain" // 报警维护/结束维护
-	ActionDelete        = "delete"         // 删除节点/通道
-	ActionExport        = "export"         // 导出点表/验证/证据/历史
-	ActionAccountManage = "account_manage" // 账号管理（创建/重置密码）
-	ActionAuditView     = "audit_view"     // 审计查看/导出
-	ActionSiteSettings  = "site_settings"  // 站点设置（电价/历史保留）
+	ActionConfigure     = authz.Configure
+	ActionWriteValue    = authz.WriteValue
+	ActionCommand       = authz.Command
+	ActionRulePublish   = authz.RulePublish
+	ActionAlarmAck      = authz.AlarmAck
+	ActionAlarmMaintain = authz.AlarmMaintain
+	ActionDelete        = authz.Delete
+	ActionExport        = authz.Export
+	ActionAccountManage = authz.AccountManage
+	ActionAuditView     = authz.AuditView
+	ActionSiteSettings  = authz.SiteSettings
 )
 
 // allActions is the canonical action list, exposed to the frontend and reused
 // to build the resolved capability set passed to the EMS API.
-var allActions = []string{
-	ActionConfigure, ActionWriteValue, ActionCommand, ActionRulePublish,
-	ActionAlarmAck, ActionAlarmMaintain, ActionDelete, ActionExport,
-	ActionAccountManage, ActionAuditView, ActionSiteSettings,
-	ActionVirtualInputApply, ActionVirtualInputWrite, ActionCalculationApply,
-}
+var allActions = authz.All
 
-// canAction is the single permission decision point. Admin always passes; an
-// explicit whitelist overrides the role default; otherwise the role's default
-// action set applies. Unknown actions are denied.
+// canAction is the single permission decision point. Admin always passes; the
+// resolved action set uses an explicit whitelist when present, otherwise the
+// role defaults from authz.
 func canAction(identity Identity, action string) bool {
 	if identity.Policy.Admin {
 		return true
 	}
-	if len(identity.Policy.Actions) > 0 {
-		for _, allowed := range identity.Policy.Actions {
-			if allowed == action {
-				return true
-			}
-		}
-		return false
+	if identity.Effective != nil {
+		return identity.Effective.Allowed(action)
 	}
-	return roleAllows(identity.Policy, action)
-}
-
-// roleAllows expands a role into its default action set via the two kept
-// role-default predicates, so action granularity never drifts from them.
-func roleAllows(policy AccessPolicy, action string) bool {
-	switch action {
-	case ActionConfigure, ActionRulePublish, ActionDelete, ActionExport, ActionVirtualInputApply, ActionCalculationApply:
-		return canConfigure(Identity{Policy: policy})
-	case ActionWriteValue, ActionCommand, ActionAlarmAck, ActionAlarmMaintain, ActionVirtualInputWrite:
-		return canOperateIdentity(Identity{Policy: policy})
-	case ActionAccountManage, ActionAuditView, ActionSiteSettings:
-		return policy.Admin
-	default:
-		return false
-	}
+	return authz.Resolve(false, identity.Policy.Role, identity.Policy.Actions).Allowed(action)
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -287,17 +254,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			finish := h.ems.BeginAlarmConfiguration()
 			defer finish()
 		}
-		actions := map[string]bool{}
-		for _, action := range allActions {
-			actions[action] = canAction(identity, action)
+		effective := identity.Effective
+		if effective == nil {
+			effective = authz.Resolve(identity.Policy.Admin, identity.Policy.Role, identity.Policy.Actions)
 		}
 		h.ems.ServeHTTP(w, r, emsapi.Access{
 			UserID: identity.UserID, Actor: identity.Email, Admin: identity.Policy.Admin,
-			Configure:     actions[ActionConfigure],
-			Command:       actions[ActionCommand],
-			AlarmAck:      actions[ActionAlarmAck],
-			AlarmMaintain: actions[ActionAlarmMaintain],
-			Delete:        actions[ActionDelete],
+			Configure:     effective.Allowed(authz.Configure),
+			Command:       effective.Allowed(authz.Command),
+			AlarmAck:      effective.Allowed(authz.AlarmAck),
+			AlarmMaintain: effective.Allowed(authz.AlarmMaintain),
+			Delete:        effective.Allowed(authz.Delete),
+			Export:        effective.Allowed(authz.Export),
+			Actions:       effective,
 			AllowNode:     func(id string) bool { return h.allows(identity, id) },
 		})
 		return
@@ -649,7 +618,8 @@ func (h *Handler) identityForUser(userID string) (Identity, bool) {
 			return Identity{}, false
 		}
 	}
-	return Identity{UserID: userID, Email: email, Policy: policy, Anchors: anchors}, true
+	effective := authz.Resolve(policy.Admin, policy.Role, policy.Actions)
+	return Identity{UserID: userID, Email: email, Policy: policy, Anchors: anchors, Actions: effective.List(), Effective: effective}, true
 }
 
 func (h *Handler) snapshot(w http.ResponseWriter, identity Identity) {

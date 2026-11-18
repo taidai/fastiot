@@ -1,0 +1,37 @@
+{
+  "ticket": "architecture-governance-stage-a",
+  "spec": "https://github.com/taidai/fastiot/issues/2",
+  "verified_on": "2026-11-18",
+  "base": "8efac3f16b7f9d995b76ad06aa1381ad988daec1",
+  "scope": "Stage A slice: one action vocabulary and effective action resolution, export authorization, frontend capability verdicts for navigation and export/write controls",
+  "server": {
+    "authz": "internal/authz owns action names, canonical order, role defaults and whitelist resolution",
+    "effective_actions": "The snapshot user carries the resolved actions array; explicit whitelist overrides role defaults and admin receives all actions",
+    "history_export": "Product and EMS history exports require the export action; refusal returns export_required before any CSV header",
+    "profile_csv": "EMS profile points.csv requires the export action",
+    "ems_access": "EMS API consumes the same resolved action set; legacy boolean fields remain only as an adapter for trusted internal callers"
+  },
+  "frontend": {
+    "capability": "frontend/src/capabilities.ts computes allowed/refused with action grant, disabled, read-only and server availability reasons",
+    "context": "frontend/src/capabilitiesContext.tsx lets pages consume one verdict without prop drilling",
+    "navigation": "Page definitions declare requiredAction; delivery availability follows any visible delivery page rather than role strings",
+    "exports": "History, alarms, point-table, profile verification, Modbus CSV, profile points and evidence exports are hidden without the export action",
+    "writes": "Screen disables writes on stopped points with a visible reason; point detail blocks write and manual takeover for disabled/read-only points"
+  },
+  "verification": {
+    "go_full": "go test -p 1 -count=1 ./... passed (26 packages)",
+    "frontend": ["npm run build", "check:navigation", "check:consistency", "check:observations", "check:acceptance", "check:capabilities"],
+    "browser": "Real debug backend + own dev server: viewer and operator have no workbench and no history export; an export-only viewer has the export button but no workbench; implementer has both workbenches and export; API viewer history export is 403 while the explicit export grant passes authorization"
+  },
+  "remaining_stage_a": [
+    "Declare every route's required action in one route table and apply it once at dispatch; handlers still contain their action checks",
+    "Complete target-state reasons across remaining command/config controls",
+    "Add the remaining route-level allow/deny matrix tests (channel create vs delete, frames, alarm ack/maintain)",
+    "Deduplicate the schedule polling and freshness work is Stage B, not this slice"
+  ],
+  "limits": [
+    "No production device connection or physical write",
+    "No behavior change to role defaults beyond honoring an explicit action whitelist",
+    "Local debug accounts only; no credentials in evidence"
+  ]
+}

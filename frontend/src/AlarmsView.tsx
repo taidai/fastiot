@@ -5,6 +5,8 @@ import AlarmTypesPanel from "./AlarmTypesPanel"
 import AlarmStatsPanel, { AlarmSoundSettings, inSilenceWindow, loadAlarmSound, saveAlarmSound } from "./AlarmStatsPanel"
 import AckDialog from "./AckDialog"
 import { EmsButton, EmsCard, EmsInput, EmsOverlay, EmsSelect, EmsSelectOption, EmptyState, FilterToolbar, InlineNotice, MetricStrip, SegmentedTabs, StatusBadge, type EmsTone } from "./components/ems"
+import { Actions } from "./capabilities"
+import { useCapabilities } from "./capabilitiesContext"
 
 const severityNames: Record<string, string> = { critical: "严重", warning: "重要", info: "提示" }
 const stateNames: Record<string, string> = {
@@ -35,6 +37,7 @@ export default function AlarmsView({ token, rootID, nodes, alarms, loading, quer
   onError: (message: string) => void
   openHistory: (pointId: string) => void
 }) {
+  const { can } = useCapabilities()
   const [tab, setTab] = useState<"records" | "types" | "stats">("records")
   const [filter, setFilter] = useState<"active" | "all">("active")
   const [busyId, setBusyId] = useState("")
@@ -270,7 +273,7 @@ export default function AlarmsView({ token, rootID, nodes, alarms, loading, quer
           { label: "已恢复待关闭", value: ready ? resolved.length : "—" },
           { label: "维护中", value: ready ? maintained.length : "—", tone: maintained.length ? "warning" : "neutral" },
         ]} />
-        <FilterToolbar trailing={<EmsButton variant="secondary" size="small" onClick={exportAlarms}>导出 CSV</EmsButton>}>
+        <FilterToolbar trailing={can(Actions.export) ? <EmsButton variant="secondary" size="small" onClick={exportAlarms}>导出 CSV</EmsButton> : undefined}>
           <SegmentedTabs value={filter} onChange={setFilter} ariaLabel="报警记录筛选" options={[
             { value: "active", label: "只看需要处理" },
             { value: "all", label: "全部记录" },

@@ -75,7 +75,7 @@ export type Document = {
   scenarios?: Scenario[]
 }
 export type Snapshot = {
-  user: { user_id: string; email?: string; policy: { admin: boolean; role: string; actions?: string[] } }
+  user: { user_id: string; email?: string; policy: { admin: boolean; role: string; actions?: string[] }; actions?: string[] }
   roots: string[]
   nodes: Node[]
   session_timeout_seconds?: number
@@ -138,6 +138,7 @@ const errorTexts: Record<string, string> = {
   invalid_input_document: "输入存储内容不可用，请联系工程人员核查",
   virtual_input_rollback_unsupported: "项目含虚拟输入，暂不支持项目版本回退；未执行写入",
   history_export_limit_exceeded: "完整导出超过 10000 条上限，请缩小点位或时间范围后重试",
+  export_required: "当前账号没有导出权限",
   admin_required: "需要管理员权限",
   forbidden: "当前账号无权执行此操作",
   not_found: "对象不存在或已删除",

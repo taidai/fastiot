@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { ApiError, downloadCSV, request } from "./api"
+import { Actions } from "./capabilities"
+import { useCapabilities } from "./capabilitiesContext"
 import DeployWizard from "./DeployWizard"
 
 type RuntimeInfo = {
@@ -101,6 +103,7 @@ function messageOf(cause: unknown) {
 }
 
 export default function DeployView({ token, isAdmin, goDelivery, embedded = false }: { token: string; isAdmin: boolean; goDelivery: () => void; embedded?: boolean }) {
+  const { can } = useCapabilities()
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null)
   const [profiles, setProfiles] = useState<Profile[]>([])
   const [channels, setChannels] = useState<EmsChannel[]>([])
@@ -374,7 +377,7 @@ export default function DeployView({ token, isAdmin, goDelivery, embedded = fals
           <div className="deploy-actions">
             <button className="secondary-button" disabled={busy === "latest"} onClick={() => void loadLatest()}>{busy === "latest" ? "读取中…" : "读取最近"}</button>
             <button className="secondary-button" onClick={goDelivery}>交付检查</button>
-            <button className="secondary-button" disabled={!isAdmin || busy === "evidence"} onClick={() => void exportEvidence()}>{busy === "evidence" ? "导出中…" : "导出证据包"}</button>
+            {can(Actions.export) && <button className="secondary-button" disabled={busy === "evidence"} onClick={() => void exportEvidence()}>{busy === "evidence" ? "导出中…" : "导出证据包"}</button>}
             <button className="primary-button" disabled={!isAdmin || busy === "acceptance"} onClick={() => void runAcceptance()}>{busy === "acceptance" ? "检查中…" : "运行验收"}</button>
           </div>
         </div>
@@ -438,14 +441,14 @@ export default function DeployView({ token, isAdmin, goDelivery, embedded = fals
         {selectedProfile.verification && <p>{selectedProfile.verification}</p>}
         {selectedProfile.identity_hint && <p>识别：{selectedProfile.identity_hint}</p>}
         {selectedProfile.source && <p>来源：{selectedProfile.source}</p>}
-        <button className="secondary-button" disabled={busy === "profile-csv"} onClick={() => void downloadProfilePoints()}>{busy === "profile-csv" ? "下载中…" : "下载 Profile 点表"}</button>
+        {can(Actions.export) && <button className="secondary-button" disabled={busy === "profile-csv"} onClick={() => void downloadProfilePoints()}>{busy === "profile-csv" ? "下载中…" : "下载 Profile 点表"}</button>}
       </div>}
     </article>
 
     <article className="panel deploy-card">
       <div className="deploy-card-head">
         <div><span className="section-kicker">先看差异，确认后才应用</span><h2>点表校验</h2></div>
-        <button className="secondary-button" disabled={!channelID || busy === "export"} onClick={() => void exportPoints()}>导出当前点表</button>
+        {can(Actions.export) && <button className="secondary-button" disabled={!channelID || busy === "export"} onClick={() => void exportPoints()}>导出当前点表</button>}
       </div>
       {channels.length === 0 ? <p className="inline-note">还没有持久化通道。先在工作台接入 Modbus，或在通道页确认节点已生成。</p> : <>
         <div className="point-table-tools">

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"fastiot/internal/authz"
 	"fastiot/internal/contract"
 	"fastiot/internal/ems/alarm"
 	"fastiot/internal/ems/bridge"
@@ -38,12 +39,39 @@ type Access struct {
 	AlarmAck      bool
 	AlarmMaintain bool
 	Delete        bool
+	Export        bool
+	// Actions is the resolved action set from the product API. When nil the
+	// legacy boolean fields above keep trusted internal callers working.
+	Actions map[string]bool
 	// AllowNode restricts this request to visible product tree nodes. Nil keeps
 	// the trusted internal behavior used by direct callers and tests.
 	AllowNode func(string) bool
 }
 
-func (a Access) can(flag bool) bool { return a.Admin || flag }
+func (a Access) action(name string) bool {
+	if a.Admin {
+		return true
+	}
+	if a.Actions != nil {
+		return a.Actions[name]
+	}
+	switch name {
+	case authz.Configure:
+		return a.Configure
+	case authz.Command:
+		return a.Command
+	case authz.AlarmAck:
+		return a.AlarmAck
+	case authz.AlarmMaintain:
+		return a.AlarmMaintain
+	case authz.Delete:
+		return a.Delete
+	case authz.Export:
+		return a.Export
+	default:
+		return false
+	}
+}
 
 func (a Access) allows(id string) bool {
 	return a.AllowNode == nil || a.AllowNode(id)
@@ -155,7 +183,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, access Acces
 	case path == "profiles" && r.Method == http.MethodGet:
 		h.profiles(w)
 	case len(parts) == 3 && parts[0] == "profiles" && parts[2] == "points.csv" && r.Method == http.MethodGet:
-		h.profileCSV(w, r, parts[1])
+		h.profileCSV(w, r, access, parts[1])
 	case path == "allocation/preview" && r.Method == http.MethodPost:
 		h.allocationPreview(w, r, access)
 	case path == "acceptance/run" && r.Method == http.MethodPost:
@@ -339,7 +367,7 @@ func (h *Handler) channels(w http.ResponseWriter, access Access) {
 }
 
 func (h *Handler) restartChannel(w http.ResponseWriter, access Access, id string) {
-	if !access.can(access.Configure) {
+	if !access.action(authz.Configure) {
 		writeError(w, http.StatusForbidden, "admin_required")
 		return
 	}
@@ -410,7 +438,7 @@ type ChannelInput struct {
 }
 
 func (h *Handler) createChannel(w http.ResponseWriter, r *http.Request, access Access) {
-	if !access.can(access.Configure) {
+	if !access.action(authz.Configure) {
 		writeError(w, http.StatusForbidden, "admin_required")
 		return
 	}
@@ -465,7 +493,7 @@ func convertPoint(input PointInput) (channel.Point, error) {
 }
 
 func (h *Handler) deleteChannel(w http.ResponseWriter, access Access, id string) {
-	if !access.can(access.Delete) {
+	if !access.action(authz.Delete) {
 		writeError(w, http.StatusForbidden, "admin_required")
 		return
 	}
@@ -507,7 +535,7 @@ type IdentifyInput struct {
 }
 
 func (h *Handler) scan(w http.ResponseWriter, r *http.Request, access Access) {
-	if !access.can(access.Configure) {
+	if !access.action(authz.Configure) {
 		writeError(w, http.StatusForbidden, "admin_required")
 		return
 	}
@@ -586,7 +614,7 @@ func (h *Handler) scan(w http.ResponseWriter, r *http.Request, access Access) {
 }
 
 func (h *Handler) identify(w http.ResponseWriter, r *http.Request, access Access) {
-	if !access.can(access.Configure) {
+	if !access.action(authz.Configure) {
 		writeError(w, http.StatusForbidden, "admin_required")
 		return
 	}
@@ -680,7 +708,11 @@ func (h *Handler) profiles(w http.ResponseWriter) {
 	writeJSON(w, map[string]any{"profiles": list})
 }
 
-func (h *Handler) profileCSV(w http.ResponseWriter, r *http.Request, id string) {
+func (h *Handler) profileCSV(w http.ResponseWriter, r *http.Request, access Access, id string) {
+	if !access.action(authz.Export) {
+		writeError(w, http.StatusForbidden, "export_required")
+		return
+	}
 	if h.Profiles == nil {
 		writeError(w, http.StatusNotImplemented, "not_implemented")
 		return
@@ -893,7 +925,7 @@ func (h *Handler) alarms(w http.ResponseWriter, r *http.Request, access Access) 
 	for _, value := range h.Service.Alarms.List() {
 		location := locateAlarm(value, configs)
 		if alarmLocationVisible(access, location) && (state != "active" || value.Active) {
-			visible = append(visible, alarmView{value, location, map[string]bool{"ack": access.can(access.AlarmAck), "maintain": access.can(access.AlarmMaintain)}})
+			visible = append(visible, alarmView{value, location, map[string]bool{"ack": access.action(authz.AlarmAck), "maintain": access.action(authz.AlarmMaintain)}})
 		}
 	}
 	ids := map[string]bool{}
@@ -917,7 +949,7 @@ func (h *Handler) alarmEvidenceConfirmed(w http.ResponseWriter) bool {
 }
 
 func (h *Handler) ackAlarm(w http.ResponseWriter, r *http.Request, access Access, id string) {
-	if !access.can(access.AlarmAck) {
+	if !access.action(authz.AlarmAck) {
 		writeError(w, http.StatusForbidden, "operator_required")
 		return
 	}
@@ -944,7 +976,7 @@ func (h *Handler) ackAlarm(w http.ResponseWriter, r *http.Request, access Access
 }
 
 func (h *Handler) closeAlarm(w http.ResponseWriter, access Access, id string) {
-	if !access.can(access.AlarmAck) {
+	if !access.action(authz.AlarmAck) {
 		writeError(w, http.StatusForbidden, "operator_required")
 		return
 	}
@@ -971,6 +1003,10 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request, access Access,
 	}
 	if !access.allows(pointID) {
 		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	if export && !access.action(authz.Export) {
+		writeError(w, http.StatusForbidden, "export_required")
 		return
 	}
 	start, err := parseTime(r.URL.Query().Get("start"))
@@ -1049,7 +1085,7 @@ func writeError(w http.ResponseWriter, status int, message string) {
 }
 
 func (h *Handler) frames(w http.ResponseWriter, r *http.Request, access Access) {
-	if !access.can(access.Command) {
+	if !access.action(authz.Command) {
 		writeError(w, http.StatusForbidden, "operator_required")
 		return
 	}
@@ -1071,7 +1107,7 @@ func (h *Handler) frames(w http.ResponseWriter, r *http.Request, access Access) 
 }
 
 func (h *Handler) clearFrames(w http.ResponseWriter, access Access) {
-	if !access.can(access.Command) {
+	if !access.action(authz.Command) {
 		writeError(w, http.StatusForbidden, "operator_required")
 		return
 	}
@@ -1160,7 +1196,7 @@ func (h *Handler) QualityReport() ([]contract.QualityStats, []contract.QualitySt
 }
 
 func (h *Handler) maintainAlarm(w http.ResponseWriter, r *http.Request, access Access, id string) {
-	if !access.can(access.AlarmMaintain) {
+	if !access.action(authz.AlarmMaintain) {
 		writeError(w, http.StatusForbidden, "operator_required")
 		return
 	}
@@ -1192,7 +1228,7 @@ func (h *Handler) maintainAlarm(w http.ResponseWriter, r *http.Request, access A
 }
 
 func (h *Handler) releaseAlarm(w http.ResponseWriter, access Access, id string) {
-	if !access.can(access.AlarmMaintain) {
+	if !access.action(authz.AlarmMaintain) {
 		writeError(w, http.StatusForbidden, "operator_required")
 		return
 	}

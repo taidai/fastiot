@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"fastiot/internal/authz"
 	"fastiot/internal/virtualinput"
 	"github.com/simpleiot/simpleiot/client"
 	"github.com/simpleiot/simpleiot/data"
@@ -17,8 +18,8 @@ import (
 
 const virtualInputType = "virtualInput"
 const virtualInputDocument = "virtualInputDocument"
-const ActionVirtualInputApply = "virtual_input_apply"
-const ActionVirtualInputWrite = "virtual_input_write"
+const ActionVirtualInputApply = authz.VirtualInputApply
+const ActionVirtualInputWrite = authz.VirtualInputWrite
 
 type virtualInputRequest struct {
 	Parent       string                  `json:"parent"`
