@@ -58,6 +58,83 @@ func TestRejectedObservationDoesNotRepublishOrRefreshHistory(t *testing.T) {
 	}
 }
 
+func TestHistoryRecordsFailedAttemptsWithReason(t *testing.T) {
+	service := NewService(nil, time.Minute, time.Second, 100)
+	defer service.Close()
+	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	service.Observe(now, []channel.Result{{DeviceID: "d1", PointID: "temp", Value: signal.Num(37), Quality: signal.Good, SourceTime: now.Add(-time.Second), Unit: "C"}})
+	failure := func(reason string) channel.Result {
+		return channel.Result{DeviceID: "d1", PointID: "temp", Quality: signal.Invalid, Error: reason}
+	}
+	service.Observe(now.Add(time.Second), []channel.Result{failure("timeout")})
+	service.Observe(now.Add(2*time.Second), []channel.Result{failure("timeout")})
+	events := service.History.QueryEvents("d1", "temp", time.Time{}, time.Time{}, 10)
+	if len(events) != 1 {
+		t.Fatalf("repeated failure reason was recorded %d times: %+v", len(events), events)
+	}
+	event := events[0]
+	if event.Kind != "quality_event" || event.Reason != "timeout" || event.Quality != signal.Invalid || event.TimeSource != "attempt" || !event.SourceTime.Equal(now.Add(time.Second)) {
+		t.Fatalf("failure event = %+v", event)
+	}
+	service.Observe(now.Add(3*time.Second), []channel.Result{failure("crc")})
+	if events = service.History.QueryEvents("d1", "temp", time.Time{}, time.Time{}, 10); len(events) != 2 || events[1].Reason != "crc" {
+		t.Fatalf("changed failure reason = %+v", events)
+	}
+	if got := service.History.Query("d1", "temp", time.Time{}, time.Time{}, 10); len(got) != 1 || got[0].Value.Num != 37 {
+		t.Fatalf("failed attempts entered observations: %+v", got)
+	}
+}
+
+func TestLateObservationIsRecordedWithoutRollingBackState(t *testing.T) {
+	service := NewService(nil, time.Minute, time.Second, 100)
+	defer service.Close()
+	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	var captures []state.Capture
+	service.OnObservations = func(snapshot state.Capture) { captures = append(captures, snapshot) }
+	published := 0
+	service.OnResults = func(_ string, results []channel.Result) { published += len(results) }
+	service.Observe(now, []channel.Result{{DeviceID: "d1", PointID: "temp", Value: signal.Num(38), Quality: signal.Good, SourceTime: now, Unit: "C"}})
+	service.Observe(now.Add(time.Second), []channel.Result{{DeviceID: "d1", PointID: "temp", Value: signal.Num(12), Quality: signal.Good, SourceTime: now.Add(-30 * time.Second), Unit: "C"}})
+
+	if published != 1 {
+		t.Fatalf("late observation was republished to rules or callers: %d", published)
+	}
+
+	if got := service.History.Query("d1", "temp", time.Time{}, time.Time{}, 10); len(got) != 1 || got[0].Value.Num != 38 {
+		t.Fatalf("late observation replaced the current series: %+v", got)
+	}
+	events := service.History.QueryEvents("d1", "temp", time.Time{}, time.Time{}, 10)
+	if len(events) != 1 || events[0].Kind != "observation" || !events[0].Late || events[0].Value.Num != 12 || !events[0].SourceTime.Equal(now.Add(-30*time.Second)) || !events[0].ReceivedTime.Equal(now.Add(time.Second)) {
+		t.Fatalf("late event = %+v", events)
+	}
+	value, _ := service.State.Get(now.Add(time.Second), "d1", "temp", time.Minute)
+	if value.Value.Num != 38 || !value.SourceTime.Equal(now) {
+		t.Fatalf("late observation changed current state: %+v", value)
+	}
+	if len(captures) != 2 || captures[1].Values[0].Value.Num != 38 {
+		t.Fatalf("late observation changed the evaluation capture: %+v", captures)
+	}
+}
+
+func TestStalenessTransitionRecordsExpiryEventOnce(t *testing.T) {
+	service := NewService(nil, 5*time.Second, time.Second, 100)
+	defer service.Close()
+	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	service.Observe(now, []channel.Result{{DeviceID: "d1", PointID: "temp", Value: signal.Num(37), Quality: signal.Good, SourceTime: now, Unit: "C"}})
+	service.SweepStaleness(now.Add(6 * time.Second))
+	service.SweepStaleness(now.Add(7 * time.Second))
+	events := service.History.QueryEvents("d1", "temp", time.Time{}, time.Time{}, 10)
+	if len(events) != 1 || events[0].Quality != signal.Stale || events[0].Reason != "source_expired" || events[0].TimeSource != "expiry" {
+		t.Fatalf("expiry event = %+v", events)
+	}
+	service.Observe(now.Add(8*time.Second), []channel.Result{{DeviceID: "d1", PointID: "temp", Value: signal.Num(38), Quality: signal.Good, SourceTime: now.Add(8 * time.Second), Unit: "C"}})
+	service.SweepStaleness(now.Add(14 * time.Second))
+	events = service.History.QueryEvents("d1", "temp", time.Time{}, time.Time{}, 10)
+	if len(events) != 2 || !events[1].SourceTime.Equal(now.Add(14*time.Second)) {
+		t.Fatalf("second expiry transition = %+v", events)
+	}
+}
+
 func TestServicePollsAndRecordsHistory(t *testing.T) {
 	bus := &fakeBus{coils: map[uint16]bool{}, holding: map[uint16]uint16{10: 351}, fail: map[byte]bool{}}
 	service := NewService(nil, 5*time.Second, 3*time.Second, 100)

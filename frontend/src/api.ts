@@ -280,10 +280,11 @@ export type HistoryResponse = { node_id: string; type: string; points: Point[] }
 export type HistoryRecord = {
   point_id: string; device_id?: string; source_time?: string; received_time?: string; bucket_end?: string
   quality?: string; value?: number; text?: string; source: string; unit?: string; config_stamp?: string; sample_count?: number; aggregate?: string
+  kind?: "observation" | "quality_event"; reason?: string; late?: boolean; time_source?: string
 }
 export type HistoryPointResult = {
   node_id: string; device_id?: string; source: string; records: HistoryRecord[]
-  matched: number; returned: number; truncated: boolean; next_before?: string; next_before_count?: number
+  matched: number; returned: number; truncated: boolean; next_before?: string; next_before_count?: number; sample_interval_ms?: number
 }
 export type HistoryQueryResponse = { results: HistoryPointResult[]; start?: string; end?: string; aggregate?: string; total_matched: number }
 
@@ -336,17 +337,6 @@ export type EmsHistorySample = {
 
 export async function fetchEmsState(token: string, signal?: AbortSignal) {
   return request<{ values: EmsStateValue[]; evaluated_at: string }>(token, "/ems/state", "GET", undefined, signal)
-}
-
-export async function fetchEmsHistory(token: string, deviceId: string, pointId: string, start: Date, end: Date) {
-  const query = new URLSearchParams({
-    device_id: deviceId,
-    point_id: pointId,
-    start: start.toISOString(),
-    end: end.toISOString(),
-    limit: "5000",
-  })
-  return request<{ device_id: string; point_id: string; samples: EmsHistorySample[] }>(token, `/ems/history?${query.toString()}`)
 }
 
 export type ScreenConfig = {

@@ -1,0 +1,79 @@
+{
+  "ticket": "07-history-quality-gaps",
+  "verified_on": "2026-11-18",
+  "base": "8a17e217a1bbbe13f4ac8e4ca5a024d10c948de3",
+  "branch": "feat/ticket07-history-quality-gaps",
+  "scope": "History trend distinguishes valid observations, known gaps, invalid samples and last valid value from the same query, including late samples without rolling back current state",
+  "environment": "Isolated loopback-only software fixture. A/B Modbus runtime points with declared poll_period 1000 ms and synthetic observations; one SIOT variable with history but no declared cadence; no hardware and zero protocol writes.",
+  "dataset": {
+    "window": "1 hour ending at query time; [start,end] both endpoints included",
+    "A": "600 good observations, one source_expired event, one timeout event, recovery observations, and one late good sample observed at 11:49:19 but received at 12:07:39",
+    "B": "continuous good observations used as the normal control",
+    "siot": "three native value points with no recorded quality and no declared sample interval"
+  },
+  "browser_journey": {
+    "gap_rendering": "A's outage is drawn as a gap band with known reasons 采样过期/读取超时; a later boundary interval is labeled 原因未知（无质量记录）. B stays a continuous line. Gap list attributes each interval to A or B.",
+    "observed_counts": {"polylines": 3, "gap_bands": 6, "quality_event_marks": 2, "late_dots": 1},
+    "last_valid": "Header shows A 239C with original time 2026/11/18 12:07:39 and states 最后有效观测…非当前正常值; legend repeats 最后有效值，非当前.",
+    "late_sample": "Hovering the late marker reports 值 150C, 观测 11:49:19, 接收于 12:07:39, 未参与当时实时控制. The late sample is an isolated dot and does not bridge the outage.",
+    "keyboard_mouse": "Chart is focusable; ArrowLeft/ArrowRight/Home/End move the readout across samples and events; mouse hover selects the exact marker (including quality events and late samples).",
+    "quality_summary": "Derived from the same query records: 3402 normal, 2 quality events; no separate /ems/state or /ems/history query is used.",
+    "siot": "No gap bands are drawn for the undeclared-cadence variable; the line is dashed, the note says 不推断缺口, and the summary labels 3 records as 质量未记录 rather than good.",
+    "empty": "A configured-only point with no observations shows 所选范围内没有样本 and 无有效观测; it is not shown as zero.",
+    "failure": "Injected 503 shows 查询失败 and 本次查询未成功，不能将无结果视为无数据; no empty-state claim is displayed.",
+    "loading": "Delayed response shows 正在读取历史… before results.",
+    "aggregate": "5m mode keeps quality events as events, aggregates only good numeric observations, and splits on missing buckets rather than every bucket.",
+    "responsive": {"desktop": {"width": 1280, "scroll_width": 1280}, "mobile": {"width": 375, "scroll_width": 375}},
+    "screenshots": ["evidence/ticket07-history-gaps-desktop.jpg", "evidence/ticket07-history-gaps-mobile.jpg"]
+  },
+  "backend_semantics": {
+    "declared_interval": "historyPointResult.sample_interval_ms comes from BusConfig.Period (1000 ms); SIOT returns 0.",
+    "quality_events": "First failure or changed reason is recorded once as kind=quality_event with attempt time, no value and the actual reason. Expiry transition records source_expired once per Good→Stale transition.",
+    "late": "A strictly older valid observation is recorded with its true source time, received time and late=true; it is not accepted into current state and is not republished.",
+    "storage": "Events live in a separate per-point store, so /ems/history and demand calculations still see observations only; observations and events each keep their own bounded history.",
+    "csv": "Export keeps the task06 column order and appends 种类/原因 so quality events and late observations remain explainable; the 10000-row refusal still happens before any CSV header.",
+    "siot": "Native history has no quality or cadence; records keep quality empty and never claim good."
+  },
+  "review_fix_pass": {
+    "method": "One fresh-context parallel Standards/Spec review, followed by one verified fix pass",
+    "standards_findings": 10,
+    "spec_findings": 7,
+    "fixed": [
+      {"issue": "Late marker rendered white-on-white", "proof": "Marker now uses the series stroke; browser computed stroke rgb(192,122,31)"},
+      {"issue": "Late samples could bridge a known invalid interval", "proof": "history-gaps check outage case: late sample stays an isolated dot; segments each length 1"},
+      {"issue": "Gap bands had no point attribution", "proof": "Gap list names A or B; browser list separates A known gap from B continuous control"},
+      {"issue": "Only quality events showed no reason list", "proof": "Events-only branch renders time, quality and localized reason"},
+      {"issue": "SIOT undeclared cadence looked like a continuous normal line", "proof": "Undeclared series draw dashed and are labeled 质量未记录; no inferred gap"},
+      {"issue": "Failure dedupe could suppress a real reason change", "proof": "Dedupe now compares against the last recorded event reason"},
+      {"issue": "Duplicated store and record mapping code", "proof": "appendBounded and historySampleRecord helpers"},
+      {"issue": "Hard-coded source_expired in runtime", "proof": "state.ReasonSourceExpired shared constant"},
+      {"issue": "Test-only EventLen API and unused test parameter", "proof": "Removed; assertions use QueryEvents"},
+      {"issue": "Bus fixture duplicated for a custom period", "proof": "createBusPeriod helper added and reused"}
+    ],
+    "rejected": [
+      {"finding": "CSV 种类/原因 columns are task06 scope creep", "reason": "Ticket 07 explicitly allows necessary field pass-through; without reasons the exported invalid rows would be unexplained"},
+      {"finding": "Quality events in a dead point can exhaust history capacity", "reason": "Approved transition-only recording bounds events to failure-reason changes, and events have a separate per-point cap"}
+    ],
+    "deferred_minors": ["A/B boundary gaps repeat once per series; they are attributed and intentional"]
+  },
+  "verification": {
+    "go_full": "go test -p 1 -count=1 ./... passed after the fix pass",
+    "frontend": ["npm --prefix frontend run build", "check:observations", "check:navigation", "check:consistency", "check:acceptance", "check:history-gaps"],
+    "frontend_result": "passed; existing Vite >500 kB chunk-size warning remains",
+    "suite_note": "Go packages run serially because existing integration fixtures share fixed ports"
+  },
+  "limits": [
+    "Single Go service; no new time-series database",
+    "Isolated software simulator only; simulator is not hardware and no M5 sign-off is claimed",
+    "No production device connection, physical write or control bypass",
+    "No retention/cleanup policy, backfill, recalculation, settlement or ticket08 work",
+    "Native SIOT history without declared cadence does not infer gaps; only actual samples and explicit events are shown",
+    "No push, GitHub issue or PR"
+  ],
+  "preservation": {
+    "backup": ".scratch/task03-premerge-r26evcnm",
+    "stash": "1816cdbed35c43a05e1da30d9419de49eaec3ce7",
+    "policy": "Keep all original assets and backups; do not apply, pop or drop preserved unfinished work",
+    "not_committed": [".tmp-build", ".scratch", ".claude/launch.json temporary profiles", "unrelated user assets"]
+  }
+}

@@ -34,6 +34,7 @@ type Service struct {
 	channels map[string]*channel.Channel
 	cancels  map[string]context.CancelFunc
 	commands *command.Manager
+	stale    map[state.Key]bool
 	// extra maps runtime device IDs of non-Modbus adapters (OPC-UA, MQTT) to
 	// their dispatcher. It is consulted before channel routing.
 	extra  map[string]command.Dispatcher
@@ -51,6 +52,7 @@ func NewService(profiles func(string) (device.Profile, bool), maxAge, commandTim
 		channels: make(map[string]*channel.Channel),
 		cancels:  make(map[string]context.CancelFunc),
 		extra:    make(map[string]command.Dispatcher),
+		stale:    make(map[state.Key]bool),
 	}
 	if profiles == nil {
 		profiles = func(string) (device.Profile, bool) { return device.Profile{}, false }
@@ -118,8 +120,10 @@ func (s *Service) Observe(now time.Time, results []channel.Result) {
 		return
 	}
 	s.observationMu.Lock()
-	accepted := s.State.Apply(now, results)
+	accepted, events := s.State.ApplyDetailed(now, results)
+	s.clearStale(accepted)
 	s.History.Record(toHistory(now, accepted))
+	s.History.RecordEvents(toHistoryEvents(now, events))
 	if s.OnObservations != nil {
 		s.OnObservations(s.State.Capture(func() time.Time { return now }, s.MaxAge))
 	}
@@ -198,6 +202,7 @@ func (s *Service) Run(ctx context.Context) error {
 			now := time.Now()
 			s.commands.Tick(now)
 			s.updateCommandAlarms(now)
+			s.SweepStaleness(now)
 		}
 	}
 }
@@ -235,8 +240,10 @@ func (s *Service) runChannel(ctx context.Context, ch *channel.Channel, period ti
 				return
 			}
 			received := time.Now()
-			accepted := s.State.Apply(received, results)
+			accepted, events := s.State.ApplyDetailed(received, results)
+			s.clearStale(accepted)
 			s.History.Record(toHistory(received, accepted))
+			s.History.RecordEvents(toHistoryEvents(received, events))
 			for _, entry := range ch.Devices {
 				s.State.SetHealth(entry.ID, ch.Health(entry.ID, now, s.MaxAge), now)
 			}
@@ -296,9 +303,68 @@ func toHistory(received time.Time, results []channel.Result) []history.Sample {
 			Value: result.Value, Quality: result.Quality,
 			SourceTime: result.SourceTime, ReceivedTime: received,
 			Unit: result.Unit, ConfigStamp: result.ConfigStamp, TimeSource: result.TimeSource,
+			Kind: history.KindObservation,
 		})
 	}
 	return samples
+}
+
+func toHistoryEvents(received time.Time, events []state.Event) []history.Sample {
+	samples := make([]history.Sample, 0, len(events))
+	for _, event := range events {
+		result := event.Result
+		if event.Kind == state.EventLate {
+			samples = append(samples, history.Sample{
+				DeviceID: result.DeviceID, PointID: result.PointID,
+				Value: result.Value, Quality: result.Quality,
+				SourceTime: result.SourceTime, ReceivedTime: received,
+				Unit: result.Unit, ConfigStamp: result.ConfigStamp, TimeSource: result.TimeSource,
+				Kind: history.KindObservation, Reason: history.ReasonLate, Late: true,
+			})
+			continue
+		}
+		quality := result.Quality
+		if quality == signal.Good {
+			quality = signal.Invalid
+		}
+		samples = append(samples, history.Sample{
+			DeviceID: result.DeviceID, PointID: result.PointID,
+			Quality: quality, Reason: event.Reason,
+			SourceTime: event.At, ReceivedTime: received, TimeSource: "attempt",
+			Kind: history.KindQualityEvent,
+		})
+	}
+	return samples
+}
+
+func (s *Service) clearStale(accepted []channel.Result) {
+	for _, result := range accepted {
+		delete(s.stale, state.Key{DeviceID: result.DeviceID, PointID: result.PointID})
+	}
+}
+
+// SweepStaleness records one quality event when a point crosses into expiry.
+func (s *Service) SweepStaleness(now time.Time) {
+	if s.State == nil || s.History == nil {
+		return
+	}
+	s.observationMu.Lock()
+	defer s.observationMu.Unlock()
+	events := []history.Sample{}
+	for _, value := range s.State.Snapshot(now, s.MaxAge) {
+		key := state.Key{DeviceID: value.DeviceID, PointID: value.PointID}
+		stale := value.Quality == signal.Stale && value.Reason == state.ReasonSourceExpired
+		if stale && !s.stale[key] {
+			events = append(events, history.Sample{
+				DeviceID: value.DeviceID, PointID: value.PointID,
+				Quality: signal.Stale, Reason: state.ReasonSourceExpired,
+				SourceTime: now, ReceivedTime: now, TimeSource: "expiry",
+				Kind: history.KindQualityEvent,
+			})
+		}
+		s.stale[key] = stale
+	}
+	s.History.RecordEvents(events)
 }
 
 type serviceDispatcher struct{ service *Service }

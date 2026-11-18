@@ -11,6 +11,14 @@ import (
 	"fastiot/internal/ems/signal"
 )
 
+// Sample kinds and the late-sample reason shared by runtime and history
+// callers. An empty Kind is treated as an observation by older callers.
+const (
+	KindObservation  = "observation"
+	KindQualityEvent = "quality_event"
+	ReasonLate       = "late_observation"
+)
+
 // Sample is one recorded reading.
 type Sample struct {
 	DeviceID     string         `json:"device_id"`
@@ -22,6 +30,9 @@ type Sample struct {
 	Unit         string         `json:"unit,omitempty"`
 	ConfigStamp  string         `json:"config_stamp,omitempty"`
 	TimeSource   string         `json:"time_source,omitempty"`
+	Kind         string         `json:"kind,omitempty"`
+	Reason       string         `json:"reason,omitempty"`
+	Late         bool           `json:"late,omitempty"`
 }
 
 // Store keeps the newest Limit samples per point.
@@ -29,6 +40,7 @@ type Store struct {
 	Limit  int
 	mu     sync.RWMutex
 	points map[string][]Sample
+	events map[string][]Sample
 }
 
 // New returns a store with a per-point cap.
@@ -36,7 +48,7 @@ func New(limit int) *Store {
 	if limit <= 0 {
 		limit = 10000
 	}
-	return &Store{Limit: limit, points: make(map[string][]Sample)}
+	return &Store{Limit: limit, points: make(map[string][]Sample), events: make(map[string][]Sample)}
 }
 
 func key(deviceID, pointID string) string { return deviceID + "\x00" + pointID }
@@ -49,10 +61,30 @@ func (s *Store) SetLimit(limit int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.Limit = limit
-	for k, list := range s.points {
-		if len(list) > limit {
-			s.points[k] = append([]Sample(nil), list[len(list)-limit:]...)
+	for _, list := range []map[string][]Sample{s.points, s.events} {
+		for k, samples := range list {
+			if len(samples) > limit {
+				list[k] = append([]Sample(nil), samples[len(samples)-limit:]...)
+			}
 		}
+	}
+}
+
+// RecordEvents appends quality or late events without mixing them into Query.
+func (s *Store) RecordEvents(samples []Sample) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	appendBounded(s.events, samples, s.Limit)
+}
+
+func appendBounded(target map[string][]Sample, samples []Sample, limit int) {
+	for _, sample := range samples {
+		k := key(sample.DeviceID, sample.PointID)
+		list := append(target[k], sample)
+		if len(list) > limit {
+			list = append([]Sample(nil), list[len(list)-limit:]...)
+		}
+		target[k] = list
 	}
 }
 
@@ -60,15 +92,7 @@ func (s *Store) SetLimit(limit int) {
 func (s *Store) Record(samples []Sample) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, sample := range samples {
-		k := key(sample.DeviceID, sample.PointID)
-		list := s.points[k]
-		list = append(list, sample)
-		if len(list) > s.Limit {
-			list = append([]Sample(nil), list[len(list)-s.Limit:]...)
-		}
-		s.points[k] = list
-	}
+	appendBounded(s.points, samples, s.Limit)
 }
 
 // Query returns samples of one point whose source time falls inside
@@ -77,6 +101,19 @@ func (s *Store) Record(samples []Sample) {
 func (s *Store) Query(deviceID, pointID string, start, end time.Time, limit int) []Sample {
 	s.mu.RLock()
 	list := s.points[key(deviceID, pointID)]
+	s.mu.RUnlock()
+	return querySamples(list, start, end, limit)
+}
+
+// QueryEvents returns quality and late events for one point, ascending.
+func (s *Store) QueryEvents(deviceID, pointID string, start, end time.Time, limit int) []Sample {
+	s.mu.RLock()
+	list := s.events[key(deviceID, pointID)]
+	s.mu.RUnlock()
+	return querySamples(list, start, end, limit)
+}
+
+func querySamples(list []Sample, start, end time.Time, limit int) []Sample {
 	filtered := make([]Sample, 0, len(list))
 	for _, sample := range list {
 		if !start.IsZero() && sample.SourceTime.Before(start) {
@@ -87,7 +124,6 @@ func (s *Store) Query(deviceID, pointID string, start, end time.Time, limit int)
 		}
 		filtered = append(filtered, sample)
 	}
-	s.mu.RUnlock()
 	sort.SliceStable(filtered, func(i, j int) bool { return filtered[i].SourceTime.Before(filtered[j].SourceTime) })
 	if limit > 0 && len(filtered) > limit {
 		filtered = filtered[len(filtered)-limit:]

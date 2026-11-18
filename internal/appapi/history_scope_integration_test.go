@@ -213,12 +213,16 @@ func TestMultiPointHistoryQueryAndExportShareScope(t *testing.T) {
 }
 
 type historyTestRecord struct {
-	Value       *float64 `json:"value"`
-	Text        string   `json:"text"`
-	Unit        string   `json:"unit"`
-	Quality     string   `json:"quality"`
-	TimeSource  string   `json:"time_source"`
-	SampleCount int      `json:"sample_count"`
+	Value       *float64  `json:"value"`
+	Text        string    `json:"text"`
+	Unit        string    `json:"unit"`
+	Quality     string    `json:"quality"`
+	TimeSource  string    `json:"time_source"`
+	SampleCount int       `json:"sample_count"`
+	Kind        string    `json:"kind"`
+	Reason      string    `json:"reason"`
+	Late        bool      `json:"late"`
+	SourceTime  time.Time `json:"source_time"`
 }
 
 func historyRuntimePoint(t *testing.T, limit int) (string, string, *runtime.Service, string, string) {
@@ -231,7 +235,7 @@ func historyRuntimePoint(t *testing.T, limit int) (string, string, *runtime.Serv
 	api.Buses = source.Buses
 	h.SetEMS(api)
 	f := &pointConfigFixture{base: base, token: token}
-	bus := f.createBus(t, "history cursor source")
+	bus := f.createBusPeriod(t, "history cursor source", 1000)
 	point := f.createPoint(t, bus, ModbusIOInput{Description: "A", ServerID: 1, Address: 0, IOType: data.PointValueModbusHoldingRegister, DataFormat: "uint16", Scale: 1, ReadOnly: true, Units: "C"})
 	configs, err := source.Buses()
 	if err != nil {
@@ -406,5 +410,139 @@ func TestSIOTHistoryRejectsSaturatedTimeCursor(t *testing.T) {
 	_, err := historySIOT(saturatedHistoryReader{points: points}, "point", data.PointTypeValue, "", time.Time{}, time.Time{})
 	if err == nil || err.Error() != "history_time_cursor_saturated" {
 		t.Fatalf("saturated SIOT cursor error = %v", err)
+	}
+}
+
+func TestMultiPointHistoryKeepsGapsWithTheirPoint(t *testing.T) {
+	base, token, h, _ := startInputServer(t, t.TempDir(), data.NewID())
+	service := runtime.NewService(nil, time.Minute, time.Second, 200)
+	t.Cleanup(service.Close)
+	source := bridge.NewNodeSource(h.nc)
+	api := emsapi.New(service, time.Minute)
+	api.Buses = source.Buses
+	h.SetEMS(api)
+	f := &pointConfigFixture{base: base, token: token}
+	busA := f.createBusPeriod(t, "A gap source", 1000)
+	busB := f.createBusPeriod(t, "B normal source", 1000)
+	input := ModbusIOInput{Description: "A", ServerID: 1, Address: 0, IOType: data.PointValueModbusHoldingRegister, DataFormat: "uint16", Scale: 1, ReadOnly: true, Units: "C"}
+	aPoint := f.createPoint(t, busA, input)
+	input.Description, input.ServerID = "B", 2
+	bPoint := f.createPoint(t, busB, input)
+	configs, err := source.Buses()
+	if err != nil {
+		t.Fatal(err)
+	}
+	devices := map[int]string{}
+	for _, config := range configs {
+		for _, device := range config.Devices {
+			devices[int(device.ServerID)] = device.ID
+		}
+	}
+	at := time.Now().UTC().Truncate(time.Second).Add(-time.Minute)
+	observe := func(point, device string, seconds int, value float64) {
+		when := at.Add(time.Duration(seconds) * time.Second)
+		service.Observe(when, []channel.Result{{DeviceID: device, PointID: point, Value: signal.Num(value), Quality: signal.Good, SourceTime: when, Unit: "C", TimeSource: "platform_acquisition"}})
+	}
+	for i := 0; i < 5; i++ {
+		observe(aPoint, devices[1], i, float64(10+i))
+		observe(bPoint, devices[2], i, float64(20+i))
+	}
+	service.Observe(at.Add(5*time.Second), []channel.Result{{DeviceID: devices[1], PointID: aPoint, Quality: signal.Invalid, Error: "timeout"}})
+	observe(aPoint, devices[1], 10, 15)
+	service.Observe(at.Add(11*time.Second), []channel.Result{{DeviceID: devices[1], PointID: aPoint, Value: signal.Num(99), Quality: signal.Good, SourceTime: at.Add(6 * time.Second), Unit: "C", TimeSource: "platform_acquisition"}})
+	for i := 5; i < 10; i++ {
+		observe(bPoint, devices[2], i, float64(20+i))
+	}
+	query := url.Values{"node_id": []string{aPoint, bPoint}, "start": []string{at.Format(time.RFC3339)}, "end": []string{at.Add(10 * time.Second).Format(time.RFC3339)}, "limit": []string{"200"}}
+	var result struct {
+		Results []struct {
+			NodeID  string              `json:"node_id"`
+			Records []historyTestRecord `json:"records"`
+		} `json:"results"`
+	}
+	status, body := call(t, http.MethodGet, base+"/history?"+query.Encode(), token, nil, &result)
+	if status != 200 || len(result.Results) != 2 {
+		t.Fatalf("multi-point gap query = %d %s", status, body)
+	}
+	for _, point := range result.Results {
+		events, late := 0, 0
+		for _, record := range point.Records {
+			if record.Kind == "quality_event" {
+				events++
+			}
+			if record.Late {
+				late++
+			}
+		}
+		if point.NodeID == aPoint && (events != 1 || late != 1) {
+			t.Fatalf("A lost its gap evidence: events=%d late=%d records=%+v", events, late, point.Records)
+		}
+		if point.NodeID == bPoint && (events != 0 || late != 0) {
+			t.Fatalf("B inherited A quality evidence: events=%d late=%d", events, late)
+		}
+	}
+}
+
+func TestHistoryExposesQualityEventsLateSamplesAndInterval(t *testing.T) {
+	base, token, service, point, device := historyRuntimePoint(t, 50)
+	now := time.Now().UTC().Truncate(time.Second)
+	observe := func(received time.Time, value float64) {
+		service.Observe(received, []channel.Result{{DeviceID: device, PointID: point, Value: signal.Num(value), Quality: signal.Good, SourceTime: received, Unit: "C", TimeSource: "platform_acquisition"}})
+	}
+	observe(now.Add(-10*time.Second), 10)
+	service.Observe(now.Add(-8*time.Second), []channel.Result{{DeviceID: device, PointID: point, Quality: signal.Invalid, Error: "timeout"}})
+	service.Observe(now.Add(-7*time.Second), []channel.Result{{DeviceID: device, PointID: point, Quality: signal.Invalid, Error: "timeout"}})
+	observe(now.Add(-5*time.Second), 50)
+	service.Observe(now.Add(-4*time.Second), []channel.Result{{DeviceID: device, PointID: point, Value: signal.Num(20), Quality: signal.Good, SourceTime: now.Add(-9 * time.Second), Unit: "C", TimeSource: "platform_acquisition"}})
+
+	query := url.Values{"node_id": []string{point}, "start": []string{now.Add(-20 * time.Second).Format(time.RFC3339)}, "end": []string{now.Format(time.RFC3339)}}
+	var result struct {
+		TotalMatched int `json:"total_matched"`
+		Results      []struct {
+			SampleIntervalMS int                 `json:"sample_interval_ms"`
+			Records          []historyTestRecord `json:"records"`
+		} `json:"results"`
+	}
+	status, body := call(t, http.MethodGet, base+"/history?"+query.Encode(), token, nil, &result)
+	if status != 200 || len(result.Results) != 1 {
+		t.Fatalf("history with events = %d %s", status, body)
+	}
+	records := result.Results[0].Records
+	if result.Results[0].SampleIntervalMS != 1000 {
+		t.Fatalf("declared sample interval = %d", result.Results[0].SampleIntervalMS)
+	}
+	var events, late []historyTestRecord
+	for _, record := range records {
+		if record.Kind == "quality_event" {
+			events = append(events, record)
+		}
+		if record.Late {
+			late = append(late, record)
+		}
+	}
+	if len(events) != 1 || events[0].Reason != "timeout" || events[0].Quality != "invalid" || events[0].Value != nil || events[0].TimeSource != "attempt" || !events[0].SourceTime.Equal(now.Add(-8*time.Second)) {
+		t.Fatalf("quality events = %+v", events)
+	}
+	if len(late) != 1 || late[0].Value == nil || *late[0].Value != 20 || !late[0].SourceTime.Equal(now.Add(-9*time.Second)) || late[0].Reason != "late_observation" {
+		t.Fatalf("late samples = %+v", late)
+	}
+
+	query.Set("aggregate", "5m")
+	result.Results = nil
+	status, body = call(t, http.MethodGet, base+"/history?"+query.Encode(), token, nil, &result)
+	if status != 200 || len(result.Results) != 1 {
+		t.Fatalf("aggregate history with events = %d %s", status, body)
+	}
+	sawEvent := false
+	for _, record := range result.Results[0].Records {
+		if record.Kind == "quality_event" {
+			sawEvent = true
+			if record.Value != nil || record.Reason != "timeout" {
+				t.Fatalf("aggregate changed a quality event: %+v", record)
+			}
+		}
+	}
+	if !sawEvent {
+		t.Fatalf("aggregate dropped the invalid interval: %+v", result.Results[0].Records)
 	}
 }

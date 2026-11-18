@@ -577,6 +577,19 @@ ion-toggle { --track-background: rgba(120, 143, 168, 0.3); --track-background-ch
 .trend-legend-item em { font-style: normal; font-variant-numeric: tabular-nums; }
 .trend-alarm { stroke-width: 1.5; stroke-dasharray: 3 3; opacity: 0.7; }
 .trend-alarm-note { margin: 0; color: var(--faint); font-size: 11px; }
+.trend-gap { fill: rgba(177, 79, 111, 0.10); fill-opacity: 0.12; stroke: rgba(177, 79, 111, 0.28); stroke-width: 1; stroke-dasharray: 4 3; }
+.trend-line-undeclared { stroke-dasharray: 5 3; opacity: 0.75; }
+.trend-events-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.trend-event line { stroke: #8a93a5; stroke-width: 1; stroke-dasharray: 2 3; opacity: 0.8; }
+.trend-event circle { fill: #8a93a5; opacity: 0.9; }
+.trend-event.invalid line, .trend-event.invalid circle { stroke: #b14f6f; fill: #b14f6f; }
+.trend-event.stale line, .trend-event.stale circle { stroke: #b07a2a; fill: #b07a2a; }
+.trend-late { fill: #fff; stroke-width: 2; stroke-dasharray: 2 2; }
+.trend-selected { fill: none; stroke-width: 2.5; }
+.trend-readout { margin: 0; padding: 6px 8px; border-radius: 8px; background: rgba(255, 255, 255, 0.7); color: var(--ink); font-size: 12px; font-variant-numeric: tabular-nums; }
+.trend-gaps { margin: 0; padding-left: 18px; color: var(--muted); font-size: 11.5px; display: grid; gap: 2px; max-height: 74px; overflow-y: auto; }
+.trend-asof { display: block; margin-top: 2px; color: var(--faint); font-size: 11px; font-weight: 400; }
+.trend-no-valid { font-size: 20px; color: var(--muted); }
 
 .quality-summary { flex: 0 0 230px; max-width: 230px; padding: 14px; border: 1px solid rgba(111, 139, 175, 0.18); border-radius: 12px; background: rgba(255, 255, 255, 0.55); display: flex; flex-direction: column; gap: 6px; }
 .quality-summary h3 { margin: 0; font-size: 14px; }
@@ -590,6 +603,7 @@ ion-toggle { --track-background: rgba(120, 143, 168, 0.3); --track-background-ch
 .quality-row.stale .quality-track i { background: #b07a2a; }
 .quality-row.invalid .quality-track i { background: #b14f6f; }
 .quality-row.none .quality-track i { background: #8a93a5; }
+.quality-row.events .quality-track i { background: #6b4fa0; }
 .quality-count { font-variant-numeric: tabular-nums; color: var(--ink); font-weight: 600; text-align: right; }
 .quality-count em { font-style: normal; color: var(--faint); font-weight: 400; margin-left: 4px; font-size: 10px; }
 .quality-total { padding-top: 6px; border-top: 1px solid rgba(111, 139, 175, 0.16); color: var(--muted); font-size: 11px; }
@@ -1337,7 +1351,7 @@ h1, h2, h3 { color: var(--ink); }
   .console-stage .channel-note { display: none; }
   .console-stage .screen-editor { max-height: 46%; overflow-y: auto; }
   .console-stage .history-page .trend-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-  .console-stage .history-page .trend-chart { flex: 1; min-height: 0; height: auto; }
+  .console-stage .history-page .trend-chart { flex: 1; min-height: 180px; height: auto; }
   .console-stage .history-page .trend-empty { flex: 1; display: grid; place-items: center; }
   .console-stage .rules-page .page-toolbar { flex: 0 0 auto; margin-bottom: 0; }
   .console-stage .rules-page .rule-editor { flex: 1; min-height: 0; overflow-y: auto; }
@@ -1755,7 +1769,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline-color:
   .console-stage .channel-note { display: none; }
   .console-stage .screen-editor { max-height: 46%; overflow-y: auto; }
   .console-stage .history-page .trend-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-  .console-stage .history-page .trend-chart { flex: 1; min-height: 0; height: auto; }
+  .console-stage .history-page .trend-chart { flex: 1; min-height: 180px; height: auto; }
   .console-stage .history-page .trend-empty { flex: 1; display: grid; place-items: center; }
   .console-stage .rules-page .page-toolbar { flex: 0 0 auto; margin-bottom: 0; }
   .console-stage .rules-page .rule-editor { flex: 1; min-height: 0; overflow-y: auto; }

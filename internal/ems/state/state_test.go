@@ -18,6 +18,99 @@ func result(deviceID, pointID string, value float64) channel.Result {
 	}
 }
 
+func TestApplyDetailedReportsFailedAttemptOnce(t *testing.T) {
+	store := New()
+	good := result("d1", "temp", 37)
+	good.SourceTime = t0.Add(-5 * time.Second)
+	store.Apply(t0, []channel.Result{good})
+	<-store.Changed()
+
+	fail := func(at time.Time, reason string) channel.Result {
+		return channel.Result{DeviceID: "d1", PointID: "temp", Quality: signal.Invalid, Error: reason}
+	}
+	accepted, events := store.ApplyDetailed(t0.Add(time.Second), []channel.Result{fail(t0.Add(time.Second), "timeout")})
+	if len(accepted) != 0 || len(events) != 1 || events[0].Kind != "invalid" || events[0].Reason != "timeout" || !events[0].At.Equal(t0.Add(time.Second)) {
+		t.Fatalf("first failure event = %+v accepted=%d", events, len(accepted))
+	}
+	select {
+	case <-store.Changed():
+	default:
+		t.Fatal("failed attempt did not notify the quality change")
+	}
+	if _, events = store.ApplyDetailed(t0.Add(2*time.Second), []channel.Result{fail(t0.Add(2*time.Second), "timeout")}); len(events) != 0 {
+		t.Fatalf("unchanged failure reason repeated an event: %+v", events)
+	}
+	if _, events = store.ApplyDetailed(t0.Add(3*time.Second), []channel.Result{fail(t0.Add(3*time.Second), "crc")}); len(events) != 1 || events[0].Reason != "crc" {
+		t.Fatalf("changed failure reason was not recorded: %+v", events)
+	}
+	value, ok := store.Get(t0.Add(3*time.Second), "d1", "temp", time.Minute)
+	if !ok || value.Value.Num != 37 || value.Quality != signal.Invalid || !value.SourceTime.Equal(good.SourceTime) {
+		t.Fatalf("failed attempt replaced the current observation: %+v", value)
+	}
+
+	recovery := result("d1", "temp", 38)
+	recovery.SourceTime = t0.Add(4 * time.Second)
+	if accepted, events = store.ApplyDetailed(t0.Add(4*time.Second), []channel.Result{recovery}); len(accepted) != 1 || len(events) != 0 {
+		t.Fatalf("recovery = accepted:%d events:%+v", len(accepted), events)
+	}
+	if _, events = store.ApplyDetailed(t0.Add(5*time.Second), []channel.Result{fail(t0.Add(5*time.Second), "timeout")}); len(events) != 1 {
+		t.Fatalf("failure after recovery was not recorded: %+v", events)
+	}
+}
+
+func TestOlderFailedAttemptDoesNotInvalidateCurrentObservation(t *testing.T) {
+	store := New()
+	current := result("d1", "temp", 38)
+	current.SourceTime = t0.Add(5 * time.Second)
+	store.Apply(t0.Add(5*time.Second), []channel.Result{current})
+	<-store.Changed()
+
+	old := channel.Result{DeviceID: "d1", PointID: "temp", Quality: signal.Invalid, Error: "read_failed", SourceTime: t0.Add(2 * time.Second)}
+	accepted, events := store.ApplyDetailed(t0.Add(6*time.Second), []channel.Result{old})
+	if len(accepted) != 0 || len(events) != 1 || events[0].Kind != "invalid" || events[0].Reason != "read_failed" {
+		t.Fatalf("older failure event = %+v accepted=%d", events, len(accepted))
+	}
+	select {
+	case <-store.Changed():
+		t.Fatal("older failed attempt notified a state change")
+	default:
+	}
+	value, ok := store.Get(t0.Add(6*time.Second), "d1", "temp", time.Minute)
+	if !ok || value.Value.Num != 38 || value.Quality != signal.Good || !value.SourceTime.Equal(current.SourceTime) {
+		t.Fatalf("older failure invalidated the current observation: %+v", value)
+	}
+}
+
+func TestApplyDetailedReportsLateObservationWithoutChangingState(t *testing.T) {
+	store := New()
+	current := result("d1", "temp", 38)
+	current.SourceTime = t0.Add(5 * time.Second)
+	store.Apply(t0.Add(5*time.Second), []channel.Result{current})
+	<-store.Changed()
+
+	late := result("d1", "temp", 12)
+	late.SourceTime = t0.Add(2 * time.Second)
+	accepted, events := store.ApplyDetailed(t0.Add(6*time.Second), []channel.Result{late})
+	if len(accepted) != 0 || len(events) != 1 || events[0].Kind != "late" || !events[0].Result.SourceTime.Equal(late.SourceTime) || !events[0].At.Equal(t0.Add(6*time.Second)) {
+		t.Fatalf("late event = %+v accepted=%d", events, len(accepted))
+	}
+	select {
+	case <-store.Changed():
+		t.Fatal("late observation notified a state change")
+	default:
+	}
+	value, _ := store.Get(t0.Add(6*time.Second), "d1", "temp", time.Minute)
+	if value.Value.Num != 38 || !value.SourceTime.Equal(current.SourceTime) || !value.ReceivedTime.Equal(t0.Add(5*time.Second)) {
+		t.Fatalf("late observation replaced the current value: %+v", value)
+	}
+	if _, events = store.ApplyDetailed(t0.Add(7*time.Second), []channel.Result{late}); len(events) != 1 || !events[0].Result.SourceTime.Equal(late.SourceTime) {
+		t.Fatalf("repeated late observation was lost: %+v", events)
+	}
+	if _, events = store.ApplyDetailed(t0.Add(8*time.Second), []channel.Result{current}); len(events) != 0 {
+		t.Fatalf("duplicate current observation produced an event: %+v", events)
+	}
+}
+
 func TestCaptureWakesOnQualityChanges(t *testing.T) {
 	store := New()
 	store.Apply(t0, []channel.Result{result("d1", "p", 37)})

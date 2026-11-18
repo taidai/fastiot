@@ -17,6 +17,29 @@ func sample(at time.Time, value float64) Sample {
 	}
 }
 
+func TestEventsAreSeparateFromObservations(t *testing.T) {
+	store := New(2)
+	store.Record([]Sample{sample(t0, 1), sample(t0.Add(time.Second), 2)})
+	event := Sample{DeviceID: "d1", PointID: "temp", Kind: "quality_event", Reason: "timeout", Quality: signal.Invalid, SourceTime: t0.Add(500 * time.Millisecond), ReceivedTime: t0.Add(500 * time.Millisecond), TimeSource: "attempt"}
+	store.RecordEvents([]Sample{event})
+	if got := store.Query("d1", "temp", time.Time{}, time.Time{}, 10); len(got) != 2 {
+		t.Fatalf("events leaked into observations: %+v", got)
+	}
+	if got := store.QueryEvents("d1", "temp", time.Time{}, time.Time{}, 10); len(got) != 1 || got[0].Reason != "timeout" || got[0].Kind != KindQualityEvent {
+		t.Fatalf("events = %+v", got)
+	}
+	store.RecordEvents([]Sample{
+		{DeviceID: "d1", PointID: "temp", Kind: "quality_event", Reason: "a", SourceTime: t0.Add(2 * time.Second)},
+		{DeviceID: "d1", PointID: "temp", Kind: "quality_event", Reason: "b", SourceTime: t0.Add(3 * time.Second)},
+	})
+	if got := store.QueryEvents("d1", "temp", time.Time{}, time.Time{}, 10); len(got) != 2 || got[1].Reason != "b" {
+		t.Fatalf("event cap = %+v", got)
+	}
+	if got := store.QueryEvents("d1", "temp", time.Time{}, time.Time{}, 1); len(got) != 1 || got[0].Reason != "b" {
+		t.Fatalf("newest event page = %+v", got)
+	}
+}
+
 func TestQueryRangeAndLimit(t *testing.T) {
 	store := New(100)
 	store.Record([]Sample{sample(t0, 1), sample(t0.Add(time.Second), 2), sample(t0.Add(2*time.Second), 3)})

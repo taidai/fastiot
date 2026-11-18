@@ -34,35 +34,60 @@ type Value struct {
 
 // Store is safe for concurrent readers and one writer.
 type Store struct {
-	mu       sync.RWMutex
-	values   map[Key]Value
-	health   map[string]channel.Health
-	updated  map[string]time.Time
-	changed  chan struct{}
-	revision uint64
+	mu              sync.RWMutex
+	values          map[Key]Value
+	health          map[string]channel.Health
+	updated         map[string]time.Time
+	lastEventReason map[Key]string
+	changed         chan struct{}
+	revision        uint64
 }
 
 // New returns an empty store.
 func New() *Store {
 	return &Store{
-		values:  make(map[Key]Value),
-		health:  make(map[string]channel.Health),
-		updated: make(map[string]time.Time),
-		changed: make(chan struct{}, 1),
+		values:          make(map[Key]Value),
+		health:          make(map[string]channel.Health),
+		updated:         make(map[string]time.Time),
+		lastEventReason: make(map[Key]string),
+		changed:         make(chan struct{}, 1),
 	}
 }
 
+// Event records a rejected attempt or a late observation without changing the
+// current value.
+type Event struct {
+	Result channel.Result
+	Kind   string
+	Reason string
+	At     time.Time
+}
+
+const (
+	EventInvalid = "invalid"
+	EventLate    = "late"
+	// ReasonSourceExpired marks a value that exceeded MaxAge without a new
+	// observation.
+	ReasonSourceExpired = "source_expired"
+)
+
 // Apply records newer observations and returns only newly accepted readings.
 func (s *Store) Apply(now time.Time, results []channel.Result) []channel.Result {
+	accepted, _ := s.ApplyDetailed(now, results)
+	return accepted
+}
+
+// ApplyDetailed also reports quality and late events. Rejected or older
+// samples never replace the current value and never wake consumers.
+func (s *Store) ApplyDetailed(now time.Time, results []channel.Result) ([]channel.Result, []Event) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	accepted := make([]channel.Result, 0, len(results))
+	events := make([]Event, 0)
 	for _, result := range results {
 		key := Key{result.DeviceID, result.PointID}
 		previous, exists := s.values[key]
-		if exists && !result.SourceTime.IsZero() && result.SourceTime.UTC().Before(previous.SourceTime.UTC()) {
-			continue
-		}
+		older := exists && !result.SourceTime.IsZero() && result.SourceTime.UTC().Before(previous.SourceTime.UTC())
 		reason := ""
 		switch {
 		case result.Error != "":
@@ -79,11 +104,21 @@ func (s *Store) Apply(now time.Time, results []channel.Result) []channel.Result 
 			reason = "conflicting_source_time"
 		}
 		if reason != "" {
-			previous.DeviceID, previous.PointID = result.DeviceID, result.PointID
-			previous.Quality, previous.Reason = signal.Invalid, reason
-			previous.LastAttemptTime = now
-			s.values[key] = previous
-			s.notifyLocked()
+			if s.lastEventReason[key] != reason {
+				events = append(events, Event{Result: result, Kind: EventInvalid, Reason: reason, At: now})
+				s.lastEventReason[key] = reason
+			}
+			if !older {
+				previous.DeviceID, previous.PointID = result.DeviceID, result.PointID
+				previous.Quality, previous.Reason = signal.Invalid, reason
+				previous.LastAttemptTime = now
+				s.values[key] = previous
+				s.notifyLocked()
+			}
+			continue
+		}
+		if older {
+			events = append(events, Event{Result: result, Kind: EventLate, Reason: "late_observation", At: now})
 			continue
 		}
 		if exists && !result.SourceTime.After(previous.SourceTime) {
@@ -95,10 +130,11 @@ func (s *Store) Apply(now time.Time, results []channel.Result) []channel.Result 
 			SourceTime: result.SourceTime, ReceivedTime: now, LastAttemptTime: now,
 			TimeSource: result.TimeSource, Unit: result.Unit, ConfigStamp: result.ConfigStamp,
 		}
+		delete(s.lastEventReason, key)
 		s.notifyLocked()
 		accepted = append(accepted, result)
 	}
-	return accepted
+	return accepted, events
 }
 
 // SetHealth records the communication health of one device.
@@ -202,7 +238,7 @@ func (s *Store) effective(value Value, now time.Time, maxAge time.Duration) Valu
 	if value.SourceTime.UTC().After(now.UTC()) {
 		value.Quality, value.Reason = signal.Invalid, "future_source_time"
 	} else if maxAge > 0 && now.Sub(value.SourceTime) > maxAge {
-		value.Quality, value.Reason = signal.Stale, "source_expired"
+		value.Quality, value.Reason = signal.Stale, ReasonSourceExpired
 	}
 	return value
 }

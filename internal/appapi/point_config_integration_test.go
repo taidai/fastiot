@@ -323,12 +323,17 @@ func newPointConfigFixture(t *testing.T) *pointConfigFixture {
 
 func (f *pointConfigFixture) createBus(t *testing.T, name string) string {
 	t.Helper()
+	return f.createBusPeriod(t, name, 60000)
+}
+
+func (f *pointConfigFixture) createBusPeriod(t *testing.T, name string, period int) string {
+	t.Helper()
 	var result struct {
 		ID string `json:"id"`
 	}
 	status, body := call(t, http.MethodPost, f.base+"/modbus", f.token, ModbusConnectionInput{
 		Parent: snapshotRoot(t, f.base, f.token), Description: name,
-		Protocol: data.PointValueTCP, URI: "127.0.0.1:1502", PollPeriod: 60000, Timeout: 1000,
+		Protocol: data.PointValueTCP, URI: "127.0.0.1:1502", PollPeriod: period, Timeout: 1000,
 	}, &result)
 	if status != http.StatusOK {
 		t.Fatalf("create bus: %d %s", status, body)

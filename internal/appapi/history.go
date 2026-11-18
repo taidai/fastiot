@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"fastiot/internal/ems/history"
 	"fastiot/internal/ems/signal"
 	"github.com/simpleiot/simpleiot/client"
 	"github.com/simpleiot/simpleiot/data"
@@ -34,25 +35,30 @@ type historyRecord struct {
 	Unit         string    `json:"unit,omitempty"`
 	ConfigStamp  string    `json:"config_stamp,omitempty"`
 	TimeSource   string    `json:"time_source,omitempty"`
+	Kind         string    `json:"kind,omitempty"`
+	Reason       string    `json:"reason,omitempty"`
+	Late         bool      `json:"late,omitempty"`
 	SampleCount  int       `json:"sample_count,omitempty"`
 	Aggregate    string    `json:"aggregate,omitempty"`
 }
 type historyPointResult struct {
-	NodeID          string          `json:"node_id"`
-	DeviceID        string          `json:"device_id,omitempty"`
-	Source          string          `json:"source"`
-	Points          data.Points     `json:"points,omitempty"`
-	Records         []historyRecord `json:"records"`
-	Matched         int             `json:"matched"`
-	Returned        int             `json:"returned"`
-	Truncated       bool            `json:"truncated"`
-	NextBefore      time.Time       `json:"next_before,omitzero"`
-	NextBeforeCount int             `json:"next_before_count"`
+	NodeID           string          `json:"node_id"`
+	DeviceID         string          `json:"device_id,omitempty"`
+	Source           string          `json:"source"`
+	SampleIntervalMS int             `json:"sample_interval_ms"`
+	Points           data.Points     `json:"points,omitempty"`
+	Records          []historyRecord `json:"records"`
+	Matched          int             `json:"matched"`
+	Returned         int             `json:"returned"`
+	Truncated        bool            `json:"truncated"`
+	NextBefore       time.Time       `json:"next_before,omitzero"`
+	NextBeforeCount  int             `json:"next_before_count"`
 }
 type historyReadResult struct {
 	records          []historyRecord
 	points           data.Points
 	deviceID, source string
+	sampleIntervalMS int
 }
 
 func parseHistoryTime(text string) (time.Time, error) {
@@ -149,7 +155,7 @@ func historySIOT(reader historyReader, id, typ, key string, start, end time.Time
 func siotHistoryRecords(node data.NodeEdge, points data.Points) []historyRecord {
 	records := make([]historyRecord, 0, len(points))
 	for _, point := range points {
-		record := historyRecord{PointID: node.ID, SourceTime: point.Time, Text: point.Txt(), Source: point.Origin, Unit: textPoint(node.Points, data.PointTypeUnits)}
+		record := historyRecord{PointID: node.ID, SourceTime: point.Time, Text: point.Txt(), Source: point.Origin, Unit: textPoint(node.Points, data.PointTypeUnits), Kind: history.KindObservation}
 		if value, err := point.ValueFloat(); err == nil {
 			v := value
 			record.Value = &v
@@ -174,6 +180,23 @@ func (h *Handler) readSIOTHistoryPoint(node data.NodeEdge, typ, key string, star
 	return out, nil
 }
 
+func historySampleRecord(sample history.Sample, nodeID, deviceID, source string) historyRecord {
+	record := historyRecord{PointID: nodeID, DeviceID: deviceID, SourceTime: sample.SourceTime, ReceivedTime: sample.ReceivedTime, Quality: sample.Quality.String(), Source: source, Unit: sample.Unit, ConfigStamp: sample.ConfigStamp, TimeSource: sample.TimeSource, Kind: history.KindObservation, Reason: sample.Reason, Late: sample.Late}
+	if sample.Kind == history.KindQualityEvent {
+		record.Kind = history.KindQualityEvent
+		return record
+	}
+	if sample.Value.Kind == signal.Number {
+		value := sample.Value.Num
+		record.Value = &value
+	}
+	if sample.Value.Kind == signal.Bool {
+		value := data.BoolToFloat(sample.Value.Bool)
+		record.Value = &value
+	}
+	return record
+}
+
 func (h *Handler) readHistoryPoint(node data.NodeEdge, typ, key string, start, end time.Time, aggregate time.Duration) (historyReadResult, error) {
 	out := historyReadResult{source: "siot", records: []historyRecord{}}
 	if node.Type == data.NodeTypeModbusIO {
@@ -185,6 +208,7 @@ func (h *Handler) readHistoryPoint(node data.NodeEdge, typ, key string, start, e
 			return out, err
 		}
 		deviceID := ""
+		intervalMS := 0
 		for _, config := range configs {
 			for _, device := range config.Devices {
 				for _, point := range device.Points {
@@ -193,6 +217,7 @@ func (h *Handler) readHistoryPoint(node data.NodeEdge, typ, key string, start, e
 							return out, errors.New("ambiguous_history_source")
 						}
 						deviceID = device.ID
+						intervalMS = int(config.Period / time.Millisecond)
 					}
 				}
 			}
@@ -200,22 +225,18 @@ func (h *Handler) readHistoryPoint(node data.NodeEdge, typ, key string, start, e
 		if deviceID == "" {
 			return h.readSIOTHistoryPoint(node, typ, key, start, end)
 		}
-		out.deviceID, out.source = deviceID, "modbus_runtime"
-		samples := h.ems.Service.History.Query(deviceID, node.ID, start, end, 0)
-		for _, sample := range samples {
+		out.deviceID, out.source, out.sampleIntervalMS = deviceID, "modbus_runtime", intervalMS
+		for _, sample := range h.ems.Service.History.Query(deviceID, node.ID, start, end, 0) {
 			if sample.SourceTime.IsZero() {
 				continue
 			}
-			record := historyRecord{PointID: node.ID, DeviceID: deviceID, SourceTime: sample.SourceTime, ReceivedTime: sample.ReceivedTime, Quality: sample.Quality.String(), Source: out.source, Unit: sample.Unit, ConfigStamp: sample.ConfigStamp, TimeSource: sample.TimeSource}
-			if sample.Value.Kind == signal.Number {
-				value := sample.Value.Num
-				record.Value = &value
+			out.records = append(out.records, historySampleRecord(sample, node.ID, deviceID, out.source))
+		}
+		for _, sample := range h.ems.Service.History.QueryEvents(deviceID, node.ID, start, end, 0) {
+			if sample.SourceTime.IsZero() {
+				continue
 			}
-			if sample.Value.Kind == signal.Bool {
-				value := data.BoolToFloat(sample.Value.Bool)
-				record.Value = &value
-			}
-			out.records = append(out.records, record)
+			out.records = append(out.records, historySampleRecord(sample, node.ID, deviceID, out.source))
 		}
 	} else {
 		var err error
@@ -229,6 +250,7 @@ func (h *Handler) readHistoryPoint(node data.NodeEdge, typ, key string, start, e
 		return out, nil
 	}
 	records := []historyRecord{}
+	events := make([]historyRecord, 0)
 	var bucketStart time.Time
 	var sum float64
 	count := 0
@@ -238,9 +260,13 @@ func (h *Handler) readHistoryPoint(node data.NodeEdge, typ, key string, start, e
 			return
 		}
 		value := sum / float64(count)
-		records = append(records, historyRecord{PointID: node.ID, DeviceID: out.deviceID, SourceTime: bucketStart, BucketEnd: bucketStart.Add(aggregate), Quality: quality, Value: &value, Source: out.source, Unit: unit, TimeSource: timeSource, SampleCount: count, Aggregate: aggregate.String()})
+		records = append(records, historyRecord{PointID: node.ID, DeviceID: out.deviceID, SourceTime: bucketStart, BucketEnd: bucketStart.Add(aggregate), Quality: quality, Value: &value, Source: out.source, Unit: unit, TimeSource: timeSource, SampleCount: count, Aggregate: aggregate.String(), Kind: history.KindObservation})
 	}
 	for _, record := range out.records {
+		if record.Kind == history.KindQualityEvent {
+			events = append(events, record)
+			continue
+		}
 		if record.Value == nil || (node.Type == data.NodeTypeModbusIO && record.Quality != signal.Good.String()) {
 			continue
 		}
@@ -267,7 +293,8 @@ func (h *Handler) readHistoryPoint(node data.NodeEdge, typ, key string, start, e
 		count++
 	}
 	flush()
-	out.records = records
+	out.records = append(records, events...)
+	sortHistoryRecords(out.records)
 	return out, nil
 }
 func sortHistoryRecords(records []historyRecord) {
@@ -376,7 +403,7 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request, identity Ident
 				}
 			}
 		}
-		results = append(results, historyPointResult{NodeID: id, DeviceID: read.deviceID, Source: read.source, Points: read.points, Records: records, Matched: matchedCount, Returned: len(records), Truncated: truncated, NextBefore: next.Before, NextBeforeCount: next.Count})
+		results = append(results, historyPointResult{NodeID: id, DeviceID: read.deviceID, Source: read.source, SampleIntervalMS: read.sampleIntervalMS, Points: read.points, Records: records, Matched: matchedCount, Returned: len(records), Truncated: truncated, NextBefore: next.Before, NextBeforeCount: next.Count})
 		legacy = append(legacy, read.points...)
 	}
 	if export && total > historyExportLimit {
@@ -389,7 +416,7 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request, identity Ident
 		w.Header().Set("X-History-Limit", strconv.Itoa(historyExportLimit))
 		w.Header().Set("Content-Disposition", `attachment; filename="history.csv"`)
 		writer := csv.NewWriter(w)
-		if err := writer.Write([]string{"点位ID", "设备ID", "观测时间", "接收时间", "桶结束", "质量", "数值", "文本", "来源", "单位", "聚合", "样本数"}); err != nil {
+		if err := writer.Write([]string{"点位ID", "设备ID", "观测时间", "接收时间", "桶结束", "质量", "数值", "文本", "来源", "单位", "聚合", "样本数", "种类", "原因"}); err != nil {
 			return
 		}
 		for _, result := range results {
@@ -408,7 +435,7 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request, identity Ident
 				if !record.BucketEnd.IsZero() {
 					bucketEnd = record.BucketEnd.Format(time.RFC3339Nano)
 				}
-				_ = writer.Write([]string{record.PointID, record.DeviceID, at, received, bucketEnd, record.Quality, value, text, record.Source, record.Unit, record.Aggregate, strconv.Itoa(record.SampleCount)})
+				_ = writer.Write([]string{record.PointID, record.DeviceID, at, received, bucketEnd, record.Quality, value, text, record.Source, record.Unit, record.Aggregate, strconv.Itoa(record.SampleCount), record.Kind, record.Reason})
 			}
 		}
 		writer.Flush()
