@@ -17,16 +17,16 @@ import (
 // serial: a member is not written until the previous member's readback is
 // confirmed or its failure has stopped the sequence.
 type allocationRun struct {
-	parent       string
-	config       AllocatorConfig
-	result       alloc.Result
-	steps        []allocationStep
-	index        int
-	sentAt       time.Time
-	status       string
-	reason       string
-	requested    float64
-	startedAt    time.Time
+	parent        string
+	config        AllocatorConfig
+	result        alloc.Result
+	steps         []allocationStep
+	index         int
+	sentAt        time.Time
+	status        string
+	reason        string
+	requested     float64
+	startedAt     time.Time
 	lastRequested float64
 	// Grace state: the last setpoint and the moment a member went unavailable,
 	// so a brief outage holds the member instead of stepping power.

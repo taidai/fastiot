@@ -79,11 +79,11 @@ func TestTimeConditionValidation(t *testing.T) {
 		return table.Validate()
 	}
 	for _, condition := range []Condition{
-		{Kind: "time"},                                          // empty
-		{Kind: "time", Start: "08:00"},                          // missing end
-		{Kind: "time", Start: "8:00", End: "20:00"},             // bad format
-		{Kind: "time", Start: "08:00", End: "24:00"},            // out of range
-		{Kind: "time", Start: "08:00", End: "08:00"},            // zero-length
+		{Kind: "time"},                                              // empty
+		{Kind: "time", Start: "08:00"},                              // missing end
+		{Kind: "time", Start: "8:00", End: "20:00"},                 // bad format
+		{Kind: "time", Start: "08:00", End: "24:00"},                // out of range
+		{Kind: "time", Start: "08:00", End: "08:00"},                // zero-length
 		{Kind: "time", Start: "08:00", End: "20:00", Weekdays: 128}, // bad mask
 	} {
 		if err := valid(condition); err == nil {

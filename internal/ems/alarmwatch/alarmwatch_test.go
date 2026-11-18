@@ -63,6 +63,18 @@ func TestNewBusGetsGrace(t *testing.T) {
 	}
 }
 
+func TestBusWithoutSuccessAfterGraceRaisesNoSuccess(t *testing.T) {
+	bus := view("bus1", "modbus")
+	bus.Created = now.Add(-10 * time.Second)
+	bus.Num["pollPeriod"] = 1000
+	bus.Num["timeout"] = 1000
+	findings := Evaluate([]NodeView{bus}, now)
+	finding, ok := find(findings, "bus-offline:bus1")
+	if !ok || finding.Detail != "no_success" {
+		t.Fatalf("no-success bus = %+v", findings)
+	}
+}
+
 func TestDisabledBusIgnored(t *testing.T) {
 	bus := view("bus1", "modbus")
 	bus.Num["disabled"] = 1

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"fastiot/internal/ems/health"
 	"github.com/nats-io/nats.go"
 	siotclient "github.com/simpleiot/simpleiot/client"
 	"github.com/simpleiot/simpleiot/data"
@@ -17,8 +18,8 @@ const allocatorPointType = "easyemsAllocator"
 // AllocatorConfig lives on a business node. A rule binds that node, not a copy
 // of the member list, so adding a cabinet does not change the rule.
 type AllocatorConfig struct {
-	GraceMS   int               `json:"grace_ms,omitempty"`
-	TimeoutMS int               `json:"timeout_ms,omitempty"`
+	GraceMS   int `json:"grace_ms,omitempty"`
+	TimeoutMS int `json:"timeout_ms,omitempty"`
 	// DeadbandKW suppresses re-dispatch when the next request is within this
 	// many kW of the last one, so small fluctuations do not rewrite every PCS.
 	DeadbandKW float64           `json:"deadband_kw,omitempty"`
@@ -280,20 +281,23 @@ func busHealthy(nc *nats.Conn, busID string) bool {
 		return false
 	}
 	heartbeat, ok := nodes[0].Points.Find("lastGoodPoll", "")
-	if !ok || heartbeat.Time.IsZero() {
-		return false
+	lastSuccess := time.Time{}
+	if ok {
+		lastSuccess = time.Unix(int64(heartbeat.Val()), 0)
 	}
 	poll, _ := nodes[0].Points.Value(data.PointTypePollPeriod, "")
 	timeout, _ := nodes[0].Points.Value(data.PointTypeTimeout, "")
-	maxAge := 5 * time.Second
-	if value := 5 * time.Duration(poll) * time.Millisecond; value > maxAge {
-		maxAge = value
+	createdAt := time.Time{}
+	if created, hasCreated := nodes[0].Points.Find(data.PointTypeDescription, ""); hasCreated {
+		createdAt = created.Time
 	}
-	if value := 3 * time.Duration(timeout) * time.Millisecond; value > maxAge {
-		maxAge = value
-	}
-	age := time.Since(heartbeat.Time)
-	return age <= maxAge && age >= -5*time.Second
+	verdict := health.Evaluate(health.Input{
+		Requests: 1, LastSuccess: lastSuccess,
+		PollPeriod: time.Duration(poll) * time.Millisecond,
+		Timeout:    time.Duration(timeout) * time.Millisecond,
+		CreatedAt:  createdAt,
+	}, time.Now())
+	return verdict.State == health.Healthy || verdict.State == health.Degraded
 }
 
 func readNumber(nc *nats.Conn, target Target) (float64, bool, error) {

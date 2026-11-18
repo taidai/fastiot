@@ -6,8 +6,8 @@ import "testing"
 func TestPeakValleyAction(t *testing.T) {
 	periods := []TariffPeriod{
 		{StartMin: 0, EndMin: 480, Kind: "valley", Price: 0.3},    // 00:00–08:00 谷
-		{StartMin: 480, EndMin: 1080, Kind: "flat", Price: 0.6},  // 08:00–18:00 平
-		{StartMin: 1080, EndMin: 1320, Kind: "peak", Price: 1.0}, // 18:00–22:00 峰
+		{StartMin: 480, EndMin: 1080, Kind: "flat", Price: 0.6},   // 08:00–18:00 平
+		{StartMin: 1080, EndMin: 1320, Kind: "peak", Price: 1.0},  // 18:00–22:00 峰
 		{StartMin: 1320, EndMin: 480, Kind: "valley", Price: 0.3}, // 22:00–08:00 跨午夜谷
 	}
 	if got := PeakValleyAction(periods, 120, 50); got != -50 {

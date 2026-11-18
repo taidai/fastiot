@@ -132,6 +132,56 @@ func allocatorTestMember(id, target, capability string, max float64) AllocatorMe
 	}
 }
 
+func TestBusHealthyUsesSharedVerdict(t *testing.T) {
+	opts := server.TestServerOptions
+	opts.ID = "easyems-bus-health-test"
+	opts.DataDir = filepath.Join(t.TempDir(), "data")
+	opts.NatsPort = 19710
+	opts.NatsServer = "nats://127.0.0.1:19710"
+	opts.HTTPPort = "9702"
+	opts.NatsMonitorPort = 19712
+	opts.NatsWSPort = 19713
+	opts.NatsMQTTPort = 0
+	nc, _, stopServer, err := server.TestServerOpts(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopServer()
+	if err := siotclient.SendNode(nc, data.NodeEdge{ID: "bus", Type: data.NodeTypeModbus, Parent: "root"}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if busHealthy(nc, "bus") {
+		t.Fatal("no observation must not be healthy")
+	}
+	now := time.Now()
+	for _, point := range []data.Point{
+		data.NewPointFloat(data.PointTypePollPeriod, "", 1000),
+		data.NewPointFloat(data.PointTypeTimeout, "", 1000),
+		data.NewPointFloat("lastGoodPoll", "", float64(now.Unix())),
+	} {
+		if err := siotclient.SendNodePoint(nc, "bus", point, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !busHealthy(nc, "bus") {
+		t.Fatal("fresh observation must be eligible")
+	}
+	stalePoints := data.Points{
+		data.NewPointFloat(data.PointTypePollPeriod, "", 1000),
+		data.NewPointFloat(data.PointTypeTimeout, "", 1000),
+		data.NewPointFloat("lastGoodPoll", "", float64(now.Add(-time.Minute).Unix())),
+	}
+	for i := range stalePoints {
+		stalePoints[i].Time = now.Add(-time.Minute)
+	}
+	if err := siotclient.SendNode(nc, data.NodeEdge{ID: "stale", Type: data.NodeTypeModbus, Parent: "root", Points: stalePoints}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if busHealthy(nc, "stale") {
+		t.Fatal("expired observation must be offline")
+	}
+}
+
 func createVariable(t *testing.T, nc *nats.Conn, parent, id string, value float64) {
 	t.Helper()
 	if err := siotclient.SendNode(nc, data.NodeEdge{

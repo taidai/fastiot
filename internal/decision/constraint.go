@@ -15,7 +15,7 @@ type MemberConstraint struct {
 	// Target is the input point that carries the current reading.
 	Target Target `json:"target"`
 	// Operator is one of gt, ge, lt, le.
-	Operator string `json:"operator"`
+	Operator string  `json:"operator"`
 	Limit    float64 `json:"limit"`
 	// Direction is "charge", "discharge" or "both" (default). "both" removes the
 	// member entirely; a single direction zeroes that direction's capability.

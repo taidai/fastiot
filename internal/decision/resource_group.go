@@ -15,8 +15,8 @@ type ResourceGroup struct {
 // GroupAllocation 是组分配的结果：各成员设定 + 组级缺口。
 type GroupAllocation struct {
 	Allocations []EnergyAllocation `json:"allocations"`
-	DeliveredKW float64            `json:"delivered_kw"` // 实际分配合计（受组上限约束）
-	ShortfallKW float64            `json:"shortfall_kw"` // 目标与合计差额
+	DeliveredKW float64            `json:"delivered_kw"`         // 实际分配合计（受组上限约束）
+	ShortfallKW float64            `json:"shortfall_kw"`         // 目标与合计差额
 	LimitedBy   string             `json:"limited_by,omitempty"` // 限制来源（组上限）
 }
 

@@ -5,9 +5,10 @@ package decision
 // 纯函数，无副作用——这是能力级调度替换点位级调度后的完整执行语义。
 //
 // 数据流：
-//   CapabilityRule 动作(EnergyUnit 功率请求)
-//     → DispatchCabinet(每个 EnergyUnit 的请求，柜内 Device)
-//     → 汇总 Device 功率设定
+//
+//	CapabilityRule 动作(EnergyUnit 功率请求)
+//	  → DispatchCabinet(每个 EnergyUnit 的请求，柜内 Device)
+//	  → 汇总 Device 功率设定
 func DispatchCapability(rule CapabilityRule, values CapabilityValues, cabinets map[string][]DeviceCapability) []DeviceDispatch {
 	actions := EvaluateCapabilityRule(rule, values)
 	var dispatches []DeviceDispatch

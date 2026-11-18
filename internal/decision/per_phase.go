@@ -21,10 +21,10 @@ func PerPhaseAntiReverse(reading PhaseReading, lowerLimitKW float64) (a, b, c fl
 
 // PhaseVerdict 是逐相判定结果：合相净值与各相反送，及执行器能否分相调节。
 type PhaseVerdict struct {
-	NetKW          float64 // 合相净功率
+	NetKW          float64    // 合相净功率
 	PhaseReverseKW [3]float64 // 各相反送削减量
-	CanPerPhase    bool    // 执行器是否支持分相调节
-	Note           string  // 可解释说明
+	CanPerPhase    bool       // 执行器是否支持分相调节
+	Note           string     // 可解释说明
 }
 
 // EvaluatePhase 判定一个三相读数：合相与各相反送。canPerPhase 表示执行器

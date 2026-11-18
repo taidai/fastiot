@@ -65,10 +65,10 @@ func TestConstraintValidation(t *testing.T) {
 		t.Fatalf("valid constraint rejected: %v", err)
 	}
 	for name, constraint := range map[string]MemberConstraint{
-		"empty kind":     {Kind: "", Target: Target{NodeID: "soc"}, Operator: "gt", Limit: 1},
-		"missing node":   {Kind: "SOC", Operator: "gt", Limit: 1},
-		"bad operator":   {Kind: "SOC", Target: Target{NodeID: "soc"}, Operator: "eq", Limit: 1},
-		"bad direction":  {Kind: "SOC", Target: Target{NodeID: "soc"}, Operator: "gt", Limit: 1, Direction: "sideways"},
+		"empty kind":    {Kind: "", Target: Target{NodeID: "soc"}, Operator: "gt", Limit: 1},
+		"missing node":  {Kind: "SOC", Operator: "gt", Limit: 1},
+		"bad operator":  {Kind: "SOC", Target: Target{NodeID: "soc"}, Operator: "eq", Limit: 1},
+		"bad direction": {Kind: "SOC", Target: Target{NodeID: "soc"}, Operator: "gt", Limit: 1, Direction: "sideways"},
 	} {
 		if err := constraint.validate(); err == nil {
 			t.Errorf("%s: expected error, got nil", name)

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"fastiot/internal/ems/alarm"
+	"fastiot/internal/ems/health"
 )
 
 // NodeView is the small part of a node that alarm evaluation needs.
@@ -49,27 +50,20 @@ func Evaluate(nodes []NodeView, now time.Time) []Finding {
 				continue
 			}
 			since, found := node.Num["lastGoodPoll"]
-			poll := node.Num["pollPeriod"]
-			timeout := node.Num["timeout"]
-			maxAge := 5 * time.Second
-			if value := time.Duration(poll) * 5 * time.Second / 1000; value > maxAge {
-				maxAge = value
-			}
-			if value := time.Duration(timeout) * 3 * time.Second / 1000; value > maxAge {
-				maxAge = value
-			}
-			stale := true
+			lastSuccess := time.Time{}
 			if found && since > 0 {
-				age := now.Sub(time.Unix(int64(since), 0))
-				stale = age > maxAge || age < -5*time.Second
+				lastSuccess = time.Unix(int64(since), 0)
 			}
-			if stale && !node.Created.IsZero() && now.Sub(node.Created) < maxAge {
-				stale = false
-			}
-			if stale {
+			verdict := health.Evaluate(health.Input{
+				Requests: 1, LastSuccess: lastSuccess,
+				PollPeriod: time.Duration(node.Num["pollPeriod"]) * time.Millisecond,
+				Timeout:    time.Duration(node.Num["timeout"]) * time.Millisecond,
+				CreatedAt:  node.Created,
+			}, now)
+			if verdict.State == health.Offline {
 				findings = append(findings, Finding{
 					Key: "bus-offline:" + node.ID, Severity: alarm.Critical,
-					Title: "连接中断", Detail: "最近完整成功轮询已过期", DeviceID: node.ID,
+					Title: "连接中断", Detail: verdict.Reason, DeviceID: node.ID,
 				})
 			}
 		case "variable", "modbusIo":

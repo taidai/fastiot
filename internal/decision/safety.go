@@ -22,10 +22,10 @@ func Interlocked(s InterlockState) bool {
 
 // CommandState 是回读确认（Q4）与超时回退（Q10）的输入状态。
 type CommandState struct {
-	Pending        bool    // 有待确认的指令
-	TimedOut       bool    // 回读超时（结果未知）
-	HasConfirmed   bool    // 存在上一个已确认值
-	LastConfirmed  float64 // 上一个已确认值 kW
+	Pending       bool    // 有待确认的指令
+	TimedOut      bool    // 回读超时（结果未知）
+	HasConfirmed  bool    // 存在上一个已确认值
+	LastConfirmed float64 // 上一个已确认值 kW
 }
 
 // Rollback 超时回退：回读超时且结果未知时，回退到上一个已确认值；无确认

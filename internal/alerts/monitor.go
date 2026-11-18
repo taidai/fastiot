@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"fastiot/internal/ems/health"
 	"github.com/nats-io/nats.go"
 	"github.com/simpleiot/simpleiot/client"
 	"github.com/simpleiot/simpleiot/data"
@@ -132,21 +133,21 @@ func (m *Monitor) scan() error {
 		heartbeat, found := bus.Points.Find("lastGoodPoll", "")
 		poll, _ := bus.Points.Value(data.PointTypePollPeriod, "")
 		timeout, _ := bus.Points.Value(data.PointTypeTimeout, "")
-		maxAge := 5 * time.Second
-		if value := 5 * time.Duration(poll) * time.Millisecond; value > maxAge {
-			maxAge = value
+		createdAt := time.Time{}
+		if created, hasCreated := bus.Points.Find(data.PointTypeDescription, ""); hasCreated {
+			createdAt = created.Time
 		}
-		if value := 3 * time.Duration(timeout) * time.Millisecond; value > maxAge {
-			maxAge = value
+		lastSuccess := time.Time{}
+		if found {
+			lastSuccess = heartbeat.Time
 		}
-		stale := !found || heartbeat.Time.IsZero() || time.Since(heartbeat.Time) > maxAge || time.Since(heartbeat.Time) < -5*time.Second
-		if !found {
-			created, hasCreated := bus.Points.Find(data.PointTypeDescription, "")
-			if hasCreated && time.Since(created.Time) < maxAge {
-				stale = false
-			}
-		}
-		if err := Sync(m.nc, bus.ID, "bus-offline", "critical", "Modbus 连接中断", "最近完整成功轮询已过期", stale); err != nil {
+		verdict := health.Evaluate(health.Input{
+			Requests: 1, LastSuccess: lastSuccess,
+			PollPeriod: time.Duration(poll) * time.Millisecond,
+			Timeout:    time.Duration(timeout) * time.Millisecond,
+			CreatedAt:  createdAt,
+		}, time.Now())
+		if err := Sync(m.nc, bus.ID, "bus-offline", "critical", "Modbus 连接中断", verdict.Reason, verdict.State == health.Offline); err != nil {
 			return err
 		}
 	}

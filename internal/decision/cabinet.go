@@ -16,9 +16,9 @@ type DeviceCapability struct {
 // DeviceDispatch 是给一个 Device 的功率设定。
 type DeviceDispatch struct {
 	DeviceID   string  `json:"device_id"`
-	SetpointKW  float64 `json:"setpoint_kw"`
-	Excluded    bool    `json:"excluded"`
-	Reason      string  `json:"reason,omitempty"`
+	SetpointKW float64 `json:"setpoint_kw"`
+	Excluded   bool    `json:"excluded"`
+	Reason     string  `json:"reason,omitempty"`
 }
 
 // DispatchCabinet 把 EnergyUnit 的功率请求拆到其下的 Device，按能力比例。
@@ -27,12 +27,12 @@ func DispatchCabinet(requestKW float64, devices []DeviceCapability) ([]DeviceDis
 	members := make([]alloc.Member, 0, len(devices))
 	for _, device := range devices {
 		members = append(members, alloc.Member{
-			ID:                  device.DeviceID,
-			Online:              true,
-			MaxCharge:           device.RatedPowerKW,
-			MaxDischarge:        device.RatedPowerKW,
-			AvailableCharge:     device.AvailablePowerKW,
-			AvailableDischarge:  device.AvailablePowerKW,
+			ID:                 device.DeviceID,
+			Online:             true,
+			MaxCharge:          device.RatedPowerKW,
+			MaxDischarge:       device.RatedPowerKW,
+			AvailableCharge:    device.AvailablePowerKW,
+			AvailableDischarge: device.AvailablePowerKW,
 		})
 	}
 	result, err := alloc.Allocate(requestKW, members)
@@ -42,10 +42,10 @@ func DispatchCabinet(requestKW float64, devices []DeviceCapability) ([]DeviceDis
 	dispatches := make([]DeviceDispatch, 0, len(result.Shares))
 	for _, share := range result.Shares {
 		dispatches = append(dispatches, DeviceDispatch{
-			DeviceID:  share.MemberID,
+			DeviceID:   share.MemberID,
 			SetpointKW: share.Setpoint,
-			Excluded:  share.Excluded,
-			Reason:    share.Reason,
+			Excluded:   share.Excluded,
+			Reason:     share.Reason,
 		})
 	}
 	return dispatches, nil

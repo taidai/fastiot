@@ -8,8 +8,8 @@ import "math"
 
 // RampParams 是爬坡与死区参数，可配置。
 type RampParams struct {
-	RampRateKW   float64 // 爬坡速率 kW/s
-	DeadbandKW   float64 // 死区 kW
+	RampRateKW float64 // 爬坡速率 kW/s
+	DeadbandKW float64 // 死区 kW
 }
 
 // DefaultRampParams 返回定案默认值（Q11=A）。
