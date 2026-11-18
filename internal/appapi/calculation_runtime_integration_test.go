@@ -14,6 +14,7 @@ import (
 	"fastiot/internal/ems/runtime"
 	"fastiot/internal/ems/signal"
 	"fastiot/internal/emsapi"
+	"fastiot/internal/virtualinput"
 	"github.com/simpleiot/simpleiot/data"
 	"strings"
 )
@@ -312,5 +313,65 @@ func TestCalculationLoopUpdatesWithoutResultReads(t *testing.T) {
 	}, "typed observation mismatch must not become numeric zero")
 	if len(bus.written()) != 0 {
 		t.Fatal("calculation produced a protocol write")
+	}
+}
+
+func TestConfigurationConstantAndTimedVirtualFreshness(t *testing.T) {
+	base, token, h, _ := startInputServer(t, t.TempDir(), data.NewID())
+	root := snapshotRoot(t, base, token)
+	capacity := virtualCapacity("100")
+	capacity.Unit = "kW"
+	var configuration inputResponse
+	status, body := call(t, http.MethodPost, base+"/virtual-inputs", token, map[string]any{"parent": root, "name": "capacity", "source": "configuration", "definition": capacity, "operation_id": "configuration"}, &configuration)
+	if status != 200 {
+		t.Fatalf("create configuration: %d %s", status, body)
+	}
+	status, body = call(t, http.MethodPost, base+"/virtual-inputs/"+configuration.ID+"/apply", token, map[string]any{"revision": configuration.Revision, "operation_id": "apply-configuration"}, &configuration)
+	if status != 200 {
+		t.Fatalf("apply configuration: %d %s", status, body)
+	}
+	min, max := 0.0, 100.0
+	timedDefinition := virtualinput.Definition{Kind: "number", Unit: "kW", Purpose: "timed", Min: &min, Max: &max, Validity: "timed", TTLSeconds: 60, RuntimeEditable: true}
+	var timed inputResponse
+	status, body = call(t, http.MethodPost, base+"/virtual-inputs", token, map[string]any{"parent": root, "name": "timed", "source": "manual", "definition": timedDefinition, "operation_id": "timed"}, &timed)
+	if status != 200 {
+		t.Fatalf("create timed: %d %s", status, body)
+	}
+	status, body = call(t, http.MethodPost, base+"/virtual-inputs/"+timed.ID+"/apply", token, map[string]any{"revision": timed.Revision, "operation_id": "apply-timed"}, &timed)
+	if status != 200 {
+		t.Fatalf("apply timed: %d %s", status, body)
+	}
+	status, body = call(t, http.MethodPost, base+"/virtual-inputs/"+timed.ID+"/value", token, map[string]any{"revision": timed.Revision, "operation_id": "enter-timed", "value": 50}, &timed)
+	if status != 200 {
+		t.Fatalf("enter timed value: %d %s", status, body)
+	}
+	create := func(name string, inputs []string) string {
+		var out calcResponse
+		status, body := call(t, http.MethodPost, base+"/calculations", token, map[string]any{"parent": root, "name": name, "definition": calculation.Definition{Operator: "add", Inputs: inputs, Kind: "number", Unit: "kW"}, "operation_id": "create-" + name}, &out)
+		if status != 200 {
+			t.Fatalf("create %s: %d %s", name, status, body)
+		}
+		status, body = call(t, http.MethodPost, base+"/calculations/"+out.ID+"/apply", token, map[string]any{"revision": out.Revision, "operation_id": "apply-" + name}, &out)
+		if status != 200 {
+			t.Fatalf("apply %s: %d %s", name, status, body)
+		}
+		return out.ID
+	}
+	constantID := create("constant", []string{configuration.ID, configuration.ID})
+	timedID := create("timed-calculation", []string{timed.ID, timed.ID})
+	if _, err := h.runCalculationBatch(); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.CalculationRuntime().Snapshot().Results[constantID]; got.Quality != "good" || got.Value == nil {
+		t.Fatalf("configuration constant became unavailable: %+v", got)
+	}
+	h.inputStart = time.Now().Add(-2 * time.Hour)
+	h.inputLastWall = time.Now().Add(-time.Nanosecond)
+	if _, err := h.runCalculationBatch(); err != nil {
+		t.Fatal(err)
+	}
+	got := h.CalculationRuntime().Snapshot().Results[timedID]
+	if len(got.Inputs) != 2 || got.Inputs[0].Quality != "stale" || got.Inputs[0].Reason != "expired" || !strings.Contains(got.Reason, "input_unavailable") {
+		t.Fatalf("timed input was not expired: %+v", got)
 	}
 }

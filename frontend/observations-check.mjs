@@ -5,7 +5,7 @@ import ts from "typescript"
 // Reuse the project compiler without requiring Node's TypeScript loader.
 const source = readFileSync(new URL("./src/observations.ts", import.meta.url), "utf8")
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } })
-const { describeObservation, observationForNode, observationKey, observationTimeLabel, staleSummaryText } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`)
+const { describeObservation, isObservationExpired, observationForNode, observationKey, observationTimeLabel, staleSummaryText } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`)
 
 const sample = {
   device_id: "channel/1", point_id: "pressure", value: { kind: "number", number: 110 }, quality: "good",
@@ -64,6 +64,8 @@ assert.equal(noExpiry.label, "状态未知")
 assert.equal(noExpiry.reason, "未声明有效期")
 const exactBoundary = describeObservation({ ...sample, expires_at: "2026-11-15T13:00:02.000Z" }, { evaluatedAt: "2026-11-15T13:00:02.000Z" })
 assert.equal(exactBoundary.quality, "good")
+assert.equal(isObservationExpired("2026-11-15T13:00:02.000Z", "2026-11-15T13:00:02.000Z"), false)
+assert.equal(isObservationExpired("2026-11-15T13:00:02.000Z", "2026-11-15T13:00:02.001Z"), true)
 assert.notEqual(expiredCache.reason, "数据有效")
 assert.match(expiredCache.reason, /过期/)
 

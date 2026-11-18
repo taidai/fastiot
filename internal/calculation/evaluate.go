@@ -86,10 +86,8 @@ func EvaluateBatch(formulas map[string]Formula, snapshot Snapshot, batchID strin
 				s.Reason = "nonfinite_input"
 			}
 		}
-		if s.Quality == "good" && !s.ValidUntil.IsZero() && !snapshot.At.Before(s.ValidUntil) {
-			s.Quality = "stale"
-			s.Reason = "expired"
-		}
+		freshness := Freshness(s, snapshot.At)
+		s.Quality, s.Reason = freshness.Quality.String(), freshness.Reason
 		metadata[id] = Metadata{Kind: s.Kind, Unit: s.Unit}
 		values[id] = s
 	}

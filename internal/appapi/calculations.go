@@ -12,6 +12,7 @@ import (
 
 	"fastiot/internal/authz"
 	"fastiot/internal/calculation"
+	"fastiot/internal/ems/observation"
 	"github.com/simpleiot/simpleiot/client"
 	"github.com/simpleiot/simpleiot/data"
 )
@@ -192,13 +193,13 @@ func (h *Handler) calculationResponse(n data.NodeEdge, d calculation.Document, i
 				out.State = map[string]any{"quality": "invalid", "reason": "restricted_dependency"}
 				return out
 			}
-			if result.Quality == "good" && !result.ValidUntil.IsZero() && !time.Now().Before(result.ValidUntil) {
+			if freshness := result.Freshness(time.Now()); freshness.State == observation.Stale {
 				last := result
 				last.Retained = nil
 				result.Retained = &last
 				result.Value = nil
-				result.Quality = "stale"
-				result.Reason = "expired"
+				result.Quality = freshness.Quality.String()
+				result.Reason = freshness.Reason
 			}
 			if result.Retained != nil && !h.readableCalculationEvidence(identity, *result.Retained) {
 				result.Retained = nil

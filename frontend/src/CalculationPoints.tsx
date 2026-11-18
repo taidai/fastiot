@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { IonCardContent } from "@ionic/react"
 import { ApiError, CalculationDefinition, CalculationList, CalculationPoint, CalculationResult, CalculationSample, Node, nameOf, request } from "./api"
 import { EmsButton, EmsCard, EmsOverlay, InlineNotice, StatusBadge } from "./components/ems"
+import { isObservationExpired } from "./observations"
 
 type Impact = { confirmation: string; references: { id: string; name: string; reason: string }[]; restricted: boolean; coverage: string }
 type Pending = { point: CalculationPoint; payload: { revision: number; operation_id: string }; impact: Impact }
@@ -55,7 +56,7 @@ export default function CalculationPoints({ token, nodes }: { token: string; nod
   const sourceList = data?.sources || []
   const label = (id: string) => sourceList.find(s => s.id === id)?.name || points.find(p => p.id === id)?.name || id || "未绑定"
   const formula = (d?: CalculationDefinition) => d ? `${label(d.inputs[0])} ${d.operator === "add" ? "+" : "÷"} ${label(d.inputs[1])}` : "—"
-  const expired = (r: CalculationResult) => !!r.valid_until && (!snapshot || !Number.isFinite(Date.parse(snapshot.data.evaluated_at)) || Date.parse(snapshot.data.evaluated_at) + Math.max(0, performance.now() - snapshot.started) >= Date.parse(r.valid_until))
+  const expired = (r: CalculationResult) => isObservationExpired(r.valid_until, snapshot?.data.evaluated_at, snapshot ? performance.now() - snapshot.started : 0)
 
   useEffect(() => {
     let stopped = false, inFlight = false

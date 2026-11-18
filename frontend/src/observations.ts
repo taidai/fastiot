@@ -38,6 +38,12 @@ export function observationTimeLabel(value?: string) {
 export type ObservationOptions = { error?: string; loading?: boolean; evaluatedAt?: string; elapsedMs?: number }
 export type ObservationSource = ObservationOptions & { values: Record<string, EmsStateValue> }
 
+export function isObservationExpired(validUntil?: string, evaluatedAt?: string, elapsedMs = 0): boolean {
+  const expiry = validTime(validUntil)
+  const evaluated = validTime(evaluatedAt)
+  return Boolean(expiry && evaluated && Date.parse(evaluated) + Math.max(0, elapsedMs) > Date.parse(expiry))
+}
+
 export function describeObservation(value?: EmsStateValue, options: ObservationOptions = {}) {
   const sourceTime = validTime(value?.source_time)
   const receivedTime = validTime(value?.received_time)
@@ -57,8 +63,7 @@ export function describeObservation(value?: EmsStateValue, options: ObservationO
     ? value.quality as ObservationQuality : "uninitialized"
   if (!sourceTime && quality === "good") quality = "uninitialized"
   const expiry = validTime(value?.expires_at)
-  const evaluatedAt = validTime(options.evaluatedAt)
-  if (quality === "good" && expiry && evaluatedAt && Date.parse(evaluatedAt) + Math.max(0, options.elapsedMs || 0) > Date.parse(expiry)) quality = "stale"
+  if (quality === "good" && isObservationExpired(value?.expires_at, options.evaluatedAt, options.elapsedMs)) quality = "stale"
   if (quality === "good" && !expiry) quality = "uninitialized"
   let label = qualityLabels[quality]
   let reason = value?.reason ? reasonLabels[value.reason] || "观测无效，请检查来源" : quality === "good" ? "数据有效" : quality === "stale" ? "最后有效观测已过期" : "尚无有效观测"

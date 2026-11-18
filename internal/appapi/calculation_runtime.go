@@ -9,6 +9,7 @@ import (
 
 	"fastiot/internal/calculation"
 	"fastiot/internal/ems/channel"
+	"fastiot/internal/ems/observation"
 	"fastiot/internal/ems/signal"
 	"fastiot/internal/ems/state"
 	"github.com/simpleiot/simpleiot/client"
@@ -158,9 +159,7 @@ func (h *Handler) runCalculationBatch() (time.Duration, error) {
 			sample.TimeSource = value.TimeSource
 			sample.Quality = value.Quality.String()
 			sample.Reason = value.Reason
-			if maxAge > 0 && !value.SourceTime.IsZero() {
-				sample.ValidUntil = value.SourceTime.Add(maxAge)
-			}
+			sample.ValidUntil = value.ExpiresAt
 			if value.ConfigStamp == "" || value.ConfigStamp != mapping.point.ConfigStamp || metadata.Unit != value.Unit {
 				sample.Quality = "invalid"
 				sample.Reason = "waiting_for_matching_observation"
@@ -183,14 +182,32 @@ func (h *Handler) runCalculationBatch() (time.Duration, error) {
 				break
 			}
 			value := d.Evaluate(clock)
+			quality := signal.Uninitialized
+			switch value.Quality {
+			case "good":
+				quality = signal.Good
+			case "stale":
+				quality = signal.Stale
+			case "bad":
+				quality = signal.Invalid
+			}
+			var enteredAt, expiresAt time.Time
+			if d.Current != nil {
+				enteredAt, expiresAt = d.Current.EnteredAt, d.Current.ExpiresAt
+			}
+			verdict := observation.Evaluate(observation.Input{
+				Value: signal.Num(0), Quality: quality, Reason: value.Reason,
+				SourceTime: enteredAt, ReceivedTime: enteredAt, ExpiresAt: expiresAt,
+				AllowNoExpiry: d.Source == "configuration",
+			}, captured.At)
 			sample.Source = d.Source
-			sample.Quality = value.Quality
-			sample.Reason = value.Reason
+			sample.Quality = verdict.Quality.String()
+			sample.Reason = verdict.Reason
 			encoded, _ := json.Marshal(d.Current)
 			sample.Version = fmt.Sprintf("%x", sha256.Sum256(encoded))
 			if d.Current != nil {
 				sample.ChangedAt = d.Current.EnteredAt
-				sample.ValidUntil = d.Current.ExpiresAt
+				sample.ValidUntil = verdict.ExpiresAt
 				if d.Source != "configuration" && sample.Quality == "good" {
 					remaining := d.Current.Deadline - clock.Monotonic
 					if remaining > 0 && remaining < delay {
@@ -198,7 +215,7 @@ func (h *Handler) runCalculationBatch() (time.Duration, error) {
 					}
 				}
 			}
-			if value.Quality == "good" && metadata.Kind == "number" {
+			if sample.Quality == "good" && metadata.Kind == "number" {
 				var number float64
 				if json.Unmarshal(value.Value, &number) == nil {
 					sample.Value = &number

@@ -52,7 +52,7 @@ func TestInvalidDependencyClearsCurrentWithoutPoisoningIndependentResults(t *tes
 				b.Value = scalar(math.MaxFloat64)
 				input.Inputs["B"] = b
 			case "expiry":
-				input.At = at.Add(10 * time.Second)
+				input.At = at.Add(10*time.Second + time.Millisecond)
 			}
 			input.Inputs["A"] = a
 			current := calculation.EvaluateBatch(f, input, "new", initial)
