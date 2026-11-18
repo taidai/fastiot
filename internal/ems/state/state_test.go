@@ -342,3 +342,12 @@ func TestSamplesAndSnapshotAreDeterministic(t *testing.T) {
 		t.Fatalf("snapshot not sorted: %+v", snapshot)
 	}
 }
+
+func TestNoDeclaredExpiryIsUnknown(t *testing.T) {
+	store := New()
+	store.Apply(t0, []channel.Result{result("d1", "temp", 35.1)})
+	value, ok := store.Get(t0, "d1", "temp", 0)
+	if !ok || value.Quality != signal.Uninitialized || value.Reason != "expiry_unconfigured" {
+		t.Fatalf("no-expiry observation = %+v, want unknown/expiry_unconfigured", value)
+	}
+}

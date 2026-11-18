@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"fastiot/internal/ems/channel"
+	"fastiot/internal/ems/observation"
 	"fastiot/internal/ems/signal"
 )
 
@@ -232,13 +233,10 @@ func (s *Store) snapshotLocked(now time.Time, maxAge time.Duration) []Value {
 }
 
 func (s *Store) effective(value Value, now time.Time, maxAge time.Duration) Value {
-	if value.Quality != signal.Good {
-		return value
-	}
-	if value.SourceTime.UTC().After(now.UTC()) {
-		value.Quality, value.Reason = signal.Invalid, "future_source_time"
-	} else if maxAge > 0 && now.Sub(value.SourceTime) > maxAge {
-		value.Quality, value.Reason = signal.Stale, ReasonSourceExpired
-	}
+	verdict := observation.Evaluate(observation.Input{
+		Value: value.Value, Quality: value.Quality, Reason: value.Reason,
+		SourceTime: value.SourceTime, ReceivedTime: value.ReceivedTime, MaxAge: maxAge,
+	}, now)
+	value.Quality, value.Reason = verdict.Quality, verdict.Reason
 	return value
 }

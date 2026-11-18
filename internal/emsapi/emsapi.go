@@ -20,6 +20,7 @@ import (
 	"fastiot/internal/ems/channel"
 	"fastiot/internal/ems/framelog"
 	"fastiot/internal/ems/modbusrt"
+	"fastiot/internal/ems/observation"
 	"fastiot/internal/ems/profile"
 	"fastiot/internal/ems/runtime"
 	"fastiot/internal/ems/signal"
@@ -276,16 +277,20 @@ func (h *Handler) state(w http.ResponseWriter, access Access) {
 		if !access.allows(value.PointID) {
 			continue
 		}
+		verdict := observation.Evaluate(observation.Input{
+			Value: value.Value, Quality: value.Quality, Reason: value.Reason,
+			SourceTime: value.SourceTime, ReceivedTime: value.ReceivedTime, MaxAge: h.Service.MaxAge,
+		}, evaluatedAt)
 		current := entry{
 			DeviceID: value.DeviceID, PointID: value.PointID,
-			Value: valueDTO{Kind: "unknown"}, Quality: value.Quality.String(),
-			Reason: value.Reason, TimeSource: value.TimeSource, LastAttemptTime: value.LastAttemptTime,
+			Value: valueDTO{Kind: "unknown"}, Quality: verdict.Quality.String(),
+			Reason: verdict.Reason, TimeSource: value.TimeSource, LastAttemptTime: value.LastAttemptTime,
 		}
 		if !value.SourceTime.IsZero() {
 			current.Value = toDTO(value.Value)
 			current.SourceTime, current.ReceivedTime = &value.SourceTime, &value.ReceivedTime
-			if h.Service.MaxAge > 0 {
-				expires := value.SourceTime.Add(h.Service.MaxAge)
+			if !verdict.ExpiresAt.IsZero() {
+				expires := verdict.ExpiresAt
 				current.ExpiresAt = &expires
 			}
 		}

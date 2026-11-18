@@ -642,3 +642,28 @@ func TestProfileCSVRequiresExportAction(t *testing.T) {
 		t.Fatalf("profile CSV with action = %d %s", allowed.Code, allowed.Header().Get("Content-Type"))
 	}
 }
+
+func TestStateWithoutDeclaredExpiryIsUnknown(t *testing.T) {
+	service := runtime.NewService(nil, 0, time.Second, 100)
+	defer service.Close()
+	now := time.Now().UTC()
+	service.Observe(now, []channel.Result{{DeviceID: "d1", PointID: "temp", Value: signal.Num(35.1), Quality: signal.Good, SourceTime: now.Add(-time.Second)}})
+	response := call(t, New(service, 0), Access{}, http.MethodGet, "/api/ems/state", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("state = %d %s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Values []struct {
+			Quality   string     `json:"quality"`
+			Reason    string     `json:"reason"`
+			ExpiresAt *time.Time `json:"expires_at"`
+		} `json:"values"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil || len(payload.Values) != 1 {
+		t.Fatalf("state payload = %s %v", response.Body.String(), err)
+	}
+	value := payload.Values[0]
+	if value.Quality != "uninitialized" || value.Reason != "expiry_unconfigured" || value.ExpiresAt != nil {
+		t.Fatalf("no-expiry state = %+v", value)
+	}
+}
