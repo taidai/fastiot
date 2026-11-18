@@ -20,10 +20,6 @@ type RuleVersion struct {
 }
 
 func (h *Handler) copyRule(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	rule, ok := h.rule(w, identity, id)
 	if !ok {
 		return
@@ -49,10 +45,6 @@ func (h *Handler) copyRule(w http.ResponseWriter, r *http.Request, identity Iden
 }
 
 func (h *Handler) publishRule(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
-	if !canAction(identity, ActionRulePublish) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	rule, ok := h.rule(w, identity, id)
 	if !ok {
 		return
@@ -146,10 +138,6 @@ func (h *Handler) runScenarios(w http.ResponseWriter, r *http.Request, identity 
 }
 
 func (h *Handler) restoreRule(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
-	if !canAction(identity, ActionRulePublish) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	rule, ok := h.rule(w, identity, id)
 	if !ok {
 		return

@@ -92,10 +92,6 @@ func (h *Handler) energyControl(w http.ResponseWriter, r *http.Request, identity
 			writeError(w, http.StatusMethodNotAllowed, "method_not_allowed")
 			return
 		}
-		if !canAction(identity, ActionCommand) {
-			writeError(w, http.StatusForbidden, "command_required")
-			return
-		}
 		var input struct {
 			Mode string `json:"mode"`
 		}
@@ -122,10 +118,6 @@ func (h *Handler) energyControl(w http.ResponseWriter, r *http.Request, identity
 	case "events":
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "method_not_allowed")
-			return
-		}
-		if !canAction(identity, ActionCommand) {
-			writeError(w, http.StatusForbidden, "command_required")
 			return
 		}
 		var input struct {

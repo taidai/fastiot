@@ -141,6 +141,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, access Acces
 		writeError(w, http.StatusNotFound, "not_found")
 		return
 	}
+	if route, ok := authz.Required(r); ok {
+		if !route.Allowed(access.Admin, access.action) {
+			writeError(w, http.StatusForbidden, route.Reason)
+			return
+		}
+	}
+	if h.BeginAlarmConfiguration != nil && ((path == "ems/channels" && r.Method == http.MethodPost) || (strings.HasPrefix(path, "ems/channels/") && r.Method == http.MethodDelete)) {
+		finish := h.BeginAlarmConfiguration()
+		defer finish()
+	}
 	path = strings.TrimPrefix(path, "ems/")
 	parts := strings.Split(path, "/")
 	switch {
@@ -367,10 +377,6 @@ func (h *Handler) channels(w http.ResponseWriter, access Access) {
 }
 
 func (h *Handler) restartChannel(w http.ResponseWriter, access Access, id string) {
-	if !access.action(authz.Configure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	if !access.allows(id) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
@@ -438,10 +444,6 @@ type ChannelInput struct {
 }
 
 func (h *Handler) createChannel(w http.ResponseWriter, r *http.Request, access Access) {
-	if !access.action(authz.Configure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	var input ChannelInput
 	if !decodeJSON(w, r, &input) {
 		return
@@ -493,10 +495,6 @@ func convertPoint(input PointInput) (channel.Point, error) {
 }
 
 func (h *Handler) deleteChannel(w http.ResponseWriter, access Access, id string) {
-	if !access.action(authz.Delete) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	if !access.allows(id) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
@@ -535,10 +533,6 @@ type IdentifyInput struct {
 }
 
 func (h *Handler) scan(w http.ResponseWriter, r *http.Request, access Access) {
-	if !access.action(authz.Configure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	var input ScanInput
 	if !decodeJSON(w, r, &input) {
 		return
@@ -614,10 +608,6 @@ func (h *Handler) scan(w http.ResponseWriter, r *http.Request, access Access) {
 }
 
 func (h *Handler) identify(w http.ResponseWriter, r *http.Request, access Access) {
-	if !access.action(authz.Configure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	var input IdentifyInput
 	if !decodeJSON(w, r, &input) {
 		return
@@ -709,10 +699,6 @@ func (h *Handler) profiles(w http.ResponseWriter) {
 }
 
 func (h *Handler) profileCSV(w http.ResponseWriter, r *http.Request, access Access, id string) {
-	if !access.action(authz.Export) {
-		writeError(w, http.StatusForbidden, "export_required")
-		return
-	}
 	if h.Profiles == nil {
 		writeError(w, http.StatusNotImplemented, "not_implemented")
 		return
@@ -949,10 +935,6 @@ func (h *Handler) alarmEvidenceConfirmed(w http.ResponseWriter) bool {
 }
 
 func (h *Handler) ackAlarm(w http.ResponseWriter, r *http.Request, access Access, id string) {
-	if !access.action(authz.AlarmAck) {
-		writeError(w, http.StatusForbidden, "operator_required")
-		return
-	}
 	if !h.alarmTarget(w, access, id) {
 		return
 	}
@@ -976,10 +958,6 @@ func (h *Handler) ackAlarm(w http.ResponseWriter, r *http.Request, access Access
 }
 
 func (h *Handler) closeAlarm(w http.ResponseWriter, access Access, id string) {
-	if !access.action(authz.AlarmAck) {
-		writeError(w, http.StatusForbidden, "operator_required")
-		return
-	}
 	if !h.alarmTarget(w, access, id) {
 		return
 	}
@@ -1003,10 +981,6 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request, access Access,
 	}
 	if !access.allows(pointID) {
 		writeError(w, http.StatusForbidden, "forbidden")
-		return
-	}
-	if export && !access.action(authz.Export) {
-		writeError(w, http.StatusForbidden, "export_required")
 		return
 	}
 	start, err := parseTime(r.URL.Query().Get("start"))
@@ -1085,10 +1059,6 @@ func writeError(w http.ResponseWriter, status int, message string) {
 }
 
 func (h *Handler) frames(w http.ResponseWriter, r *http.Request, access Access) {
-	if !access.action(authz.Command) {
-		writeError(w, http.StatusForbidden, "operator_required")
-		return
-	}
 	limit := 200
 	if value := r.URL.Query().Get("limit"); value != "" {
 		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 && parsed <= 1000 {
@@ -1107,10 +1077,6 @@ func (h *Handler) frames(w http.ResponseWriter, r *http.Request, access Access) 
 }
 
 func (h *Handler) clearFrames(w http.ResponseWriter, access Access) {
-	if !access.action(authz.Command) {
-		writeError(w, http.StatusForbidden, "operator_required")
-		return
-	}
 	framelog.Default.Clear()
 	writeJSON(w, map[string]bool{"cleared": true})
 }
@@ -1196,10 +1162,6 @@ func (h *Handler) QualityReport() ([]contract.QualityStats, []contract.QualitySt
 }
 
 func (h *Handler) maintainAlarm(w http.ResponseWriter, r *http.Request, access Access, id string) {
-	if !access.action(authz.AlarmMaintain) {
-		writeError(w, http.StatusForbidden, "operator_required")
-		return
-	}
 	if !h.alarmTarget(w, access, id) {
 		return
 	}
@@ -1228,10 +1190,6 @@ func (h *Handler) maintainAlarm(w http.ResponseWriter, r *http.Request, access A
 }
 
 func (h *Handler) releaseAlarm(w http.ResponseWriter, access Access, id string) {
-	if !access.action(authz.AlarmMaintain) {
-		writeError(w, http.StatusForbidden, "operator_required")
-		return
-	}
 	if !h.alarmTarget(w, access, id) {
 		return
 	}

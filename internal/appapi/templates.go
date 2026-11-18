@@ -21,10 +21,6 @@ type TemplateDefinition struct {
 }
 
 func (h *Handler) saveTemplate(w http.ResponseWriter, r *http.Request, identity Identity) {
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	var input struct {
 		Parent      string `json:"parent"`
 		Description string `json:"description"`
@@ -86,10 +82,6 @@ func (h *Handler) saveTemplate(w http.ResponseWriter, r *http.Request, identity 
 }
 
 func (h *Handler) applyTemplate(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	template, ok := h.node(w, identity, id)
 	if !ok {
 		return

@@ -133,17 +133,8 @@ func (h *Handler) virtualInputs(w http.ResponseWriter, r *http.Request, identity
 	if preview {
 		action = input.Action
 	}
-	permission := ActionConfigure
-	if action == "apply" {
-		permission = ActionVirtualInputApply
-	} else if action == "value" {
-		permission = ActionVirtualInputWrite
-	} else if action != "draft" {
+	if action != "apply" && action != "value" && action != "draft" {
 		writeError(w, 404, "not_found")
-		return
-	}
-	if !canAction(identity, permission) {
-		writeError(w, 403, "operation_not_allowed")
 		return
 	}
 	if preview && action == "draft" {
@@ -200,10 +191,6 @@ func inputError(w http.ResponseWriter, err error) {
 }
 
 func (h *Handler) createVirtualInput(w http.ResponseWriter, r *http.Request, identity Identity) {
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, 403, "operation_not_allowed")
-		return
-	}
 	var input virtualInputRequest
 	if !decodeJSON(w, r, &input) {
 		return

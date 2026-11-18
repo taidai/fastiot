@@ -15,10 +15,6 @@ import (
 
 // savePlantPCC 处理 PUT /plants/{id}/pcc，绑定 PCC 反馈（主表+方向+上下限）。
 func (h *Handler) savePlantPCC(w http.ResponseWriter, r *http.Request, identity Identity, plantID string) {
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	node, ok := h.node(w, identity, plantID)
 	if !ok {
 		return

@@ -14,10 +14,6 @@ import (
 
 // createEnergyDevice 处理 POST /energy-units/{id}/devices。
 func (h *Handler) createEnergyDevice(w http.ResponseWriter, r *http.Request, identity Identity, energyUnitID string) {
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	node, ok := h.node(w, identity, energyUnitID)
 	if !ok {
 		return

@@ -113,10 +113,6 @@ func (h *Handler) forecastInputs(w http.ResponseWriter, r *http.Request, identit
 		inputs, configured := loadForecastInputs(node)
 		writeJSON(w, map[string]any{"inputs": inputs, "configured": configured})
 	case http.MethodPut:
-		if !canAction(identity, ActionConfigure) {
-			writeError(w, http.StatusForbidden, "admin_required")
-			return
-		}
 		var inputs ForecastInputs
 		if !decodeJSON(w, r, &inputs) {
 			return

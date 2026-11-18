@@ -16,10 +16,6 @@ import (
 // Everything is read from existing sources; no passwords or tokens appear in
 // any of them.
 func (h *Handler) deliveryEvidence(w http.ResponseWriter, r *http.Request, identity Identity) {
-	if !canAction(identity, ActionExport) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	if h.ems == nil || h.ems.Profiles == nil || h.ems.Service == nil {
 		writeError(w, http.StatusServiceUnavailable, "ems_unavailable")
 		return

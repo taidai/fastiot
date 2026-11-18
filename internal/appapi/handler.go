@@ -212,6 +212,20 @@ func canAction(identity Identity, action string) bool {
 	return authz.Resolve(false, identity.Policy.Role, identity.Policy.Actions).Allowed(action)
 }
 
+func (h *Handler) authorizeRoute(w http.ResponseWriter, r *http.Request, identity Identity) bool {
+	route, ok := authz.Required(r)
+	if !ok {
+		return true
+	}
+	allowed := route.Allowed(identity.Policy.Admin, func(action string) bool {
+		return canAction(identity, action)
+	})
+	if !allowed {
+		writeError(w, http.StatusForbidden, route.Reason)
+	}
+	return allowed
+}
+
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	status := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 	w = status
@@ -246,28 +260,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if actor == "" {
 		actor = identity.UserID
 	}
-	if h.ems != nil && strings.HasPrefix(path, "ems/") &&
+	delegateEMS := h.ems != nil && strings.HasPrefix(path, "ems/") &&
 		!strings.HasPrefix(path, "ems/screen/") &&
 		!strings.HasPrefix(path, "ems/acceptance/") &&
-		!strings.HasPrefix(path, "ems/allocators/") {
-		if h.ems.BeginAlarmConfiguration != nil && canAction(identity, ActionConfigure) && ((path == "ems/channels" && r.Method == http.MethodPost) || (strings.HasPrefix(path, "ems/channels/") && r.Method == http.MethodDelete)) {
-			finish := h.ems.BeginAlarmConfiguration()
-			defer finish()
-		}
+		!strings.HasPrefix(path, "ems/allocators/")
+	if !delegateEMS && !h.authorizeRoute(w, r, identity) {
+		return
+	}
+	if delegateEMS {
 		effective := identity.Effective
 		if effective == nil {
 			effective = authz.Resolve(identity.Policy.Admin, identity.Policy.Role, identity.Policy.Actions)
 		}
 		h.ems.ServeHTTP(w, r, emsapi.Access{
 			UserID: identity.UserID, Actor: identity.Email, Admin: identity.Policy.Admin,
-			Configure:     effective.Allowed(authz.Configure),
-			Command:       effective.Allowed(authz.Command),
-			AlarmAck:      effective.Allowed(authz.AlarmAck),
-			AlarmMaintain: effective.Allowed(authz.AlarmMaintain),
-			Delete:        effective.Allowed(authz.Delete),
-			Export:        effective.Allowed(authz.Export),
-			Actions:       effective,
-			AllowNode:     func(id string) bool { return h.allows(identity, id) },
+			Actions:   effective,
+			AllowNode: func(id string) bool { return h.allows(identity, id) },
 		})
 		return
 	}
@@ -680,10 +688,6 @@ func (h *Handler) visibleNodes(identity Identity) ([]data.NodeEdge, error) {
 }
 
 func (h *Handler) createNode(w http.ResponseWriter, r *http.Request, identity Identity) {
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	var input struct {
 		Parent      string   `json:"parent"`
 		Type        string   `json:"type"`
@@ -726,10 +730,6 @@ func (h *Handler) createNode(w http.ResponseWriter, r *http.Request, identity Id
 }
 
 func (h *Handler) writeValue(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
-	if !canAction(identity, ActionWriteValue) {
-		writeError(w, http.StatusForbidden, "operation_not_allowed")
-		return
-	}
 	var input struct {
 		Value     float64 `json:"value"`
 		PointType string  `json:"point_type"`
@@ -813,10 +813,6 @@ func (h *Handler) writeValue(w http.ResponseWriter, r *http.Request, identity Id
 }
 
 func (h *Handler) setManual(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
-	if !canAction(identity, ActionWriteValue) {
-		writeError(w, http.StatusForbidden, "operation_not_allowed")
-		return
-	}
 	node, ok := h.node(w, identity, id)
 	if !ok {
 		return
@@ -844,10 +840,6 @@ func (h *Handler) setManual(w http.ResponseWriter, r *http.Request, identity Ide
 }
 
 func (h *Handler) createRule(w http.ResponseWriter, r *http.Request, identity Identity) {
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	var input struct {
 		Parent      string            `json:"parent"`
 		Description string            `json:"description"`
@@ -877,10 +869,6 @@ func (h *Handler) saveDraft(w http.ResponseWriter, r *http.Request, identity Ide
 }
 
 func (h *Handler) writeRuleDocument(w http.ResponseWriter, r *http.Request, identity Identity, id, pointType string) {
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	rule, ok := h.rule(w, identity, id)
 	if !ok {
 		return
@@ -908,10 +896,6 @@ func (h *Handler) writeRuleDocument(w http.ResponseWriter, r *http.Request, iden
 }
 
 func (h *Handler) enableRule(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
-	if !canAction(identity, ActionRulePublish) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	rule, ok := h.rule(w, identity, id)
 	if !ok {
 		return
@@ -949,10 +933,6 @@ func (h *Handler) enableRule(w http.ResponseWriter, r *http.Request, identity Id
 // It is deliberately one number: enough to estimate today's grid cost from an
 // existing kWh point without inventing a billing engine.
 func (h *Handler) setTariff(w http.ResponseWriter, r *http.Request, identity Identity) {
-	if !canAction(identity, ActionSiteSettings) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	var input struct {
 		Root  string  `json:"root"`
 		Price float64 `json:"price"`
@@ -1012,10 +992,6 @@ func (h *Handler) testRule(w http.ResponseWriter, r *http.Request, identity Iden
 }
 
 func (h *Handler) createUser(w http.ResponseWriter, r *http.Request, identity Identity) {
-	if !canAction(identity, ActionAccountManage) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	var input struct {
 		Parent   string   `json:"parent"`
 		Email    string   `json:"email"`
@@ -1083,10 +1059,6 @@ type userDTO struct {
 }
 
 func (h *Handler) listUsers(w http.ResponseWriter, identity Identity) {
-	if !canAction(identity, ActionAccountManage) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	users, err := client.GetNodes(h.nc, "all", "all", data.NodeTypeUser, false)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "users_unavailable")
@@ -1105,10 +1077,6 @@ func (h *Handler) listUsers(w http.ResponseWriter, identity Identity) {
 }
 
 func (h *Handler) updateUserPolicy(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
-	if !canAction(identity, ActionAccountManage) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	nodes, err := client.GetNodes(h.nc, "all", id, data.NodeTypeUser, false)
 	if err != nil || len(nodes) == 0 {
 		writeError(w, http.StatusNotFound, "user_not_found")
@@ -1151,10 +1119,6 @@ func (h *Handler) updateUserPolicy(w http.ResponseWriter, r *http.Request, ident
 // account. The password is written to the user node only and never enters the
 // audit log or any export; existing sessions of the target account are revoked.
 func (h *Handler) resetUserPassword(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
-	if !canAction(identity, ActionAccountManage) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	var input struct {
 		Password string `json:"password"`
 	}

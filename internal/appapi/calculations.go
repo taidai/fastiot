@@ -261,15 +261,8 @@ func (h *Handler) calculations(w http.ResponseWriter, r *http.Request, identity 
 	if preview {
 		action = "apply"
 	}
-	permission := ActionConfigure
-	if action == "apply" {
-		permission = ActionCalculationApply
-	} else if action != "draft" {
+	if action != "apply" && action != "draft" {
 		writeError(w, 404, "not_found")
-		return
-	}
-	if !canAction(identity, permission) {
-		writeError(w, 403, "operation_not_allowed")
 		return
 	}
 	var request calculationRequest
@@ -337,10 +330,6 @@ func (h *Handler) calculations(w http.ResponseWriter, r *http.Request, identity 
 	writeJSON(w, h.calculationResponse(node, next, identity, catalog))
 }
 func (h *Handler) createCalculation(w http.ResponseWriter, r *http.Request, identity Identity) {
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, 403, "operation_not_allowed")
-		return
-	}
 	var input calculationRequest
 	if !decodeJSON(w, r, &input) {
 		return

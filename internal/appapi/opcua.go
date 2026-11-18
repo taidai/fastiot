@@ -203,10 +203,6 @@ func (h *Handler) opcuaChannels(w http.ResponseWriter, r *http.Request, identity
 		}
 		writeJSON(w, map[string]any{"channels": items})
 	case http.MethodPost:
-		if !canAction(identity, ActionConfigure) {
-			writeError(w, http.StatusForbidden, "admin_required")
-			return
-		}
 		var input struct {
 			Parent      string `json:"parent"`
 			Description string `json:"description"`
@@ -280,10 +276,6 @@ func (h *Handler) opcuaPoints(w http.ResponseWriter, r *http.Request, identity I
 		}
 		writeJSON(w, map[string]any{"points": items})
 	case http.MethodPost:
-		if !canAction(identity, ActionConfigure) {
-			writeError(w, http.StatusForbidden, "admin_required")
-			return
-		}
 		var input struct {
 			NodeID      string `json:"node_id"`
 			Description string `json:"description"`

@@ -153,10 +153,6 @@ type plan96Request struct {
 }
 
 func (h *Handler) savePlan96Handler(w http.ResponseWriter, identity Identity, req plan96Request) {
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	if len(req.Slots) != 96 {
 		writeError(w, http.StatusBadRequest, "slots_must_be_96")
 		return

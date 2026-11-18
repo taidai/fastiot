@@ -89,10 +89,6 @@ func (h *Handler) energyRule(w http.ResponseWriter, r *http.Request, identity Id
 		rule, _ := loadCapabilityRule(node)
 		writeJSON(w, rule)
 	case http.MethodPut:
-		if !canAction(identity, ActionConfigure) {
-			writeError(w, http.StatusForbidden, "admin_required")
-			return
-		}
 		var rule decision.CapabilityRule
 		if !decodeJSON(w, r, &rule) {
 			return
@@ -116,10 +112,6 @@ func (h *Handler) energyAllocator(w http.ResponseWriter, r *http.Request, identi
 		members, _ := loadEnergyAllocator(node)
 		writeJSON(w, map[string]any{"members": members})
 	case http.MethodPut:
-		if !canAction(identity, ActionConfigure) {
-			writeError(w, http.StatusForbidden, "admin_required")
-			return
-		}
 		var input struct {
 			Members []decision.EnergyMember `json:"members"`
 		}
@@ -139,10 +131,6 @@ func (h *Handler) publishCapabilityRule(w http.ResponseWriter, r *http.Request, 
 	}
 	if node.Type != NodeTypeEnergyUnit {
 		writeError(w, http.StatusBadRequest, "requires_energy_unit")
-		return
-	}
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, http.StatusForbidden, "admin_required")
 		return
 	}
 	rule, ok := loadCapabilityRule(node)

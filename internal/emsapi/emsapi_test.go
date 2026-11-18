@@ -22,17 +22,11 @@ import (
 type fakeConfigurator struct{ created, deleted int }
 
 func (f *fakeConfigurator) Create(access Access, input ChannelInput) (map[string]any, error) {
-	if !access.Admin {
-		return nil, fmt.Errorf("admin_required")
-	}
 	f.created++
 	return map[string]any{"channel_id": input.ID, "node_id": input.ID, "point_nodes": []string{}}, nil
 }
 
 func (f *fakeConfigurator) Delete(access Access, id string) error {
-	if !access.Admin {
-		return fmt.Errorf("admin_required")
-	}
 	f.deleted++
 	return nil
 }

@@ -89,7 +89,10 @@ func TestProjectVersionPublishAndRollback(t *testing.T) {
 	viewer := Identity{UserID: "viewer", Policy: AccessPolicy{Role: "viewer"}, Anchors: []string{root.ID}}
 
 	recorder := httptest.NewRecorder()
-	handler.publishHandler(recorder, viewer, siteID, "", false)
+	publishRequest := httptest.NewRequest(http.MethodPost, "/api/projects/publish", nil)
+	if handler.authorizeRoute(recorder, publishRequest, viewer) {
+		handler.publishHandler(recorder, viewer, siteID, "", false)
+	}
 	if recorder.Code != 403 {
 		t.Fatalf("viewer publish = %d, want 403", recorder.Code)
 	}
@@ -173,7 +176,10 @@ func TestProjectVersionPublishAndRollback(t *testing.T) {
 	waitPCC(meterB)
 
 	recorder = httptest.NewRecorder()
-	handler.rollbackHandler(recorder, viewer, siteID, published.ID)
+	rollbackRequest := httptest.NewRequest(http.MethodPost, "/api/projects/rollback", nil)
+	if handler.authorizeRoute(recorder, rollbackRequest, viewer) {
+		handler.rollbackHandler(recorder, viewer, siteID, published.ID)
+	}
 	if recorder.Code != 403 {
 		t.Fatalf("viewer rollback = %d, want 403", recorder.Code)
 	}

@@ -140,10 +140,6 @@ func applyProfile(server int, prof profile.Profile, points []unitModelPointView,
 
 // applyProfilesHandler 处理 POST /api/modbus/{channel}/units/apply。
 func (h *Handler) applyProfilesHandler(w http.ResponseWriter, r *http.Request, identity Identity, channelID string) {
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	channel, ok := h.node(w, identity, channelID)
 	if !ok {
 		return

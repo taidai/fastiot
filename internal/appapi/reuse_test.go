@@ -161,7 +161,10 @@ func TestReuseProject(t *testing.T) {
 	}
 
 	recorder := httptest.NewRecorder()
-	handler.reuseProjectHandler(recorder, viewer, reuseRequest{Source: siteID, Name: "二期"})
+	reuseHTTPRequest := httptest.NewRequest(http.MethodPost, "/api/projects/reuse", nil)
+	if handler.authorizeRoute(recorder, reuseHTTPRequest, viewer) {
+		handler.reuseProjectHandler(recorder, viewer, reuseRequest{Source: siteID, Name: "二期"})
+	}
 	if recorder.Code != 403 {
 		t.Fatalf("viewer reuse = %d, want 403", recorder.Code)
 	}

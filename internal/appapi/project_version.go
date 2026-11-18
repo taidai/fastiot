@@ -188,10 +188,6 @@ func (h *Handler) listVersions(siteID string) ([]versionSummary, error) {
 }
 
 func (h *Handler) publishHandler(w http.ResponseWriter, identity Identity, siteID, note string, confirm bool) {
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	// 预检不可用或存在阻断项时，必须由交付人员显式确认，才允许冻结版本。
 	report, err := h.buildPreflight(identity, siteID)
 	if err != nil {
@@ -227,10 +223,6 @@ func (h *Handler) publishHandler(w http.ResponseWriter, identity Identity, siteI
 }
 
 func (h *Handler) versionsHandler(w http.ResponseWriter, identity Identity, siteID string) {
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	if !h.allows(identity, siteID) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
@@ -244,10 +236,6 @@ func (h *Handler) versionsHandler(w http.ResponseWriter, identity Identity, site
 }
 
 func (h *Handler) rollbackHandler(w http.ResponseWriter, identity Identity, siteID, versionID string) {
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	if !h.allows(identity, siteID) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return

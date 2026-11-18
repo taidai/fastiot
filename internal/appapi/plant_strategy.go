@@ -143,10 +143,6 @@ func (h *Handler) plantStrategy(w http.ResponseWriter, r *http.Request, identity
 		strategy, configured := loadPlantStrategy(node)
 		writeJSON(w, map[string]any{"strategy": strategy, "configured": configured})
 	case http.MethodPut:
-		if !canAction(identity, ActionConfigure) {
-			writeError(w, http.StatusForbidden, "admin_required")
-			return
-		}
 		var strategy PlantStrategy
 		if !decodeJSON(w, r, &strategy) {
 			return

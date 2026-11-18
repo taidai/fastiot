@@ -212,10 +212,6 @@ func (h *Handler) capabilityInputs(w http.ResponseWriter, r *http.Request, ident
 		inputs, ok := loadCapabilityInputs(node)
 		writeJSON(w, map[string]any{"inputs": inputs, "configured": ok})
 	case http.MethodPut:
-		if !canAction(identity, ActionConfigure) {
-			writeError(w, http.StatusForbidden, "admin_required")
-			return
-		}
 		var inputs CapabilityInputs
 		if !decodeJSON(w, r, &inputs) {
 			return

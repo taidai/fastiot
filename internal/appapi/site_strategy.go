@@ -170,10 +170,6 @@ func (h *Handler) siteTarget(w http.ResponseWriter, r *http.Request, identity Id
 		target, configured := loadSiteTarget(node)
 		writeJSON(w, map[string]any{"target_kw": target, "configured": configured})
 	case http.MethodPut:
-		if !canAction(identity, ActionConfigure) {
-			writeError(w, http.StatusForbidden, "admin_required")
-			return
-		}
 		var input struct {
 			TargetKW float64 `json:"target_kw"`
 		}

@@ -50,10 +50,6 @@ func ensureDefaultPlant(nc *nats.Conn) (string, error) {
 
 // createEnergyUnit 处理 POST /energy-units。
 func (h *Handler) createEnergyUnit(w http.ResponseWriter, r *http.Request, identity Identity) {
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	var input struct {
 		AssetCode    string  `json:"asset_code"`
 		Description  string  `json:"description"`

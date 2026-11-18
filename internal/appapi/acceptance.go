@@ -30,10 +30,6 @@ type acceptanceReport struct {
 
 // runAcceptance builds a report from the live runtime and product nodes.
 func (h *Handler) runAcceptance(w http.ResponseWriter, identity Identity) {
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	if h.ems == nil || h.ems.Service == nil {
 		writeError(w, http.StatusServiceUnavailable, "ems_unavailable")
 		return

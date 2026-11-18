@@ -162,12 +162,18 @@ func TestDeliveryPreflight(t *testing.T) {
 	}
 
 	recorder = httptest.NewRecorder()
-	handler.deliveryGates(recorder, viewer, "")
+	gatesRequest := httptest.NewRequest(http.MethodGet, "/api/delivery/gates", nil)
+	if handler.authorizeRoute(recorder, gatesRequest, viewer) {
+		handler.deliveryGates(recorder, viewer, "")
+	}
 	if recorder.Code != 403 {
 		t.Fatalf("viewer gates = %d, want 403", recorder.Code)
 	}
 	recorder = httptest.NewRecorder()
-	handler.runPreflight(recorder, viewer, "")
+	preflightRequest := httptest.NewRequest(http.MethodPost, "/api/delivery/preflight", nil)
+	if handler.authorizeRoute(recorder, preflightRequest, viewer) {
+		handler.runPreflight(recorder, viewer, "")
+	}
 	if recorder.Code != 403 {
 		t.Fatalf("viewer preflight = %d, want 403", recorder.Code)
 	}

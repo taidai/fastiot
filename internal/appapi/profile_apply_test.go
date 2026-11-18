@@ -144,7 +144,9 @@ func TestApplyProfilesPersistsModels(t *testing.T) {
 		recorder := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/api/modbus/"+channelID+"/units/apply", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
-		handler.applyProfilesHandler(recorder, req, identity, channelID)
+		if handler.authorizeRoute(recorder, req, identity) {
+			handler.applyProfilesHandler(recorder, req, identity, channelID)
+		}
 		return recorder
 	}
 

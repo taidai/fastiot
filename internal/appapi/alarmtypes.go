@@ -38,13 +38,9 @@ func (h *Handler) alarmTypes(w http.ResponseWriter, r *http.Request, identity Id
 		}
 		writeJSON(w, map[string]any{"types": types})
 	case http.MethodPut:
-		if !canAction(identity, ActionConfigure) {
-			writeError(w, http.StatusForbidden, "admin_required")
-			return
-		}
 		var input struct {
-			Root string            `json:"root"`
-			Type alarmtype.Config  `json:"type"`
+			Root string           `json:"root"`
+			Type alarmtype.Config `json:"type"`
 		}
 		if !decodeJSON(w, r, &input) || input.Root != root {
 			writeError(w, http.StatusBadRequest, "invalid_alarm_type")
@@ -67,10 +63,6 @@ func (h *Handler) alarmTypes(w http.ResponseWriter, r *http.Request, identity Id
 		}
 		writeJSON(w, map[string]any{"saved": true})
 	case http.MethodDelete:
-		if !canAction(identity, ActionConfigure) {
-			writeError(w, http.StatusForbidden, "admin_required")
-			return
-		}
 		code := r.URL.Query().Get("code")
 		if code == "" {
 			writeError(w, http.StatusBadRequest, "invalid_alarm_type")

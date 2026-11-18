@@ -12,10 +12,6 @@ import (
 )
 
 func (h *Handler) putSafety(w http.ResponseWriter, r *http.Request, identity Identity) {
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	var input struct {
 		Node   string        `json:"node"`
 		Safety safety.Config `json:"safety"`

@@ -20,10 +20,6 @@ type DeliveryItem struct {
 }
 
 func (h *Handler) deliveryCheck(w http.ResponseWriter, identity Identity) {
-	if !identity.Policy.Admin {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	nodes, err := h.visibleNodes(identity)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "check_unavailable")

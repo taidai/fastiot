@@ -105,10 +105,6 @@ func calculationClosure(root string, definitions map[string]calculation.Definiti
 	return selected
 }
 func (h *Handler) trialCalculation(w http.ResponseWriter, r *http.Request, identity Identity, node data.NodeEdge, d calculation.Document, catalog calculationCatalog) {
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, 403, "operation_not_allowed")
-		return
-	}
 	var input calculationRequest
 	if !decodeJSON(w, r, &input) {
 		return

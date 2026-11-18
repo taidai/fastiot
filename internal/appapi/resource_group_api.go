@@ -48,10 +48,6 @@ func (h *Handler) listResourceGroups(w http.ResponseWriter, identity Identity) {
 
 // createResourceGroup 处理 POST /resource-groups。
 func (h *Handler) createResourceGroup(w http.ResponseWriter, r *http.Request, identity Identity) {
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	var input struct {
 		Description   string   `json:"description"`
 		SharedLimitKW float64  `json:"shared_limit_kw"`
@@ -102,10 +98,6 @@ func (h *Handler) createResourceGroup(w http.ResponseWriter, r *http.Request, id
 
 // dispatchResourceGroup 处理 POST /resource-groups/{id}/dispatch {request_kw}。
 func (h *Handler) dispatchResourceGroup(w http.ResponseWriter, r *http.Request, identity Identity, groupID string) {
-	if !canAction(identity, ActionCommand) {
-		writeError(w, http.StatusForbidden, "command_required")
-		return
-	}
 	node, ok := h.node(w, identity, groupID)
 	if !ok {
 		return

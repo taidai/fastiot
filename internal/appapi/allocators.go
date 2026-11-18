@@ -26,10 +26,6 @@ func (h *Handler) getAllocator(w http.ResponseWriter, identity Identity, id stri
 
 // putAllocator saves a validated allocator as a point on its business node.
 func (h *Handler) putAllocator(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	node, ok := h.node(w, identity, id)
 	if !ok {
 		return

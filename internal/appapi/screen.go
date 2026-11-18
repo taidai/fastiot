@@ -29,10 +29,6 @@ func (h *Handler) getScreen(w http.ResponseWriter, identity Identity, id string)
 // putScreen stores the layout as a point on the node, so it lives in the same
 // JetStream data as everything else and survives restarts.
 func (h *Handler) putScreen(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	node, ok := h.node(w, identity, id)
 	if !ok {
 		return

@@ -24,9 +24,6 @@ func NewChannelAdmin(nc *nats.Conn) ChannelAdmin { return ChannelAdmin{NC: nc} }
 
 // Create writes the channel node and its point nodes, rolling back on failure.
 func (a ChannelAdmin) Create(access emsapi.Access, input emsapi.ChannelInput) (map[string]any, error) {
-	if !access.Admin {
-		return nil, fmt.Errorf("admin_required")
-	}
 	protocol := strings.ToUpper(input.Protocol)
 	if protocol == "" {
 		protocol = data.PointValueTCP
@@ -132,9 +129,6 @@ func (a ChannelAdmin) Create(access emsapi.Access, input emsapi.ChannelInput) (m
 
 // Delete removes the channel node and its point nodes.
 func (a ChannelAdmin) Delete(access emsapi.Access, id string) error {
-	if !access.Admin {
-		return fmt.Errorf("admin_required")
-	}
 	nodes, err := client.GetNodes(a.NC, "all", id, "", false)
 	if err != nil || len(nodes) == 0 {
 		return fmt.Errorf("channel_not_found")

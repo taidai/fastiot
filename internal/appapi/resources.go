@@ -12,10 +12,6 @@ import (
 )
 
 func (h *Handler) updateNode(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	node, ok := h.node(w, identity, id)
 	if !ok {
 		return
@@ -53,10 +49,6 @@ func (h *Handler) updateNode(w http.ResponseWriter, r *http.Request, identity Id
 }
 
 func (h *Handler) moveNode(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	node, ok := h.node(w, identity, id)
 	if !ok {
 		return
@@ -142,10 +134,6 @@ func (h *Handler) moveNode(w http.ResponseWriter, r *http.Request, identity Iden
 }
 
 func (h *Handler) deleteNode(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
-	if !canAction(identity, ActionDelete) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	node, ok := h.node(w, identity, id)
 	if !ok {
 		return

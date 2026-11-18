@@ -87,10 +87,6 @@ func nodeName(node data.NodeEdge) string {
 }
 
 func (h *Handler) reusePreviewHandler(w http.ResponseWriter, identity Identity, source string) {
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	preview, err := h.buildReusePreview(identity, source)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -100,10 +96,6 @@ func (h *Handler) reusePreviewHandler(w http.ResponseWriter, identity Identity, 
 }
 
 func (h *Handler) reuseProjectHandler(w http.ResponseWriter, identity Identity, req reuseRequest) {
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	result, err := h.createProjectFromSource(identity, req)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -518,10 +510,6 @@ type reuseSource struct {
 
 // reuseSources 列出可以作为复用源的站点：只包含已有发布版本的项目。
 func (h *Handler) reuseSourcesHandler(w http.ResponseWriter, identity Identity) {
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	nodes, err := h.visibleNodes(identity)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "nodes_unavailable")

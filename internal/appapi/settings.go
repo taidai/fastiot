@@ -43,10 +43,6 @@ func (h *Handler) historySettings(w http.ResponseWriter, r *http.Request, identi
 	case http.MethodGet:
 		writeJSON(w, historySetting{Limit: ReadHistoryLimit(h.dataDir)})
 	case http.MethodPut:
-		if !canAction(identity, ActionSiteSettings) {
-			writeError(w, http.StatusForbidden, "admin_required")
-			return
-		}
 		var input historySetting
 		if !decodeJSON(w, r, &input) {
 			return
@@ -122,10 +118,6 @@ func (h *Handler) auditSettings(w http.ResponseWriter, r *http.Request, identity
 	case http.MethodGet:
 		writeJSON(w, ReadAuditSetting(h.dataDir))
 	case http.MethodPut:
-		if !canAction(identity, ActionSiteSettings) {
-			writeError(w, http.StatusForbidden, "admin_required")
-			return
-		}
 		var input AuditSetting
 		if !decodeJSON(w, r, &input) {
 			return

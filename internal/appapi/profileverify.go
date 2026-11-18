@@ -26,10 +26,6 @@ type profileVerification struct {
 }
 
 func (h *Handler) profileVerifications(w http.ResponseWriter, r *http.Request, identity Identity) {
-	if !canAction(identity, ActionExport) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	list, err := h.verificationList(identity)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "nodes_unavailable")

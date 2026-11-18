@@ -53,10 +53,6 @@ func modbusConnectionFromNode(node data.NodeEdge) (ModbusConnectionInput, bool) 
 // lineTestModbus probes an existing channel's connectivity and station
 // readability without touching configuration or writing any value.
 func (h *Handler) lineTestModbus(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
-	if !canAction(identity, ActionConfigure) {
-		writeError(w, http.StatusForbidden, "admin_required")
-		return
-	}
 	node, ok := h.node(w, identity, id)
 	if !ok {
 		return
