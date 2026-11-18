@@ -3,7 +3,7 @@
   "spec": "https://github.com/taidai/fastiot/issues/2",
   "verified_on": "2026-11-18",
   "base": "8efac3f16b7f9d995b76ad06aa1381ad988daec1",
-  "scope": "Stage A slice: one action vocabulary and effective action resolution, export authorization, frontend capability verdicts for navigation and export/write controls",
+  "scope": "Stage A: one action vocabulary and effective action resolution, route action/scope declarations, export authorization, and frontend capability verdicts for navigation and command/config controls",
   "server": {
     "authz": "internal/authz owns action names, canonical order, role defaults and whitelist resolution",
     "effective_actions": "The snapshot user carries the resolved actions array; explicit whitelist overrides role defaults and admin receives all actions",
@@ -16,10 +16,11 @@
   },
   "frontend": {
     "capability": "frontend/src/capabilities.ts computes allowed/refused with action grant, disabled, read-only and server availability reasons",
-    "context": "frontend/src/capabilitiesContext.tsx lets pages consume one verdict without prop drilling",
+    "context": "frontend/src/capabilitiesContext.tsx exposes the same verdict object used by can(), including stable refusal reasons",
     "navigation": "Page definitions declare requiredAction; delivery availability follows any visible delivery page rather than role strings",
     "exports": "History, alarms, point-table, profile verification, Modbus CSV, profile points and evidence exports are hidden without the export action",
-    "writes": "Screen disables writes on stopped points with a visible reason; point detail blocks write and manual takeover for disabled/read-only points"
+    "writes": "Screen and point detail use write_value verdicts for disabled, read-only and not-granted states; manual takeover uses the same verdict",
+    "controls": "CommandExecuteButton is shared by device and channel commands; command availability drives one verdict with matching title and aria-label; alarm and parameter controls expose the same reason; batch configuration explains empty selections and batch delete uses the delete action; read-only takes precedence over disabled to match server refusal"
   },
   "verification": {
     "go_full": "go test -p 1 -count=1 ./... passed (34 packages)",
@@ -27,12 +28,11 @@
     "route_matrix": "Real HTTP covers configure-only channel creation, delete-only channel deletion, denied delete without configuration side effects, frames, alarm acknowledgement/close/maintenance/release; direct EMS HTTP covers the same action set",
     "action_role_matrix": "Real HTTP with real identities covers every one of the 14 actions against admin, implementer, operator and viewer role defaults; project read routes retain configure and oversized unresolved impact previews fail closed for non-admin callers",
     "scope_matrix": "Real HTTP proves same-action A/B isolation for path, query, JSON-body, history and alarm targets with original refusal codes; JSON extraction follows case-insensitive field matching and last-duplicate-wins; unresolved JSON targets fail closed, required-target validation is preserved, and scoped EMS large bodies retain their original 400 invalid_json result",
-    "browser": "Real debug backend + own dev server: viewer and operator have no workbench and no history export; an export-only viewer has the export button but no workbench; implementer has both workbenches and export; API viewer history export is 403 while the explicit export grant passes authorization"
+    "browser": "Real debug backend + own dev server: viewer and operator have no workbench and no history export; an export-only viewer has the export button but no workbench; implementer has both workbenches and export; API viewer history export is 403 while the explicit export grant passes authorization",
+    "control_browser": "Real browser proves target_disabled and not_granted on the running screen, empty-selection titles on batch configuration, and disabled named commands whose title and aria-label both say device unsupported: unmapped points; temporary channel and account were deleted",
+    "control_ssr": "React SSR renders the real CommandExecuteButton and verifies disabled state, verdict-derived title and aria-label for available and unavailable commands; combined disabled+read-only input returns read_only"
   },
-  "remaining_stage_a": [
-    "Complete target-state reasons across remaining command/config controls",
-    "Deduplicate the schedule polling and freshness work is Stage B, not this slice"
-  ],
+  "remaining_stage_a": [],
   "limits": [
     "No production device connection or physical write",
     "No behavior change to role defaults beyond honoring an explicit action whitelist",

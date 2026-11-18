@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react"
 import { createPortal } from "react-dom"
+import CommandExecuteButton from "./CommandExecuteButton"
 import { ApiError, downloadCSV, nameOf, Node, point, request } from "./api"
-import { Actions } from "./capabilities"
+import { Actions, reasonText } from "./capabilities"
 import { useCapabilities } from "./capabilitiesContext"
 
 type Run = (action: () => Promise<unknown>) => Promise<boolean>
@@ -225,7 +226,7 @@ export default function CommunicationView({ token, nodes, roots, groups, canConf
   onError: (message: string) => void
   goPoints: () => void
 }) {
-  const { can } = useCapabilities()
+  const { can, verdict } = useCapabilities()
   const channels = useMemo(() => nodes.filter((node) => node.type === "modbus"), [nodes])
   const points = useMemo(() => nodes.filter((node) => node.type === "modbusIo"), [nodes])
   const [selectedID, setSelectedID] = useState("")
@@ -721,10 +722,12 @@ export default function CommunicationView({ token, nodes, roots, groups, canConf
                 <div className="unit-command-list">
                   {modelData.commands.map((command) => {
                     const result = commandResults[command.id]
+                    const execution = verdict(Actions.command, { serverAvailable: command.available })
+                    const executionReason = execution.allowed ? "" : reasonText(execution.reason)
                     return <div className={`unit-command-card ${command.available ? "" : "disabled"}`} key={command.id}>
                       <div className="unit-command-main"><strong>{command.name}</strong><span>{command.point_name ? `${command.point_name} · 写 ${command.value}` : `${command.parameters?.length || 0} 个参数`}</span></div>
-                      {command.available ? <button className="primary-button" disabled={!canOperate || modelBusy} onClick={() => void executeCommand(command)}>执行</button> : <span className="unit-map-state warn">{command.reason || "不可用"}</span>}
-                      {command.parameters && command.parameters.length > 0 && <div className="unit-command-params">{command.parameters.map((parameter) => <label key={parameter.name}>{parameter.label}<input type="number" step="any" min={parameter.has_range ? parameter.min : undefined} max={parameter.has_range ? parameter.max : undefined} disabled={!canOperate || !parameter.available} value={commandValues[command.id]?.[parameter.name] ?? parameter.default ?? 0} onChange={(event) => setCommandValue(command.id, parameter.name, Number(event.target.value))} /><span>{parameter.unit || ""}</span>{parameter.reason && <small>{parameter.reason}</small>}</label>)}</div>}
+                      <CommandExecuteButton command={command} busy={modelBusy} onClick={() => void executeCommand(command)} />
+                      {command.parameters && command.parameters.length > 0 && <div className="unit-command-params">{command.parameters.map((parameter) => <label key={parameter.name}>{parameter.label}<input type="number" step="any" min={parameter.has_range ? parameter.min : undefined} max={parameter.has_range ? parameter.max : undefined} disabled={!execution.allowed || !parameter.available} title={!execution.allowed ? executionReason : !parameter.available ? parameter.reason : undefined} aria-label={!execution.allowed ? `${parameter.label}：${executionReason}` : !parameter.available ? `${parameter.label}：${parameter.reason}` : undefined} value={commandValues[command.id]?.[parameter.name] ?? parameter.default ?? 0} onChange={(event) => setCommandValue(command.id, parameter.name, Number(event.target.value))} /><span>{parameter.unit || ""}</span>{parameter.reason && <small>{parameter.reason}</small>}</label>)}</div>}
                       {result && <div className={`command-result ${result.state}`}><span>{commandStateLabel(result.state)}</span>{result.reason && <small>{result.reason}</small>}<code>{result.request_id}</code></div>}
                     </div>
                   })}

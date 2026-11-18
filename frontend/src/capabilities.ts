@@ -26,8 +26,8 @@ export function hasAction(actions: ReadonlySet<string> | undefined, action: stri
 
 export function capability(actions: ReadonlySet<string> | undefined, action: string, target?: TargetState): Verdict {
   if (!hasAction(actions, action)) return { allowed: false, reason: "not_granted" }
-  if (target?.disabled) return { allowed: false, reason: "target_disabled" }
   if (target?.readOnly) return { allowed: false, reason: "read_only" }
+  if (target?.disabled) return { allowed: false, reason: "target_disabled" }
   if (target?.serverAvailable === false) return { allowed: false, reason: "server_unavailable" }
   return { allowed: true }
 }

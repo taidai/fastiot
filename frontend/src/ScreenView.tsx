@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { writable } from "./writable"
+import { Actions, reasonText } from "./capabilities"
+import { useCapabilities } from "./capabilitiesContext"
 import ConfirmDialog from "./ConfirmDialog"
 import ScreenTemplates, { recordVersion } from "./ScreenTemplates"
 import {
@@ -49,20 +51,20 @@ function TileTrend({ token, nodeId }: { token: string; nodeId: string }) {
   </svg>
 }
 
-export default function ScreenView({ token, snapshot, points, groups, alarms, isAdmin, canOperate, busy, run, onError, openHistory, openAlarms }: {
+export default function ScreenView({ token, snapshot, points, groups, alarms, isAdmin, busy, run, onError, openHistory, openAlarms }: {
   token: string
   snapshot: Snapshot
   points: Node[]
   groups: Node[]
   alarms: EmsAlarm[]
   isAdmin: boolean
-  canOperate: boolean
   busy: boolean
   run: Run
   onError: (message: string) => void
   openHistory: (nodeId: string) => void
   openAlarms: () => void
 }) {
+  const { verdict } = useCapabilities()
   const [nodeID, setNodeID] = useState(snapshot.roots[0] || "")
   const [config, setConfig] = useState<ScreenConfig | null>(null)
   const [draft, setDraft] = useState<ScreenConfig | null>(null)
@@ -178,7 +180,8 @@ export default function ScreenView({ token, snapshot, points, groups, alarms, is
         const updated = current?.time ? new Date(current.time) : null
         const stale = !updated || Date.now() - updated.getTime() > 15000
         const disabled = (point(node, "disabled")?.value || 0) !== 0
-        const canWrite = writable(node) && canOperate && !disabled
+        const writeVerdict = verdict(Actions.writeValue, { disabled, readOnly: !writable(node) })
+        const writeReason = reasonText(writeVerdict.reason)
         const tileAlarm = alarmCounts.get(node.id) || 0
         return <article className="panel screen-tile" key={node.id}>
           <div className="screen-tile-head"><strong>{config.title && tiles.length === 1 ? config.title : nameOf(node)}</strong><span className="screen-tile-badges"><span className={`screen-quality ${stale ? "stale" : ""}`}>{stale ? "数据过期" : "正常"}</span>{tileAlarm > 0 && <span className="screen-tile-alarm" title={`${tileAlarm} 项活动报警`}>报警 {tileAlarm}</span>}</span></div>
@@ -187,11 +190,11 @@ export default function ScreenView({ token, snapshot, points, groups, alarms, is
           <TileTrend token={token} nodeId={node.id} />
           <div className="screen-tile-actions">
             <button className="secondary-button" onClick={() => openHistory(node.id)}>历史</button>
-            {canWrite && <div className="screen-control">
+            {writeVerdict.allowed && <div className="screen-control">
               <input aria-label={`${nameOf(node)}目标值`} type="number" value={values[node.id] ?? current?.value ?? 0} onChange={(event) => setValues({ ...values, [node.id]: Number(event.target.value) })} />
               <button className="secondary-button" disabled={busy} onClick={() => setPendingWrite({ node, value: values[node.id] ?? current?.value ?? 0 })}>下发</button>
             </div>}
-            {writable(node) && canOperate && disabled && <span className="text-xs text-ems-muted" title="该点位已停用">已停用，不能下发</span>}
+            {!writeVerdict.allowed && <span className="text-xs text-ems-muted" title={writeReason}>{writeReason}，不能下发</span>}
           </div>
         </article>
       })}

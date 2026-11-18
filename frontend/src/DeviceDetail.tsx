@@ -3,10 +3,11 @@ import { createPortal } from "react-dom"
 import { EmsButton, EmsOverlay, InlineNotice } from "./components/ems"
 import { ackAlarm, closeAlarm, downloadCSV, EmsAlarm, HistoryResponse, request } from "./api"
 import AckDialog from "./AckDialog"
+import CommandExecuteButton from "./CommandExecuteButton"
 import { describeObservation, observationTimeLabel } from "./observations"
 import { useObservations } from "./useObservations"
 import type { CommandOutcome, LedgerDevice, UnitCommand, UnitModel } from "./deviceTypes"
-import { Actions } from "./capabilities"
+import { Actions, reasonText } from "./capabilities"
 import { useCapabilities } from "./capabilitiesContext"
 
 type Tab = "overview" | "points" | "commands" | "history" | "alarms" | "verify"
@@ -33,17 +34,16 @@ function isTerminal(state: string) {
   return ["confirmed", "failed", "timeout", "unknown"].includes(state)
 }
 
-export default function DeviceDetail({ token, device, canConfigure, canOperate, onClose, onError, goChannels, goAlarms }: {
+export default function DeviceDetail({ token, device, canConfigure, onClose, onError, goChannels, goAlarms }: {
   token: string
   device: LedgerDevice
   canConfigure: boolean
-  canOperate: boolean
   onClose: () => void
   onError: (message: string) => void
   goChannels: () => void
   goAlarms: () => void
 }) {
-  const { can } = useCapabilities()
+  const { can, verdict } = useCapabilities()
   const base = `/modbus/${encodeURIComponent(device.channel_id)}/units/${device.server_id}`
   const deviceID = `${device.channel_id}/${device.server_id}`
   const [tab, setTab] = useState<Tab>("overview")
@@ -200,7 +200,7 @@ export default function DeviceDetail({ token, device, canConfigure, canOperate, 
   }
 
   async function execute(command: UnitCommand, params: Record<string, number>) {
-    if (!canOperate) { setError("当前账号没有操作权限"); return }
+    if (!can(Actions.command)) { setError(reasonText("not_granted")); return }
     setBusy(true)
     setError("")
     try {
@@ -272,6 +272,7 @@ export default function DeviceDetail({ token, device, canConfigure, canOperate, 
   const commandsReady = Boolean(model?.commands.length) && (model?.commands || []).every((command) => command.available)
   const mappedCount = points.filter((point) => mappedPointIDs.has(point.id)).length
   const latestOutcome = outcomes[0]
+  const alarmAckReason = can(Actions.alarmAck) ? "" : reasonText("not_granted")
 
   return createPortal(<>
     <div className="device-workspace-backdrop" onClick={onClose} />
@@ -367,23 +368,25 @@ export default function DeviceDetail({ token, device, canConfigure, canOperate, 
 
         {!loading && tab === "commands" && <div className="device-tab-page">
           <div className="device-panel">
-            <div className="device-panel-head"><h3>命名命令</h3><span className="device-note">{canOperate ? "执行前会显示目标点位和值；不会自动重试。" : "当前账号只读。"}</span></div>
+            <div className="device-panel-head"><h3>命名命令</h3><span className="device-note">{can(Actions.command) ? "执行前会显示目标点位和值；不会自动重试。" : "当前账号只读。"}</span></div>
             {!model?.commands.length && <div className="empty-state"><strong>没有可用命令</strong><span>{profile ? "Profile 没有可写命令，或点位未映射。" : "先绑定 Profile。"}</span></div>}
             <div className="device-command-list">
               {(model?.commands || []).map((command) => {
                 const params = commandParams(command)
                 const latest = outcomes.find((outcome) => outcome.command_id === command.id)
+                const execution = verdict(Actions.command, { serverAvailable: command.available })
+                const executionReason = execution.allowed ? "" : [reasonText(execution.reason), command.reason].filter(Boolean).join("：")
                 return <div className={`device-command ${command.available ? "" : "unavailable"}`} key={command.id}>
                   <div className="device-command-main"><strong>{command.name}</strong><small>{command.point_name}{command.reason ? ` · ${command.reason}` : ""}</small></div>
                   <div className="device-command-params">{(command.parameters || []).map((parameter) => <label key={parameter.name}>{parameter.label || parameter.name}
-                    <input type="number" min={parameter.has_range ? parameter.min : undefined} max={parameter.has_range ? parameter.max : undefined} value={params[parameter.name] ?? parameter.default} disabled={!command.available || !canOperate} onChange={(event) => setParamValues((current) => ({ ...current, [command.id]: { ...params, [parameter.name]: Number(event.target.value) } }))} />
+                    <input type="number" min={parameter.has_range ? parameter.min : undefined} max={parameter.has_range ? parameter.max : undefined} value={params[parameter.name] ?? parameter.default} disabled={!execution.allowed} title={executionReason || undefined} aria-label={executionReason ? `${parameter.label || parameter.name}：${executionReason}` : undefined} onChange={(event) => setParamValues((current) => ({ ...current, [command.id]: { ...params, [parameter.name]: Number(event.target.value) } }))} />
                     {parameter.has_range && <small>{parameter.min}–{parameter.max}{parameter.unit || ""}</small>}
                   </label>)}</div>
                   <div className="device-command-actions">
                     {latest && <span className={`device-command-state ${latest.state}`}>{stateNames[latest.state] || latest.state}</span>}
                     {(command.parameters || []).length > 0 && <><button className="secondary-button" onClick={() => savePreset(command)}>存预设</button>{presets[command.id] && <button className="secondary-button" onClick={() => applyPreset(command)}>套预设</button>}</>}
                     <button className="secondary-button" disabled={!command.available} onClick={() => setPreview(command)}>影响预览</button>
-                    <button className="primary-button" disabled={!command.available || !canOperate || busy} onClick={() => setPending({ command, params })}>执行</button>
+                    <CommandExecuteButton command={command} busy={busy} onClick={() => setPending({ command, params })} />
                   </div>
                 </div>
               })}
@@ -416,7 +419,7 @@ export default function DeviceDetail({ token, device, canConfigure, canOperate, 
           <div className="device-alarm-list">{deviceAlarms.map((alarm) => <div className={`device-alarm-card ${alarm.severity}`} key={alarm.id}>
             <div><span className={`device-severity ${alarm.severity}`}>{roleNames[alarm.severity] || alarm.severity}</span><strong>{alarm.title}</strong><small>{alarm.detail || "无详细原因"}</small></div>
             <div className="device-alarm-meta"><span>{alarm.state}</span><small>{timeText(alarm.updated_at)}</small></div>
-            <div className="device-alarm-actions">{alarm.state === "active" && <button className="secondary-button" disabled={busy || !canOperate} onClick={() => void settleAlarm(alarm, "ack")}>确认</button>}{alarm.state !== "closed" && <button className="secondary-button" disabled={busy || !canOperate} onClick={() => void settleAlarm(alarm, "close")}>关闭</button>}</div>
+            <div className="device-alarm-actions">{alarm.state === "active" && <button className="secondary-button" disabled={busy || !can(Actions.alarmAck)} title={alarmAckReason || undefined} aria-label={alarmAckReason ? `确认报警：${alarmAckReason}` : "确认报警"} onClick={() => void settleAlarm(alarm, "ack")}>确认</button>}{alarm.state !== "closed" && <button className="secondary-button" disabled={busy || !can(Actions.alarmAck)} title={alarmAckReason || undefined} aria-label={alarmAckReason ? `关闭报警：${alarmAckReason}` : "关闭报警"} onClick={() => void settleAlarm(alarm, "close")}>关闭</button>}</div>
           </div>)}</div>
         </div>}
 
@@ -451,7 +454,7 @@ export default function DeviceDetail({ token, device, canConfigure, canOperate, 
       <h3>{preview.name} · 影响预览</h3>
       <p>不会下发任何值。确认目标点位及最近观测的质量与时间后再执行。</p>
       <div className="device-target-list">{commandTargets(preview).map((target) => <div key={target.pointID}><strong>{target.name}</strong><span>目标 {formatNumber(target.value)}</span><small>最近观测 {observationSummary(target.pointID)}</small></div>)}</div>
-      <div className="device-confirm-actions"><button className="secondary-button" onClick={() => setPreview(null)}>关闭</button><button className="primary-button" disabled={!canOperate} onClick={() => { setPending({ command: preview, params: commandParams(preview) }); setPreview(null) }}>去执行</button></div>
+      <div className="device-confirm-actions"><button className="secondary-button" onClick={() => setPreview(null)}>关闭</button><CommandExecuteButton command={preview} label="去执行" onClick={() => { setPending({ command: preview, params: commandParams(preview) }); setPreview(null) }} /></div>
     </section></div>}
 
     {ackTarget && <AckDialog

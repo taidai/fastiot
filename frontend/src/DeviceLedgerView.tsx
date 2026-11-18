@@ -7,12 +7,11 @@ import type { LedgerDevice } from "./deviceTypes"
 const healthNames: Record<string, string> = { healthy: "在线", degraded: "不稳定", offline: "离线", unknown: "未知" }
 const healthTones: Record<string, EmsTone> = { healthy: "success", degraded: "warning", offline: "danger", unknown: "neutral" }
 
-export default function DeviceLedgerView({ token, site, onError, canConfigure, canOperate, goChannels, goPoints, goHistory, goAlarms }: {
+export default function DeviceLedgerView({ token, site, onError, canConfigure, goChannels, goPoints, goHistory, goAlarms }: {
   token: string
   site?: string
   onError: (message: string) => void
   canConfigure: boolean
-  canOperate: boolean
   goChannels: () => void
   goPoints: () => void
   goHistory: () => void
@@ -132,7 +131,6 @@ export default function DeviceLedgerView({ token, site, onError, canConfigure, c
       token={token}
       device={selected}
       canConfigure={canConfigure}
-      canOperate={canOperate}
       onError={onError}
       onClose={() => setSelected(null)}
       goChannels={() => { setSelected(null); goChannels() }}

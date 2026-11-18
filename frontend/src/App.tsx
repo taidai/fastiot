@@ -648,15 +648,15 @@ export default function App() {
 
       {page === "screen" && <ScreenView
         token={token} snapshot={view} points={points} groups={groups} alarms={alarms}
-        isAdmin={canConfigure} canOperate={canOperate} busy={busy} run={run} onError={setError}
+        isAdmin={canConfigure} busy={busy} run={run} onError={setError}
         openHistory={(id) => { setHistoryPoint(id); setPage("history") }}
         openAlarms={() => setPage("alarms")}
       />}
 
-      {page === "ledger" && <DeviceLedgerView token={token} site={siteID} onError={setError} canConfigure={canConfigure && workbench === "delivery"} canOperate={canOperate && workbench === "delivery"} goChannels={() => openPage("channels")} goPoints={() => openPage("points")} goHistory={() => setPage("history")} goAlarms={() => setPage("alarms")} />}
+      {page === "ledger" && <DeviceLedgerView token={token} site={siteID} onError={setError} canConfigure={canConfigure && workbench === "delivery"} goChannels={() => openPage("channels")} goPoints={() => openPage("points")} goHistory={() => setPage("history")} goAlarms={() => setPage("alarms")} />}
 
       {page === "points" && canConfigure && <PointsView
-        token={token} nodes={view.nodes} isAdmin={canConfigure} canOperate={canOperate} busy={busy} run={run}
+        token={token} nodes={view.nodes} isAdmin={canConfigure} busy={busy} run={run}
         onError={setError} openHistory={(id) => { setHistoryPoint(id); setPage("history") }}
         goChannels={() => setPage("channels")}
       />}
