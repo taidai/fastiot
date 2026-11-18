@@ -33,6 +33,7 @@ func TestEvaluate(t *testing.T) {
 			input.ReceivedTime = time.Time{}
 		}, wantState: Unknown, wantQuality: signal.Uninitialized, wantReason: "not_entered"},
 		{name: "no declared expiry", now: source, mutate: func(input *Input) { input.MaxAge = 0 }, wantState: Unknown, wantQuality: signal.Uninitialized, wantReason: "expiry_unconfigured"},
+		{name: "explicit non-expiring input", now: source, mutate: func(input *Input) { input.MaxAge = 0; input.AllowNoExpiry = true }, wantState: Usable, wantQuality: signal.Good},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

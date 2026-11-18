@@ -16,12 +16,13 @@ const (
 )
 
 type Input struct {
-	Value        signal.Value
-	Quality      signal.Quality
-	Reason       string
-	SourceTime   time.Time
-	ReceivedTime time.Time
-	MaxAge       time.Duration
+	Value         signal.Value
+	Quality       signal.Quality
+	Reason        string
+	SourceTime    time.Time
+	ReceivedTime  time.Time
+	MaxAge        time.Duration
+	AllowNoExpiry bool
 }
 
 type Verdict struct {
@@ -61,11 +62,11 @@ func Evaluate(input Input, now time.Time) Verdict {
 		verdict.State, verdict.Quality, verdict.Reason = Invalid, signal.Invalid, "future_source_time"
 		return verdict
 	}
-	if input.MaxAge <= 0 {
+	if input.MaxAge <= 0 && !input.AllowNoExpiry {
 		verdict.State, verdict.Quality, verdict.Reason = Unknown, signal.Uninitialized, "expiry_unconfigured"
 		return verdict
 	}
-	if now.After(verdict.ExpiresAt) {
+	if !verdict.ExpiresAt.IsZero() && now.After(verdict.ExpiresAt) {
 		verdict.State, verdict.Quality, verdict.Reason = Stale, signal.Stale, "source_expired"
 		return verdict
 	}

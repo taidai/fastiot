@@ -26,6 +26,7 @@ type Value struct {
 	Quality         signal.Quality
 	SourceTime      time.Time
 	ReceivedTime    time.Time
+	ExpiresAt       time.Time
 	TimeSource      string
 	Unit            string
 	ConfigStamp     string
@@ -238,5 +239,6 @@ func (s *Store) effective(value Value, now time.Time, maxAge time.Duration) Valu
 		SourceTime: value.SourceTime, ReceivedTime: value.ReceivedTime, MaxAge: maxAge,
 	}, now)
 	value.Quality, value.Reason = verdict.Quality, verdict.Reason
+	value.ExpiresAt = verdict.ExpiresAt
 	return value
 }

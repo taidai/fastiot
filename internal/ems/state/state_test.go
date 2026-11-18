@@ -351,3 +351,12 @@ func TestNoDeclaredExpiryIsUnknown(t *testing.T) {
 		t.Fatalf("no-expiry observation = %+v, want unknown/expiry_unconfigured", value)
 	}
 }
+
+func TestStateExposesVerdictExpiry(t *testing.T) {
+	store := New()
+	store.Apply(t0, []channel.Result{result("d1", "temp", 35.1)})
+	value, ok := store.Get(t0, "d1", "temp", 10*time.Second)
+	if !ok || !value.ExpiresAt.Equal(t0.Add(10*time.Second)) {
+		t.Fatalf("expires_at = %s, want %s", value.ExpiresAt, t0.Add(10*time.Second))
+	}
+}
