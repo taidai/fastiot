@@ -1,0 +1,41 @@
+{
+  "ticket": "architecture-governance-stage-b-calculation-virtual-input-adaptation",
+  "spec": "https://github.com/taidai/fastiot/issues/2",
+  "design": "docs/superpowers/specs/2026-11-18-stage-b-calculation-virtual-input-adaptation-design.md",
+  "verified_on": "2026-11-18",
+  "commits": ["e19babd", "fe25989", "6e9cb53"],
+  "scope": "Stage B slice 2: adapt calculations and virtual inputs to the shared observation verdict while preserving constants and virtual-input Epoch/TTL semantics",
+  "observation": {
+    "allow_no_expiry": "Only non-observation sources or explicit simulated trials may omit expiry; ordinary observation without valid_until remains expiry_unconfigured",
+    "direct_expiry": "A direct expires_at is valid even when MaxAge is zero",
+    "state": "state.Value.ExpiresAt is copied from the same verdict"
+  },
+  "calculation": {
+    "freshness": "calculation.Freshness and Result.Freshness adapt sample quality and valid_until",
+    "boundary": "now == valid_until is usable; only now > valid_until becomes expired",
+    "sources": "Only Source=observation requires SourceTime; configuration, manual, simulation and calculation use their existing time evidence",
+    "retention": "Previous good results remain available as non-current retained values after expiry"
+  },
+  "virtual_inputs": {
+    "configuration": "Configuration constants remain good without expires_at",
+    "timed": "bad maps to invalid, stale to stale, uninitialized to unknown; Epoch/TTL and restart verification are unchanged",
+    "runtime": "Calculation runtime uses state.ExpiresAt and the virtual-input verdict instead of duplicating expiry logic"
+  },
+  "verification": {
+    "go_full": "go test -p 1 -count=1 ./... passed (35 packages)",
+    "frontend": ["npm run build", "check:navigation", "check:consistency", "check:observations", "check:acceptance", "check:capabilities"],
+    "runtime": "ConfigurationConstantAndTimedVirtualFreshness proves an initial 100 kW result becomes stale and retains the previous 100 kW result",
+    "restart": "VirtualInputPersistenceRestartCopyAndRollback additionally proves a restarted calculation cannot become good while its input is pending_verification",
+    "browser": "Calculation page shows 常量计算=200 kW usable, 定时计算=原始输入已过期, and 历史保留值（非当前）：100 kW",
+    "acceptance_fixes": "Direct expires_at with MaxAge=0 and non-observation SourceTime handling were reproduced, fixed and retested",
+    "review": "Independent review found an over-broad zero-expiry exemption; Freshness now exempts only non-observation sources or explicit simulations, with a failing-then-passing ordinary-observation regression and restart runtime coverage",
+    "cleanup": "Temporary inputs/calculations deleted and UI server stopped"
+  },
+  "remaining_stage_b": [
+    "Unify channel link-health verdicts for delivery, preflight, allocator and alarm monitoring"
+  ],
+  "limits": [
+    "No link-health changes, formula changes or virtual-input public-shape changes",
+    "No production device connection or physical write"
+  ]
+}

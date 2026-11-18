@@ -33,3 +33,13 @@ func TestFreshnessAllowsConfigurationWithoutExpiry(t *testing.T) {
 		t.Fatalf("configuration freshness = %+v", verdict)
 	}
 }
+
+func TestOrdinaryObservationWithoutExpiryIsUnknown(t *testing.T) {
+	at := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	value := 42.0
+	sample := Sample{ID: "meter", Kind: "number", Value: &value, Quality: "good", Source: "observation", SourceTime: at}
+	verdict := Freshness(sample, at)
+	if verdict.State != observation.Unknown || verdict.Quality != signal.Uninitialized || verdict.Reason != "expiry_unconfigured" {
+		t.Fatalf("undeclared observation expiry = %+v, want unknown/expiry_unconfigured", verdict)
+	}
+}

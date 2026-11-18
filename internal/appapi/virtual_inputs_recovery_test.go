@@ -6,11 +6,13 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"testing/fstest"
 	"time"
 
+	"fastiot/internal/calculation"
 	"fastiot/internal/virtualinput"
 	"github.com/nats-io/nats.go"
 	"github.com/simpleiot/simpleiot/api"
@@ -118,6 +120,16 @@ func TestVirtualInputPersistenceRestartCopyAndRollback(t *testing.T) {
 	if original == nil {
 		t.Fatal("missing original validity evidence")
 	}
+	var calculated calcResponse
+	definition := calculation.Definition{Operator: "add", Inputs: []string{inputs["simulation"].ID, inputs["simulation"].ID}, Kind: "number", Unit: "kW"}
+	status, body := call(t, http.MethodPost, base+"/calculations", token, map[string]any{"parent": group, "name": "restart calculation", "definition": definition, "operation_id": "restart-calculation"}, &calculated)
+	if status != 200 {
+		t.Fatalf("create restart calculation: %d %s", status, body)
+	}
+	status, body = call(t, http.MethodPost, base+"/calculations/"+calculated.ID+"/apply", token, map[string]any{"revision": calculated.Revision, "operation_id": "apply-restart-calculation"}, &calculated)
+	if status != 200 {
+		t.Fatalf("apply restart calculation: %d %s", status, body)
+	}
 	admin := Identity{UserID: "admin", Policy: AccessPolicy{Admin: true}, Anchors: []string{root}}
 	version, err := handler.snapshotSite(admin, site, "input baseline")
 	if err != nil {
@@ -139,7 +151,7 @@ func TestVirtualInputPersistenceRestartCopyAndRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	var cloned reuseResult
-	status, body := call(t, http.MethodPost, base+"/projects/reuse", token, reuseRequest{Source: site, Name: "copied input project"}, &cloned)
+	status, body = call(t, http.MethodPost, base+"/projects/reuse", token, reuseRequest{Source: site, Name: "copied input project"}, &cloned)
 	if status != 200 {
 		t.Fatalf("copy: %d %s", status, body)
 	}
@@ -170,7 +182,7 @@ func TestVirtualInputPersistenceRestartCopyAndRollback(t *testing.T) {
 		t.Errorf("unsupported rollback not rejected: %d", status)
 	}
 	stop()
-	base, token, _, _ = startInputServer(t, dir, password)
+	base, token, restarted, _ := startInputServer(t, dir, password)
 	for source, before := range inputs {
 		var after inputResponse
 		status, body := call(t, http.MethodGet, base+"/virtual-inputs/"+before.ID, token, nil, &after)
@@ -186,5 +198,12 @@ func TestVirtualInputPersistenceRestartCopyAndRollback(t *testing.T) {
 				t.Fatalf("restart renewed runtime input: %+v", after)
 			}
 		}
+	}
+	if _, err := restarted.runCalculationBatch(); err != nil {
+		t.Fatal(err)
+	}
+	result := restarted.CalculationRuntime().Snapshot().Results[calculated.ID]
+	if result.Quality == "good" || !strings.Contains(result.Reason, "pending_verification") {
+		t.Fatalf("restart made calculation usable without re-verification: %+v", result)
 	}
 }
