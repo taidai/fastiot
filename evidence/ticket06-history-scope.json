@@ -1,0 +1,86 @@
+{
+  "ticket": "06-history-query-export-scope",
+  "verified_on": "2026-11-18",
+  "base": "6a46e674774f7b15378653536748bd0eab0e8ac5",
+  "branch": "feat/ticket06-history-scope",
+  "scope": "Same objects, time window, filter and authorization for history query and CSV export; bounded pagination; explicit export refusal; scoped personal viewer",
+  "environment": "Isolated loopback-only software Modbus TCP fixture with 600 accepted synthetic observations per point (1 s spacing, values 0-599, received time = source time + 5 ms). Explicitly synthetic: no hardware, no production device, zero protocol writes.",
+  "dataset": {
+    "points": ["A temperature (isolated simulator)", "B temperature (isolated simulator)"],
+    "records_per_point": 600,
+    "time_window": "[start,end] both endpoints included; fixed when the user clicked Read history",
+    "source": "modbus_runtime runtime samples carrying source_time, received_time, quality, unit, config stamp and time source"
+  },
+  "browser_journey": {
+    "selection": "Selected A and B in the actual history page and fixed one window with Read history.",
+    "query": "Each point reported 600 matched / 600 returned / untruncated, source modbus_runtime, filter raw.",
+    "export": "Export selected CSV reported 1200 records and downloaded fastiot-history-2points.csv from the same fixed window.",
+    "csv_actual_check": {
+      "rows_including_header": 1201,
+      "data_rows": 1200,
+      "per_point_rows": {"A": 600, "B": 600},
+      "A_first": {"value": 0, "quality": "good", "unit": "C", "source": "modbus_runtime"},
+      "B_last": {"value": 599, "quality": "good", "unit": "C", "source": "modbus_runtime", "received_offset_ms": 5},
+      "aggregate_export_check": "5m export produced two complete buckets of 300 samples with mean 449.5 and aggregate label 5m0s"
+    },
+    "empty_interval": "A configured-only point with no observations returned a successful 0-row result and displayed 'all 0 records', while the chart said there were not enough data points; no failure or fake success.",
+    "query_failure": "An injected 503 on /history displayed 'query failed' and 'the query did not succeed; do not treat no result as no data', cleared records and disabled export; no CSV was produced.",
+    "export_failure": "An injected export failure displayed 'export failed; no complete file was generated' and created no download.",
+    "a_only_viewer": {
+      "account": "personal viewer account anchored to channel A only",
+      "snapshot_points_visible": 1,
+      "sees_B": false,
+      "query_A": {"status": 200, "matched": 600},
+      "query_B": {"status": 403},
+      "query_A_plus_B": {"status": 403},
+      "export_A": {"status": 200, "rows": 600, "contains_B": false},
+      "export_A_plus_B": {"status": 403, "csv_header_sent": false}
+    },
+    "account_switch": "After logging out the A-only viewer and signing back in as the administrator, the previous 600-record scope and export success message were gone; the new administrator selection exposed A and B again.",
+    "responsive": {"desktop": {"width": 1280, "scroll_width": 1280}, "mobile": {"width": 375, "scroll_width": 375, "history_card_width": 326}, "keyboard": "13 enabled history controls focusable through their native target, including Ionic select/button/input hosts"},
+    "screenshots": ["evidence/ticket06-a-only-viewer.jpg", "evidence/ticket06-history-desktop.jpg", "evidence/ticket06-history-mobile.jpg"]
+  },
+  "review_fix_pass": {
+    "method": "One fresh-context parallel Standards/Spec review, followed by one RED-GREEN fix pass; no re-review",
+    "standards_findings": 5,
+    "spec_findings": 7,
+    "fixed": [
+      {"issue": "Runtime samples capped before cursor filtering could silently lose older records or aggregate buckets", "proof": "TestHistoryAggregateExportUsesAllRawSamples RED/GREEN: 10002 raw samples export 35 buckets with first bucket 300 samples / 149.5"},
+      {"issue": "Timestamp-only cursor skipped identical-time records", "proof": "TestHistoryCursorKeepsIdenticalSourceTimes RED/GREEN: matched 2, page 1 returns the newer record with next_before_count 1, page 2 returns the remaining record"},
+      {"issue": "SIOT paging reused an inclusive boundary and could duplicate records", "proof": "TestSIOTHistoryPagingDoesNotDuplicateBoundary RED/GREEN: 2001 records, first page 2000, remaining page 1, matched 2001 on both"},
+      {"issue": "SIOT non-numeric points became invented zero; SIOT aggregation was empty", "proof": "TestSIOTHistoryValueAndAggregateSemantics RED/GREEN: text stays text with no numeric value; 5m mean 3 over 2 numeric samples with unit C"},
+      {"issue": "Dense identical-timestamp SIOT page could not be paged", "proof": "TestSIOTHistoryRejectsSaturatedTimeCursor RED/GREEN: explicit history_time_cursor_saturated error instead of silent truncation"},
+      {"issue": "total_matched counted only returned rows; time source and aggregate unit were dropped", "proof": "Same regressions: total_matched 2 while returned 1, time_source platform_acquisition present, aggregate unit C present"},
+      {"issue": "Stale load-more response restored results after filter/scope change", "proof": "Actual browser RED/GREEN with a delayed paged request: switching the range mid-flight no longer restores the old scope"},
+      {"issue": "Export limit rejection used a generic retry message", "proof": "Actual browser RED/GREEN: downloadHistory returns 'full export exceeds the 10000-row limit; narrow points or time range and retry'"},
+      {"issue": "Frontend dropped the cursor count on paged requests", "proof": "Actual browser RED/GREEN: paged requests now carry before_count"}
+    ],
+    "deferred_minors": [
+      "SIOT record 'source' still carries the point origin while the result 'source' names the reader; renaming both would be a broader API change",
+      "Integration fixture setup remains repeated across three tests"
+    ],
+    "rejected": [
+      {"finding": "Acceptance evidence lacks actual history UI coverage", "reason": "This round performed the A/B selection, A-only viewer, empty interval, query failure, export, account switch and responsive checks in the actual history page"}
+    ]
+  },
+  "verification": {
+    "go_full": "go test -p 1 -count=1 ./... passed after the fix pass (25 packages ok; one earlier run hit an existing fixture startup timeout, and the isolated retry plus a second full run passed)",
+    "frontend": ["npm --prefix frontend run build", "npm --prefix frontend run check:observations", "npm --prefix frontend run check:navigation", "npm --prefix frontend run check:consistency", "npm --prefix frontend run check:acceptance"],
+    "frontend_result": "passed; existing Vite >500 kB chunk-size warning remains",
+    "suite_note": "Go packages run serially because existing integration fixtures share fixed ports"
+  },
+  "limits": [
+    "Single Go service; no new datastore",
+    "Isolated software simulator only; simulator is not hardware and no M5 device sign-off is claimed",
+    "No production device connection, physical write or control bypass",
+    "Pagination above 2000 records sharing one SIOT timestamp is explicitly refused rather than guessed",
+    "No history backfill, settlement, retention cleanup policy, unlimited export or ticket07 gap plotting",
+    "No push, GitHub issue or PR"
+  ],
+  "preservation": {
+    "backup": ".scratch/task03-premerge-r26evcnm",
+    "stash": "1816cdbed35c43a05e1da30d9419de49eaec3ce7",
+    "policy": "Keep all original assets and backups; do not apply, pop or drop preserved unfinished work",
+    "not_committed": [".tmp-build", ".scratch", ".claude/launch.json temporary profiles", "unrelated user assets"]
+  }
+}

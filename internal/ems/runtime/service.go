@@ -295,6 +295,7 @@ func toHistory(received time.Time, results []channel.Result) []history.Sample {
 			DeviceID: result.DeviceID, PointID: result.PointID,
 			Value: result.Value, Quality: result.Quality,
 			SourceTime: result.SourceTime, ReceivedTime: received,
+			Unit: result.Unit, ConfigStamp: result.ConfigStamp, TimeSource: result.TimeSource,
 		})
 	}
 	return samples

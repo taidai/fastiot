@@ -19,6 +19,9 @@ type Sample struct {
 	Quality      signal.Quality `json:"quality"`
 	SourceTime   time.Time      `json:"source_time"`
 	ReceivedTime time.Time      `json:"received_time"`
+	Unit         string         `json:"unit,omitempty"`
+	ConfigStamp  string         `json:"config_stamp,omitempty"`
+	TimeSource   string         `json:"time_source,omitempty"`
 }
 
 // Store keeps the newest Limit samples per point.

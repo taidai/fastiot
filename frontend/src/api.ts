@@ -137,6 +137,7 @@ const errorTexts: Record<string, string> = {
   input_persistence_unconfirmed: "保存结果尚未确认，请先重新读取，不要盲目重复提交",
   invalid_input_document: "输入存储内容不可用，请联系工程人员核查",
   virtual_input_rollback_unsupported: "项目含虚拟输入，暂不支持项目版本回退；未执行写入",
+  history_export_limit_exceeded: "完整导出超过 10000 条上限，请缩小点位或时间范围后重试",
   admin_required: "需要管理员权限",
   forbidden: "当前账号无权执行此操作",
   not_found: "对象不存在或已删除",
@@ -276,35 +277,42 @@ export async function releaseAlarm(token: string, id: string) {
 }
 
 export type HistoryResponse = { node_id: string; type: string; points: Point[] }
+export type HistoryRecord = {
+  point_id: string; device_id?: string; source_time?: string; received_time?: string; bucket_end?: string
+  quality?: string; value?: number; text?: string; source: string; unit?: string; config_stamp?: string; sample_count?: number; aggregate?: string
+}
+export type HistoryPointResult = {
+  node_id: string; device_id?: string; source: string; records: HistoryRecord[]
+  matched: number; returned: number; truncated: boolean; next_before?: string; next_before_count?: number
+}
+export type HistoryQueryResponse = { results: HistoryPointResult[]; start?: string; end?: string; aggregate?: string; total_matched: number }
 
-export async function fetchHistory(token: string, nodeId: string, start: Date, end: Date) {
-  const query = new URLSearchParams({
-    node_id: nodeId,
-    type: "value",
-    start: start.toISOString(),
-    end: end.toISOString(),
-    limit: "2000",
-  })
-  return request<HistoryResponse>(token, `/history?${query.toString()}`)
+export async function fetchHistory(token: string, ids: string | string[], start: Date, end: Date, aggregate = "raw", before?: Date, signal?: AbortSignal, beforeCount?: number) {
+  const query = new URLSearchParams({ type: "value", start: start.toISOString(), end: end.toISOString(), limit: "2000", aggregate })
+  for (const id of Array.isArray(ids) ? ids : [ids]) query.append("node_id", id)
+  if (before) {
+    query.set("before", before.toISOString())
+    if (beforeCount !== undefined) query.set("before_count", String(beforeCount))
+  }
+  return request<HistoryQueryResponse & HistoryResponse>(token, `/history?${query.toString()}`, "GET", undefined, signal)
 }
 
-export async function downloadHistory(token: string, nodeId: string, start: Date, end: Date) {
-  const query = new URLSearchParams({
-    node_id: nodeId,
-    type: "value",
-    start: start.toISOString(),
-    end: end.toISOString(),
-  })
-  const response = await fetch(`/api/history/export?${query.toString()}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
-  if (!response.ok) throw new ApiError("历史导出失败", response.status)
-  const url = URL.createObjectURL(await response.blob())
+export async function downloadHistory(token: string, ids: string | string[], start: Date, end: Date, aggregate = "raw") {
+  const query = new URLSearchParams({ type: "value", start: start.toISOString(), end: end.toISOString(), aggregate })
+  for (const id of Array.isArray(ids) ? ids : [ids]) query.append("node_id", id)
+  const response = await fetch(`/api/history/export?${query.toString()}`, { headers: { Authorization: `Bearer ${token}` } })
+  if (!response.ok) {
+    const result = await response.json().catch(() => ({ error: "" }))
+    throw new ApiError(errorMessage(result.error || "history_export_failed", response.status), response.status, result.error || "history_export_failed")
+  }
+  const text = await response.text()
+  const url = URL.createObjectURL(new Blob(["﻿" + text], { type: "text/csv;charset=utf-8" }))
   const link = document.createElement("a")
   link.href = url
-  link.download = "fastiot-history.csv"
+  link.download = `fastiot-history-${start.toISOString().slice(0, 10)}-${Array.isArray(ids) ? ids.length : 1}points.csv`
   link.click()
   URL.revokeObjectURL(url)
+  return { text, returned: Number(response.headers.get("X-History-Returned") || Math.max(0, text.trim().split(/\r?\n/).length - 1)), filename: link.download }
 }
 
 export type EmsStateValue = {

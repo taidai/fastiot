@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { IonCardContent } from "@ionic/react"
-import { downloadHistory, EmsAlarm, fetchAlarms, fetchEmsHistory, fetchEmsState, fetchHistory, nameOf, Node, point, Point, request } from "./api"
+import { downloadHistory, EmsAlarm, fetchAlarms, fetchEmsHistory, fetchEmsState, fetchHistory, HistoryPointResult, HistoryRecord, nameOf, Node, point, request } from "./api"
 import { EmsButton, EmsCard, EmsInput, EmsSectionHeader, EmsSelect, EmsSelectOption, EmptyState, InlineNotice, SegmentedTabs } from "./components/ems"
 
 const ranges = [
@@ -29,22 +29,6 @@ function recentPoint(points: Node[]) {
     return { id: node.id, time }
   }).filter((item) => item.time).sort((a, b) => b.time.localeCompare(a.time))
   return ranked[0]?.id || points[0]?.id || ""
-}
-
-function aggregate(samples: Point[], interval: string): { time: number; value: number }[] {
-  const raw = samples
-    .map((sample) => ({ time: new Date(sample.time).getTime(), value: Number(sample.value) }))
-    .filter((item) => Number.isFinite(item.time) && Number.isFinite(item.value))
-  if (interval === "raw") return raw
-  const size = interval === "5m" ? 5 * 60_000 : 60 * 60_000
-  const buckets = new Map<number, { sum: number; count: number }>()
-  for (const item of raw) {
-    const key = Math.floor(item.time / size) * size
-    const bucket = buckets.get(key)
-    if (bucket) { bucket.sum += item.value; bucket.count += 1 }
-    else buckets.set(key, { sum: item.value, count: 1 })
-  }
-  return [...buckets.entries()].sort((a, b) => a[0] - b[0]).map(([time, bucket]) => ({ time, value: bucket.sum / bucket.count }))
 }
 
 function Trend({ series, alarms, start, end, onOpenPoints }: { series: TrendSeries[]; alarms: AlarmMark[]; start: number; end: number; onOpenPoints?: () => void }) {
@@ -112,7 +96,18 @@ export default function HistoryView({ token, points, initialPoint, onError, isAd
   useEffect(() => { setSelected(current => current.filter(id => scope.split(",").includes(id))) }, [scope])
   const [range, setRange] = useState("24h")
   const [interval, setInterval] = useState("raw")
-  const [seriesData, setSeriesData] = useState<Record<string, Point[]>>({})
+  const [seriesData, setSeriesData] = useState<Record<string, HistoryRecord[]>>({})
+  const [queryResult, setQueryResult] = useState<{ bounds: { start: Date; end: Date }; aggregate: string; results: HistoryPointResult[] }>()
+  const [queryError, setQueryError] = useState("")
+  const [moreLoading, setMoreLoading] = useState(false)
+  const [exportState, setExportState] = useState<{ busy: boolean; message: string; error: boolean }>({ busy: false, message: "", error: false })
+  const queryController = useRef<AbortController | null>(null)
+  const [queryKey, setQueryKey] = useState(0)
+  useEffect(() => {
+    queryController.current?.abort()
+    setMoreLoading(false)
+    setQueryResult(undefined); setSeriesData({}); setQueryError(""); setExportState({ busy: false, message: "", error: false })
+  }, [token, scope, range, interval, requestedSelection])
   const [loading, setLoading] = useState(false)
   const [alarms, setAlarms] = useState<EmsAlarm[]>([])
   const [showAlarms, setShowAlarms] = useState(true)
@@ -125,34 +120,30 @@ export default function HistoryView({ token, points, initialPoint, onError, isAd
 
   const hours = ranges.find((item) => item.key === range)?.hours || 24
 
-  const bounds = useMemo(() => {
+  const [bounds, setBounds] = useState(() => {
     const end = new Date()
-    const start = new Date(end.getTime() - hours * 3600 * 1000)
-    return { start, end }
-  }, [hours])
+    return { start: new Date(end.getTime() - 24 * 3600 * 1000), end }
+  })
 
   const load = useCallback(async () => {
-    if (selected.length === 0) {
-      setSeriesData({})
-      return
-    }
-    setLoading(true)
+    if (selected.length === 0) { setSeriesData({}); setQueryResult(undefined); return }
+    queryController.current?.abort()
+    const controller = new AbortController()
+    queryController.current = controller
+    const window = { start: new Date(), end: new Date() }
+    window.start = new Date(window.end.getTime() - hours * 3600 * 1000)
+    setBounds(window)
+    setLoading(true); setQueryError("")
     try {
-      const entries = await Promise.all(selected.map(async (id) => {
-        const result = await fetchHistory(token, id, bounds.start, bounds.end)
-        return [id, result.points || []] as const
-      }))
-      setSeriesData(Object.fromEntries(entries))
+      const result = await fetchHistory(token, selected, window.start, window.end, interval, undefined, controller.signal)
+      if (controller.signal.aborted) return
+      setSeriesData(Object.fromEntries(result.results.map(item => [item.node_id, item.records || []])))
+      setQueryResult({ bounds: window, aggregate: interval, results: result.results })
     } catch (cause) {
-      onError(cause instanceof Error ? cause.message : "历史读取失败")
-    } finally {
-      setLoading(false)
-    }
-  }, [token, selected, bounds, onError])
-
-  useEffect(() => {
-    void load()
-  }, [load])
+      if (!controller.signal.aborted) { setQueryResult(undefined); setSeriesData({}); setQueryError(cause instanceof Error ? cause.message : "历史读取失败") }
+    } finally { if (queryController.current === controller) setLoading(false) }
+  }, [token, selected, hours, interval])
+  useEffect(() => { void load(); return () => queryController.current?.abort() }, [token, queryKey])
 
   useEffect(() => {
     let cancelled = false
@@ -221,9 +212,41 @@ export default function HistoryView({ token, points, initialPoint, onError, isAd
     }
   }
 
+  async function loadMore() {
+    if (!queryResult || moreLoading) return
+    queryController.current?.abort()
+    const controller = new AbortController()
+    queryController.current = controller
+    setMoreLoading(true); setQueryError("")
+    try {
+      const pages = await Promise.all(queryResult.results.map(async old => {
+        if (!old.truncated || !old.next_before) return old
+        const before = new Date(old.next_before)
+        const result = await fetchHistory(token, old.node_id, queryResult.bounds.start, queryResult.bounds.end, queryResult.aggregate, before, controller.signal, old.next_before_count)
+        const next = result.results[0]
+        return { ...next, matched: old.matched, returned: old.returned + next.returned, records: [...old.records, ...next.records].sort((a, b) => (a.source_time || "").localeCompare(b.source_time || "")) }
+      }))
+      if (controller.signal.aborted || queryController.current !== controller) return
+      setQueryResult({ ...queryResult, results: pages })
+      setSeriesData(Object.fromEntries(pages.map(item => [item.node_id, item.records])))
+    } catch (cause) {
+      if (!controller.signal.aborted) setQueryError(cause instanceof Error ? cause.message : "继续读取失败")
+    } finally { if (queryController.current === controller) setMoreLoading(false) }
+  }
+  async function exportSelected() {
+    if (!queryResult || selected.length === 0 || exportState.busy) return
+    setExportState({ busy: true, message: "", error: false })
+    try {
+      const result = await downloadHistory(token, selected, queryResult.bounds.start, queryResult.bounds.end, queryResult.aggregate)
+      setExportState({ busy: false, message: `已导出 ${result.returned} 条记录 · ${result.filename}`, error: false })
+    } catch (cause) {
+      setExportState({ busy: false, message: `导出失败，未生成完整文件：${cause instanceof Error ? cause.message : "请重试"}`, error: true })
+    }
+  }
+
   const series = useMemo<TrendSeries[]>(() => selected.map((id, index) => {
     const node = points.find((item) => item.id === id)
-    const samples = aggregate(seriesData[id] || [], interval)
+    const samples = (seriesData[id] || []).map(record => ({ time: new Date(record.source_time || "").getTime(), value: Number(record.value) })).filter(item => Number.isFinite(item.time) && Number.isFinite(item.value))
     return {
       id,
       name: node ? nameOf(node) : id,
@@ -337,7 +360,8 @@ export default function HistoryView({ token, points, initialPoint, onError, isAd
             </span>
           })}
         </div>
-        <EmsButton variant="secondary" size="small" disabled={selected.length === 0} onClick={() => void downloadHistory(token, selected[0], bounds.start, bounds.end).catch((cause) => onError(cause instanceof Error ? cause.message : "导出失败"))}>导出 CSV</EmsButton>
+        <EmsButton variant="secondary" size="small" disabled={selected.length === 0 || loading} onClick={() => setQueryKey(key => key + 1)}>读取历史</EmsButton>
+        <EmsButton variant="secondary" size="small" disabled={!queryResult || selected.length === 0 || exportState.busy} onClick={() => void exportSelected()}>{exportState.busy ? "导出中…" : "导出所选 CSV"}</EmsButton>
       </div>
 
       <div className="flex min-w-0 flex-wrap items-end gap-3">
@@ -365,14 +389,24 @@ export default function HistoryView({ token, points, initialPoint, onError, isAd
           ? <EmsButton variant="secondary" size="small" onClick={() => saveQueries(savedQueries.filter((query) => query !== matchedQuery))}>删查询</EmsButton>
           : <EmsButton variant="secondary" size="small" disabled={selected.length === 0} onClick={saveQuery}>保存查询</EmsButton>}
       </div>
-      <span className="history-hint !m-0">类型 value · 单次最多 2000 点 · 聚合只影响显示</span>
+      <span className="history-hint !m-0">每次每点最多 2000 条；完整导出最多 10000 条，超限会明确拒绝。区间包含起止两端点，来源与观测/接收时间分别保留。</span>
+      {queryResult && <div className="history-scope" data-testid="history-scope">
+        <strong>所选时间窗：{queryResult.bounds.start.toLocaleString()} 至 {queryResult.bounds.end.toLocaleString()}（本地时区，包含两端点）</strong>
+        {queryResult.results.map(result => <div key={result.node_id}>
+          {points.find(item => item.id === result.node_id)?.points.find(p => p.type === "description")?.text || result.node_id}：{result.truncated ? `本次返回 ${result.returned} 条，仍有未取回数据` : `已返回所选范围内全部 ${result.returned} 条`}；来源 {result.source}；筛选 {queryResult.aggregate}
+          {result.truncated && <EmsButton variant="quiet" size="small" disabled={moreLoading} onClick={() => void loadMore()}>{moreLoading ? "继续读取中…" : "继续读取更早记录"}</EmsButton>}
+        </div>)}
+      </div>}
+      {queryError && <InlineNotice tone="danger">查询失败：{queryError}，未显示为无数据。</InlineNotice>}
+      {exportState.message && <InlineNotice tone={exportState.error ? "danger" : "success"}>{exportState.message}</InlineNotice>}
+      {!queryResult && !loading && !queryError && <p className="text-ems-muted">请选择点位并点击“读取历史”，固定本次时间窗。</p>}
     </IonCardContent></EmsCard>
 
     <EmsCard className="trend-panel min-w-0">
       <EmsSectionHeader kicker="最近变化" title={title} actions={selected.length === 1 && primary ? <div className="trend-value">{primary.latestValue ?? "—"}<small>{primary.units}</small></div> : undefined} />
       <div className="trend-body mt-4">
         <div className="trend-main">
-          {loading ? <InlineNotice tone="busy">正在读取历史…</InlineNotice> : <Trend series={series} alarms={alarmMarks} start={bounds.start.getTime()} end={bounds.end.getTime()} onOpenPoints={onOpenPoints} />}
+          {loading ? <InlineNotice tone="busy">正在读取历史…</InlineNotice> : queryError ? <InlineNotice tone="warning">本次查询未成功，不能将无结果视为无数据。</InlineNotice> : <Trend series={series} alarms={alarmMarks} start={bounds.start.getTime()} end={bounds.end.getTime()} onOpenPoints={onOpenPoints} />}
         </div>
         <aside className="quality-summary min-w-0" aria-label="数据质量摘要">
           <EmsSectionHeader kicker="数据质量" title="所选时间段" />
