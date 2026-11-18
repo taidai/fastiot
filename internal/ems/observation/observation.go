@@ -22,6 +22,7 @@ type Input struct {
 	SourceTime    time.Time
 	ReceivedTime  time.Time
 	MaxAge        time.Duration
+	ExpiresAt     time.Time
 	AllowNoExpiry bool
 }
 
@@ -35,8 +36,8 @@ type Verdict struct {
 }
 
 func Evaluate(input Input, now time.Time) Verdict {
-	verdict := Verdict{Quality: input.Quality, Reason: input.Reason, SourceTime: input.SourceTime, ReceivedTime: input.ReceivedTime}
-	if input.MaxAge > 0 && !input.SourceTime.IsZero() {
+	verdict := Verdict{Quality: input.Quality, Reason: input.Reason, SourceTime: input.SourceTime, ReceivedTime: input.ReceivedTime, ExpiresAt: input.ExpiresAt}
+	if verdict.ExpiresAt.IsZero() && input.MaxAge > 0 && !input.SourceTime.IsZero() {
 		verdict.ExpiresAt = input.SourceTime.Add(input.MaxAge)
 	}
 	switch input.Quality {
@@ -54,7 +55,7 @@ func Evaluate(input Input, now time.Time) Verdict {
 		verdict.State, verdict.Quality, verdict.Reason = Invalid, signal.Invalid, "invalid_value"
 		return verdict
 	}
-	if input.SourceTime.IsZero() {
+	if input.SourceTime.IsZero() && !input.AllowNoExpiry {
 		verdict.State, verdict.Quality, verdict.Reason = Unknown, signal.Uninitialized, "missing_source_time"
 		return verdict
 	}
@@ -62,7 +63,7 @@ func Evaluate(input Input, now time.Time) Verdict {
 		verdict.State, verdict.Quality, verdict.Reason = Invalid, signal.Invalid, "future_source_time"
 		return verdict
 	}
-	if input.MaxAge <= 0 && !input.AllowNoExpiry {
+	if input.MaxAge <= 0 && verdict.ExpiresAt.IsZero() && !input.AllowNoExpiry {
 		verdict.State, verdict.Quality, verdict.Reason = Unknown, signal.Uninitialized, "expiry_unconfigured"
 		return verdict
 	}

@@ -29,7 +29,7 @@ func Freshness(sample Sample, now time.Time) observation.Verdict {
 	verdict := observation.Evaluate(observation.Input{
 		Value: value, Quality: quality, Reason: sample.Reason,
 		SourceTime: sample.SourceTime, ReceivedTime: sample.ReceivedTime,
-		MaxAge: maxAge, ExpiresAt: sample.ValidUntil, AllowNoExpiry: sample.Source == "configuration" || sample.Source == "calculation" || sample.ValidUntil.IsZero(),
+		MaxAge: maxAge, ExpiresAt: sample.ValidUntil, AllowNoExpiry: sample.Source != "observation" || sample.ValidUntil.IsZero(),
 	}, now)
 	verdict.ExpiresAt = sample.ValidUntil
 	if verdict.State == observation.Stale && verdict.Reason == "source_expired" {

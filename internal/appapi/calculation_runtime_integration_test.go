@@ -365,6 +365,9 @@ func TestConfigurationConstantAndTimedVirtualFreshness(t *testing.T) {
 	if got := h.CalculationRuntime().Snapshot().Results[constantID]; got.Quality != "good" || got.Value == nil {
 		t.Fatalf("configuration constant became unavailable: %+v", got)
 	}
+	if before := h.CalculationRuntime().Snapshot().Results[timedID]; before.Quality != "good" || before.Value == nil || *before.Value != 100 {
+		t.Fatalf("timed input did not produce an initial good result: %+v", before)
+	}
 	h.inputStart = time.Now().Add(-2 * time.Hour)
 	h.inputLastWall = time.Now().Add(-time.Nanosecond)
 	if _, err := h.runCalculationBatch(); err != nil {
@@ -373,5 +376,8 @@ func TestConfigurationConstantAndTimedVirtualFreshness(t *testing.T) {
 	got := h.CalculationRuntime().Snapshot().Results[timedID]
 	if len(got.Inputs) != 2 || got.Inputs[0].Quality != "stale" || got.Inputs[0].Reason != "expired" || !strings.Contains(got.Reason, "input_unavailable") {
 		t.Fatalf("timed input was not expired: %+v", got)
+	}
+	if got.Retained == nil || got.Retained.Value == nil || *got.Retained.Value != 100 {
+		t.Fatalf("expired calculation lost its previous good result: %+v", got.Retained)
 	}
 }
