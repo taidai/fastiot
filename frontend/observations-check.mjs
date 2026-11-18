@@ -5,7 +5,7 @@ import ts from "typescript"
 // Reuse the project compiler without requiring Node's TypeScript loader.
 const source = readFileSync(new URL("./src/observations.ts", import.meta.url), "utf8")
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } })
-const { describeObservation, observationForNode, observationKey, observationTimeLabel } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`)
+const { describeObservation, observationForNode, observationKey, observationTimeLabel, staleSummaryText } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`)
 
 const sample = {
   device_id: "channel/1", point_id: "pressure", value: { kind: "number", number: 110 }, quality: "good",
@@ -73,5 +73,8 @@ assert.equal(observationForNode(modbusNode, nodeSource).quality, "good")
 const nonEms = observationForNode({ ...modbusNode, type: "variable" }, nodeSource)
 assert.equal(nonEms.quality, "uninitialized")
 assert.equal(nonEms.reason, "未声明有效期")
+assert.doesNotMatch(staleSummaryText(0), /都在时效内更新/)
+assert.match(staleSummaryText(0), /不代表正常/)
+assert.match(staleSummaryText(2), /2 个已过期/)
 
 console.log("Observation presentation checks passed: values, missing/failed state, provenance, query errors and scoped identity")

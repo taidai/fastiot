@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { createPortal } from "react-dom"
 import { nameOf, Node, point } from "./api"
+import { staleSummaryText } from "./observations"
 
 function channelDetail(node: Node) {
   const last = Number(point(node, "lastGoodPoll")?.value || 0)
@@ -63,7 +64,7 @@ export default function HealthSummary({ alarmCount, offlineChannels, stalePoints
           })}
         </div>}
         {drill.kind === "stale" && <div className="health-drill-body">
-          {stalePoints.length === 0 && <p>所有核心测点都在时效内更新。</p>}
+          {stalePoints.length === 0 && <p>{staleSummaryText(0)}</p>}
           {stalePoints.map((node) => {
             const detail = pointDetail(node)
             return <div className="health-drill-row" key={node.id}>

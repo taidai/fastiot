@@ -90,6 +90,10 @@ export function describeObservation(value?: EmsStateValue, options: ObservationO
   }
 }
 
+export function staleSummaryText(staleCount: number): string {
+  return staleCount > 0 ? `${staleCount} 个已过期` : "没有确认的过期测点；新鲜度不可确认时不代表正常。"
+}
+
 export function observationForNode(node: Node, source: ObservationSource) {
   if (node.type !== "modbusIo") return describeObservation({ device_id: "", point_id: node.id, value: { kind: "unknown" }, quality: "uninitialized", reason: "expiry_unconfigured" }, source)
   const server = node.points.find((item) => item.type === "id")?.value ?? 1

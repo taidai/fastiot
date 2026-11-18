@@ -1,0 +1,42 @@
+{
+  "ticket": "architecture-governance-stage-b-observation-verdict",
+  "spec": "https://github.com/taidai/fastiot/issues/2",
+  "design": "docs/superpowers/specs/2026-11-18-stage-b-observation-verdict-design.md",
+  "verified_on": "2026-11-18",
+  "commits": ["13df87463a92ee5acd8d914f045b18884d027ff6", "ac9b298bfd4058ea6d0e13cfbeb0c923027f8ed5"],
+  "scope": "Stage B slice 1: one ordinary-observation verdict for state and EMS plus matching overview, screen, energy-flow and assistant presentation",
+  "server": {
+    "module": "internal/ems/observation returns usable/stale/invalid/unknown, signal quality, reason, source/received time and expires_at",
+    "state": "state.effective consumes the verdict; rules and alarms inherit it through State.Samples",
+    "ems_state": "quality and expires_at come from the same observation input instead of separate SourceTime.Add logic",
+    "no_expiry": "MaxAge=0 returns unknown with expiry_unconfigured and no expires_at",
+    "boundary": "exact expiry remains usable; only a later time becomes stale/source_expired"
+  },
+  "frontend": {
+    "module": "describeObservation consumes expires_at and never leaves an expired observation with reason 数据有效",
+    "node_adapter": "observationForNode maps Modbus parent/server identity and returns unknown for non-EMS nodes",
+    "pages": "ScreenView, App stalePoints, EnergyFlow and AssistantPanel no longer use local 15-second freshness checks",
+    "unknown": "Unconfigured freshness is labeled unknown/未声明有效期 and is not counted as stale",
+    "health_summary": "Zero confirmed-stale points uses neutral wording and never claims all points are fresh when state is unknown, loading or unreadable"
+  },
+  "verification": {
+    "go_full": "go test -p 1 -count=1 ./... passed (35 packages, including the new observation package)",
+    "frontend": ["npm run build", "check:navigation", "check:consistency", "check:observations", "check:acceptance", "check:capabilities"],
+    "http": "A local Modbus simulator produced quality=good with expires_at; after polling was disabled without another attempt, the same point became stale/source_expired",
+    "browser": "The running screen showed 过期 for the Modbus point and 状态未知 for a non-EMS variable; EnergyFlow showed 状态未知; the assistant reported 1 个已过期 and 2 个新鲜度不可确认",
+    "cleanup": "Simulator and UI server stopped; temporary channel, variable and screen selection were removed or restored",
+    "review": "Independent review found the zero-stale overview could claim health for unknown observations; staleSummaryText now returns neutral wording after a RED→GREEN consumer check"
+  },
+  "deferred_minors": [
+    "EnergyFlow, AssistantPanel and ScreenView have real-browser acceptance but no additional automated component-level tests"
+  ],
+  "remaining_stage_b": [
+    "Adapt calculation ValidUntil and virtual-input Epoch/TTL semantics without conflating them with ordinary observations",
+    "Unify channel link-health verdicts for delivery, preflight, allocator and alarm monitoring"
+  ],
+  "limits": [
+    "No production device connection or physical write",
+    "No calculation ValidUntil or virtual-input Epoch/TTL behavior changes",
+    "No link-health changes in this slice"
+  ]
+}
