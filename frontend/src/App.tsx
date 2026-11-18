@@ -58,6 +58,8 @@ import {
 import { groupDefs, navGroupsFor, pageDefs, visiblePagesFor, workbenchFullNames, workbenchNames, type Group, type Page, type Workbench } from "./navigation"
 import { Actions, hasAction } from "./capabilities"
 import { CapabilityProvider } from "./capabilitiesContext"
+import { observationForNode, type ObservationSource } from "./observations"
+import { useObservations } from "./useObservations"
 
 const emptyDocument: Document = { table: { rows: [] }, bindings: { points: {}, actions: {} } }
 const roleNames: Record<string, string> = { admin: "管理员", implementer: "实施", operator: "操作员", viewer: "查看者" }
@@ -261,6 +263,7 @@ export default function App() {
   const [stageScale, setStageScale] = useState(() => window.innerWidth >= 1000 ? Math.min((window.innerWidth - 8) / 1632, (window.innerHeight - 8) / 1000) : 1)
 
   const policy = snapshot?.user.policy
+  const observations = useObservations(token)
   const actions = useMemo(() => new Set(snapshot?.user.actions || []), [snapshot?.user.actions])
   const can = useCallback((action: string) => hasAction(actions, action), [actions])
   const isAdminUser = !!policy?.admin
@@ -483,11 +486,7 @@ export default function App() {
     const timeout = point(channel, "timeout")?.value || 1000
     return !last || clock.getTime() / 1000 - last > Math.max(5, poll * 5 / 1000, timeout * 3 / 1000)
   })
-  const stalePoints = points.filter((node) => {
-    const value = point(node, "value")
-    const time = value?.time ? new Date(value.time).getTime() : NaN
-    return value?.value === undefined || !Number.isFinite(time) || clock.getTime() - time > 15000
-  })
+  const stalePoints = points.filter((node) => observationForNode(node, observations).quality === "stale")
   const errors = view.nodes.filter((node) => point(node, "error")?.text || (point(node, "errorCount")?.value || 0) > 0 || ["unknown", "failed"].includes(commandStatus(node)))
   const currentRule = (selectedRule ? rules.find((rule) => rule.id === selectedRule) : undefined)
     || rules.find((rule) => rule.id === ruleAnchor.current)
@@ -639,7 +638,7 @@ export default function App() {
 
       <div className="console-stage">
       {page === "devices" && <DevicesView
-        snapshot={view} points={points} siteName={currentSiteName} groups={groups} rules={rules.length} activeRules={activeRules.length} errors={errors.length}
+        snapshot={view} observations={observations} points={points} siteName={currentSiteName} groups={groups} rules={rules.length} activeRules={activeRules.length} errors={errors.length}
         alarmCount={alarmCount} busy={busy} isAdmin={canConfigure} canConfigure={canConfigure} canOperate={canOperate} run={run} openPoint={openPoint}
         goRules={() => openPage("rules")} goHistory={() => setPage("history")} goChannels={() => openPage("channels")} goEnergyUnits={() => openPage("energyUnits")} goDispatchTrace={() => setPage("dispatchTrace")} goAlarms={() => setPage("alarms")} dispatch={dispatch} latestAlarm={latestAlarm} tariff={tariff}
         kpiConfig={kpiConfig}
@@ -723,7 +722,7 @@ export default function App() {
         <span>AI</span><Icon name="sparkle" size={12} />
       </button>}
       <AssistantPanel
-        points={points} alarmCount={alarmCount} errors={errors.length} rules={rules.length} activeRules={activeRules.length}
+        points={points} observations={observations} alarmCount={alarmCount} errors={errors.length} rules={rules.length} activeRules={activeRules.length}
         stationName={stationName} open={assistantOpen} onClose={() => setAssistantOpen(false)}
       />
     </>}
@@ -739,8 +738,9 @@ export default function App() {
 
 type Run = (action: () => Promise<unknown>) => Promise<boolean>
 
-function DevicesView({ snapshot, points, siteName, groups, rules, activeRules, errors, alarmCount, busy, isAdmin, canConfigure, canOperate, run, openPoint, goRules, goHistory, goChannels, goEnergyUnits, goDispatchTrace, goAlarms, dispatch, latestAlarm, tariff, kpiConfig, onError }: {
-  snapshot: Snapshot; points: Node[]; siteName: string; groups: Node[]; rules: number; activeRules: number; errors: number; alarmCount: number | null
+function DevicesView({ snapshot, observations, points, siteName, groups, rules, activeRules, errors, alarmCount, busy, isAdmin, canConfigure, canOperate, run, openPoint, goRules, goHistory, goChannels, goEnergyUnits, goDispatchTrace, goAlarms, dispatch, latestAlarm, tariff, kpiConfig, onError }: {
+  snapshot: Snapshot
+  observations: ObservationSource; points: Node[]; siteName: string; groups: Node[]; rules: number; activeRules: number; errors: number; alarmCount: number | null
   busy: boolean; isAdmin: boolean; canConfigure: boolean; canOperate: boolean; run: Run; goRules: () => void; goHistory: () => void; goChannels: () => void; goEnergyUnits: () => void; goDispatchTrace: () => void; goAlarms: () => void; dispatch: DispatchInfo | null
   latestAlarm: EmsAlarm | null
   tariff: number | null
@@ -767,7 +767,7 @@ function DevicesView({ snapshot, points, siteName, groups, rules, activeRules, e
   return <>
     <KpiStrip points={points} tariff={tariff} config={kpiConfig} onOpen={openPoint} onSetup={canConfigure ? goChannels : undefined} />
 
-    <EnergyFlow points={points} siteName={siteName} onOpenPoint={openPoint} onOpenTrends={goHistory} dispatch={dispatch} event={{
+    <EnergyFlow points={points} observations={observations} siteName={siteName} onOpenPoint={openPoint} onOpenTrends={goHistory} dispatch={dispatch} event={{
       activeRules, rules, alarmCount, errors, pointCount: points.length, onOpenRules: goRules,
       onOpenTrace: goDispatchTrace, onOpenAlarms: goAlarms,
       latestAlarm: latestAlarm ? { title: latestAlarm.title, severity: latestAlarm.severity, at: latestAlarm.created_at } : undefined,

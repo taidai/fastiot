@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react"
 import { writable } from "./writable"
 import { Actions, reasonText } from "./capabilities"
 import { useCapabilities } from "./capabilitiesContext"
+import { observationForNode } from "./observations"
+import { useObservations } from "./useObservations"
 import ConfirmDialog from "./ConfirmDialog"
 import ScreenTemplates, { recordVersion } from "./ScreenTemplates"
 import {
@@ -65,6 +67,7 @@ export default function ScreenView({ token, snapshot, points, groups, alarms, is
   openAlarms: () => void
 }) {
   const { verdict } = useCapabilities()
+  const observations = useObservations(token)
   const [nodeID, setNodeID] = useState(snapshot.roots[0] || "")
   const [config, setConfig] = useState<ScreenConfig | null>(null)
   const [draft, setDraft] = useState<ScreenConfig | null>(null)
@@ -178,13 +181,13 @@ export default function ScreenView({ token, snapshot, points, groups, alarms, is
         const units = point(node, "units")?.text || ""
         const value = values[node.id] ?? current?.value
         const updated = current?.time ? new Date(current.time) : null
-        const stale = !updated || Date.now() - updated.getTime() > 15000
+        const observation = observationForNode(node, observations)
         const disabled = (point(node, "disabled")?.value || 0) !== 0
         const writeVerdict = verdict(Actions.writeValue, { disabled, readOnly: !writable(node) })
         const writeReason = reasonText(writeVerdict.reason)
         const tileAlarm = alarmCounts.get(node.id) || 0
         return <article className="panel screen-tile" key={node.id}>
-          <div className="screen-tile-head"><strong>{config.title && tiles.length === 1 ? config.title : nameOf(node)}</strong><span className="screen-tile-badges"><span className={`screen-quality ${stale ? "stale" : ""}`}>{stale ? "数据过期" : "正常"}</span>{tileAlarm > 0 && <span className="screen-tile-alarm" title={`${tileAlarm} 项活动报警`}>报警 {tileAlarm}</span>}</span></div>
+          <div className="screen-tile-head"><strong>{config.title && tiles.length === 1 ? config.title : nameOf(node)}</strong><span className="screen-tile-badges"><span className={`screen-quality ${observation.quality === "stale" ? "stale" : ""}`} title={observation.reason}>{observation.label}</span>{tileAlarm > 0 && <span className="screen-tile-alarm" title={`${tileAlarm} 项活动报警`}>报警 {tileAlarm}</span>}</span></div>
           <div className="screen-value">{value ?? "—"}<small>{units}</small></div>
           <div className="screen-meta">{updated ? updated.toLocaleTimeString("zh-CN", { hour12: false }) : "尚未采集"}</div>
           <TileTrend token={token} nodeId={node.id} />

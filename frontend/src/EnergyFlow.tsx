@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
 import { nameOf, Node, point } from "./api"
 import Icon, { type IconName } from "./Icons"
+import { observationForNode, type ObservationSource } from "./observations"
 
 const nodes = [
   { key: "pv", label: "光伏发电区", keywords: ["光伏", "PV"], icon: "solar" as IconName },
@@ -32,12 +33,12 @@ function powerValue(points: Node[], keywords: string[]): number | null {
   return sumByKeywords(points, keywords)
 }
 
-type NodeHealth = { state: "bound" | "stale" | "unbound"; at: string }
+type NodeHealth = { state: "bound" | "stale" | "unknown" | "unbound"; at: string }
 
-function nodeHealth(points: Node[], keywords: string[]): NodeHealth {
-  const now = Date.now()
+function nodeHealth(points: Node[], keywords: string[], source: ObservationSource): NodeHealth {
   let found = false
-  let fresh = false
+  let usable = false
+  let stale = false
   let at = ""
   for (const node of points) {
     const name = nameOf(node)
@@ -47,15 +48,16 @@ function nodeHealth(points: Node[], keywords: string[]): NodeHealth {
     if (value?.value === undefined) continue
     found = true
     if (value.time && Date.parse(value.time) > Date.parse(at || "1970-01-01")) at = value.time
-    const time = value.time ? new Date(value.time).getTime() : NaN
-    if (Number.isFinite(time) && now - time <= 15000) fresh = true
+    const observation = observationForNode(node, source)
+    if (observation.quality === "good") usable = true
+    if (observation.quality === "stale") stale = true
   }
-  return { state: !found ? "unbound" : fresh ? "bound" : "stale", at }
+  return { state: !found ? "unbound" : usable ? "bound" : stale ? "stale" : "unknown", at }
 }
 
 function FlowCard({ item, value, health, onOpen }: { item: FlowNode; value: number | null; health: NodeHealth; onOpen?: (keywords: string[]) => void }) {
   const bound = value !== null
-  const stateText = health.state === "bound" ? "已绑定" : health.state === "stale" ? "点位过期" : "未接入"
+  const stateText = health.state === "bound" ? "已绑定" : health.state === "stale" ? "点位过期" : health.state === "unknown" ? "状态未知" : "未接入"
   return <button
     type="button"
     className={`flow-node ${item.key} ${health.state}`}
@@ -141,8 +143,9 @@ const paths: Record<string, string> = {
   charge: "M1306 205 1343 240 1324 279",
 }
 
-export default function EnergyFlow({ points, siteName, onOpenPoint, onOpenTrends, event, dispatch }: {
+export default function EnergyFlow({ points, observations, siteName, onOpenPoint, onOpenTrends, event, dispatch }: {
   points: Node[]
+  observations: ObservationSource
   siteName?: string
   onOpenPoint?: (keywords: string[], fallback?: "channels" | "alarms") => void
   onOpenTrends?: () => void
@@ -157,7 +160,7 @@ export default function EnergyFlow({ points, siteName, onOpenPoint, onOpenTrends
   const panel = useRef<HTMLElement>(null)
   const canvas = useRef<HTMLDivElement>(null)
   const values = useMemo(() => new Map(nodes.map((item) => [item.key, powerValue(points, item.keywords)])), [points])
-  const health = useMemo(() => new Map(nodes.map((item) => [item.key, nodeHealth(points, item.keywords)])), [points])
+  const health = useMemo(() => new Map(nodes.map((item) => [item.key, nodeHealth(points, item.keywords, observations)])), [points, observations])
   const bound = [...values.values()].filter((value) => value !== null).length
   const viewName = view === "3d" ? "三维视图" : view === "2d" ? "二维视图" : "能量流向"
 

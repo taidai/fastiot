@@ -1,4 +1,4 @@
-import type { EmsStateValue } from "./api"
+import type { EmsStateValue, Node } from "./api"
 
 export type ObservationQuality = "good" | "stale" | "invalid" | "uninitialized"
 
@@ -16,6 +16,7 @@ const reasonLabels: Record<string, string> = {
   quality_invalid: "来源标记为无效",
   quality_stale: "来源标记为过期",
   quality_uninitialized: "来源尚无有效观测",
+  expiry_unconfigured: "未声明有效期",
 }
 const timeSources: Record<string, string> = {
   platform_collection: "平台采集", device_observation: "设备观测",
@@ -34,7 +35,10 @@ export function observationTimeLabel(value?: string) {
   return time ? new Date(time).toLocaleString("zh-CN", { hour12: false }) : "—"
 }
 
-export function describeObservation(value?: EmsStateValue, options: { error?: string; loading?: boolean; evaluatedAt?: string; elapsedMs?: number } = {}) {
+export type ObservationOptions = { error?: string; loading?: boolean; evaluatedAt?: string; elapsedMs?: number }
+export type ObservationSource = ObservationOptions & { values: Record<string, EmsStateValue> }
+
+export function describeObservation(value?: EmsStateValue, options: ObservationOptions = {}) {
   const sourceTime = validTime(value?.source_time)
   const receivedTime = validTime(value?.received_time)
   const raw = value?.value
@@ -55,8 +59,17 @@ export function describeObservation(value?: EmsStateValue, options: { error?: st
   const expiry = validTime(value?.expires_at)
   const evaluatedAt = validTime(options.evaluatedAt)
   if (quality === "good" && expiry && evaluatedAt && Date.parse(evaluatedAt) + Math.max(0, options.elapsedMs || 0) > Date.parse(expiry)) quality = "stale"
+  if (quality === "good" && !expiry) quality = "uninitialized"
   let label = qualityLabels[quality]
   let reason = value?.reason ? reasonLabels[value.reason] || "观测无效，请检查来源" : quality === "good" ? "数据有效" : quality === "stale" ? "最后有效观测已过期" : "尚无有效观测"
+  if (quality === "uninitialized" && value?.quality === "good" && !expiry) {
+    reason = reasonLabels.expiry_unconfigured
+    label = "状态未知"
+  }
+  if (value?.reason === "expiry_unconfigured") {
+    quality = "uninitialized"
+    label = "状态未知"
+  }
   if (value?.reason === "read_failed") label = "读取失败"
   if (value?.reason === "decode_failed") label = "解码失败"
   if (!sourceTime && ["read_failed", "decode_failed"].includes(value?.reason || "")) reason = `${label}，尚无有效观测`
@@ -75,4 +88,10 @@ export function describeObservation(value?: EmsStateValue, options: { error?: st
     timeSource: !sourceTime ? "尚无有效观测" : value?.time_source ? timeSources[value.time_source] || "时间来源未声明" : "时间来源未声明",
     lastAttemptTime: validTime(value?.last_attempt_time),
   }
+}
+
+export function observationForNode(node: Node, source: ObservationSource) {
+  if (node.type !== "modbusIo") return describeObservation({ device_id: "", point_id: node.id, value: { kind: "unknown" }, quality: "uninitialized", reason: "expiry_unconfigured" }, source)
+  const server = node.points.find((item) => item.type === "id")?.value ?? 1
+  return describeObservation(source.values[observationKey(`${node.parent}/${server}`, node.id)], source)
 }

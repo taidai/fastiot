@@ -5,13 +5,14 @@ import ts from "typescript"
 // Reuse the project compiler without requiring Node's TypeScript loader.
 const source = readFileSync(new URL("./src/observations.ts", import.meta.url), "utf8")
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } })
-const { describeObservation, observationKey, observationTimeLabel } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`)
+const { describeObservation, observationForNode, observationKey, observationTimeLabel } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`)
 
 const sample = {
   device_id: "channel/1", point_id: "pressure", value: { kind: "number", number: 110 }, quality: "good",
   source_time: "2026-11-15T13:00:00.000Z", received_time: "2026-11-15T13:00:00.100Z", time_source: "platform_collection",
+  expires_at: "2026-11-15T13:00:10.000Z",
 }
-const good = describeObservation(sample)
+const good = describeObservation(sample, { evaluatedAt: "2026-11-15T13:00:01.000Z" })
 assert.equal(good.text, "110")
 assert.equal(good.quality, "good")
 assert.equal(good.sourceTime, sample.source_time)
@@ -56,4 +57,21 @@ assert.equal(describeObservation({ ...sample, value: { kind: "bool", bool: false
 assert.notEqual(observationKey("channel/1", "pressure"), observationKey("channel/2", "pressure"))
 assert.notEqual(observationKey("a/b", "c"), observationKey("a", "b/c"))
 assert.notEqual(describeObservation({ ...sample, quality: "toString" }).quality, "good")
+
+const noExpiry = describeObservation({ ...sample, expires_at: undefined })
+assert.equal(noExpiry.quality, "uninitialized")
+assert.equal(noExpiry.label, "状态未知")
+assert.equal(noExpiry.reason, "未声明有效期")
+const exactBoundary = describeObservation({ ...sample, expires_at: "2026-11-15T13:00:02.000Z" }, { evaluatedAt: "2026-11-15T13:00:02.000Z" })
+assert.equal(exactBoundary.quality, "good")
+assert.notEqual(expiredCache.reason, "数据有效")
+assert.match(expiredCache.reason, /过期/)
+
+const modbusNode = { id: "p", parent: "bus", type: "modbusIo", points: [{ type: "id", value: 1 }] }
+const nodeSource = { values: { [observationKey("bus/1", "p")]: sample }, evaluatedAt: "2026-11-15T13:00:01.000Z" }
+assert.equal(observationForNode(modbusNode, nodeSource).quality, "good")
+const nonEms = observationForNode({ ...modbusNode, type: "variable" }, nodeSource)
+assert.equal(nonEms.quality, "uninitialized")
+assert.equal(nonEms.reason, "未声明有效期")
+
 console.log("Observation presentation checks passed: values, missing/failed state, provenance, query errors and scoped identity")

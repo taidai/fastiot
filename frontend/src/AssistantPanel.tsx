@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react"
 import { nameOf, Node, point } from "./api"
 import { sumByKeywords } from "./EnergyFlow"
 import Icon from "./Icons"
+import { observationForNode, type ObservationSource } from "./observations"
 
 type Message = { role: "assistant" | "user"; text: string }
 
@@ -22,24 +23,23 @@ const powerWords = [
 
 const fmt = (value: number | null, unit = "kW") => value === null ? "—" : `${value.toFixed(1)} ${unit}`
 
-function freshRows(points: Node[]) {
-  const now = Date.now()
+function freshRows(points: Node[], source: ObservationSource) {
   return points
     .filter((node) => node.type === "modbusIo" || node.type === "variable")
     .map((node) => {
       const value = point(node, "value")
-      const time = value?.time ? new Date(value.time).getTime() : NaN
       const numeric = value?.value
       return {
         name: nameOf(node),
         hasValue: numeric !== undefined && Number.isFinite(numeric),
-        fresh: Number.isFinite(time) && now - time <= 15000,
+        quality: observationForNode(node, source).quality,
       }
     })
 }
 
-export default function AssistantPanel({ points, alarmCount, errors, rules, activeRules, stationName, open, onClose }: {
+export default function AssistantPanel({ points, observations, alarmCount, errors, rules, activeRules, stationName, open, onClose }: {
   points: Node[]
+  observations: ObservationSource
   alarmCount: number | null
   errors: number
   rules: number
@@ -54,7 +54,7 @@ export default function AssistantPanel({ points, alarmCount, errors, rules, acti
   }])
   const [input, setInput] = useState("")
   const body = useRef<HTMLDivElement>(null)
-  const rows = useMemo(() => freshRows(points), [points])
+  const rows = useMemo(() => freshRows(points, observations), [points, observations])
 
   useEffect(() => {
     if (!open) return
@@ -82,10 +82,11 @@ export default function AssistantPanel({ points, alarmCount, errors, rules, acti
 
     if (/离线|过期|质量|刷新|点位|采集/.test(q)) {
       const missing = rows.filter((row) => !row.hasValue)
-      const stale = rows.filter((row) => row.hasValue && !row.fresh)
-      const names = [...missing, ...stale].slice(0, 3).map((row) => row.name)
-      if (!missing.length && !stale.length) return `已检查 ${rows.length} 个点位，全部有实时值且在 15 秒内刷新。`
-      return `共 ${rows.length} 个点位：${missing.length} 个没有值，${stale.length} 个超过 15 秒未刷新。`
+      const stale = rows.filter((row) => row.hasValue && row.quality === "stale")
+      const unknown = rows.filter((row) => row.hasValue && row.quality !== "good" && row.quality !== "stale")
+      const names = [...missing, ...stale, ...unknown].slice(0, 3).map((row) => row.name)
+      if (!missing.length && !stale.length && !unknown.length) return `已检查 ${rows.length} 个点位，全部有实时值且未过期。`
+      return `共 ${rows.length} 个点位：${missing.length} 个没有值，${stale.length} 个已过期，${unknown.length} 个新鲜度不可确认。`
         + (names.length ? `例如：${names.join("、")}。` : "")
         + "可以在“点位表”按质量筛选后查看通道和最后一次刷新时间。"
     }
