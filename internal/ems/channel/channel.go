@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"fastiot/internal/ems/health"
 	"fastiot/internal/ems/signal"
 )
 
@@ -520,22 +521,11 @@ func (c *Channel) Health(deviceID string, now time.Time, maxAge time.Duration) H
 	}
 	c.mu.Unlock()
 
-	if stats.Requests == 0 {
-		return HealthUnknown
-	}
-	if stats.ConsecutiveFailures >= offlineAfter {
-		return HealthOffline
-	}
-	if stats.LastSuccess.IsZero() {
-		return HealthDegraded
-	}
-	if maxAge > 0 && now.Sub(stats.LastSuccess) > maxAge {
-		return HealthOffline
-	}
-	if stats.ConsecutiveFailures > 0 {
-		return HealthDegraded
-	}
-	return HealthHealthy
+	verdict := health.Evaluate(health.Input{
+		Requests: stats.Requests, ConsecutiveFailures: stats.ConsecutiveFailures,
+		OfflineAfter: offlineAfter, LastSuccess: stats.LastSuccess, MaxAge: maxAge,
+	}, now)
+	return Health(verdict.State)
 }
 
 type block struct {
