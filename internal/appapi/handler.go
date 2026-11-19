@@ -352,6 +352,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.latestPreflight(w, identity, r.URL.Query().Get("site"))
 	case path == "projects/sources" && r.Method == http.MethodGet:
 		h.reuseSourcesHandler(w, identity)
+	case path == "projects/export" && r.Method == http.MethodGet:
+		h.exportProjectHandler(w, identity, r.URL.Query().Get("site"))
+	case path == "projects/import" && r.Method == http.MethodPost:
+		h.importProjectHandler(w, r, identity)
 	case path == "projects/reuse/preview" && r.Method == http.MethodGet:
 		h.reusePreviewHandler(w, identity, r.URL.Query().Get("source"))
 	case path == "projects/reuse" && r.Method == http.MethodPost:
