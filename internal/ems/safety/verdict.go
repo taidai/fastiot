@@ -78,6 +78,10 @@ func Evaluate(request Request, now time.Time) Verdict {
 			return Verdict{Decision: "refused", Value: value, Reason: fmt.Sprintf("safety condition %s = %s does not satisfy %s %s", condition.Input, sample.Value, condition.Op, condition.Value)}
 		}
 	}
+	// Envelopes only clamp numbers; booleans and labels pass through unchanged.
+	if request.Requested.Kind != signal.Number {
+		return Verdict{Decision: "allowed", Value: value}
+	}
 	decision, reason := "allowed", ""
 	if spec.HasRange {
 		if value < spec.Min {
