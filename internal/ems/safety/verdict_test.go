@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"fastiot/internal/ems/observation"
 	"fastiot/internal/ems/signal"
 )
 
@@ -64,6 +65,27 @@ func TestRequiredInputAndConditions(t *testing.T) {
 	verdict = Evaluate(Request{Requested: signal.Num(50), Spec: spec, Samples: map[string]signal.Sample{"soc": stale}}, verdictNow)
 	if verdict.Decision != "refused" || verdict.Reason != "required input soc is not usable: quality is stale" {
 		t.Fatalf("stale required input = %+v", verdict)
+	}
+}
+
+func TestDefaultFreshnessToleranceTracksSharedValue(t *testing.T) {
+	spec := &Output{Requires: []string{"soc"}}
+	for _, test := range []struct {
+		name     string
+		age      time.Duration
+		expected string
+	}{
+		{"within tolerance", observation.DefaultMaxAge - time.Second, "allowed"},
+		{"beyond tolerance", observation.DefaultMaxAge + time.Second, "refused"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sample := goodSample()
+			sample.SourceTime = verdictNow.Add(-test.age)
+			verdict := Evaluate(Request{Requested: signal.Num(50), Spec: spec, Samples: map[string]signal.Sample{"soc": sample}}, verdictNow)
+			if verdict.Decision != test.expected {
+				t.Fatalf("verdict = %+v, want %s", verdict, test.expected)
+			}
+		})
 	}
 }
 

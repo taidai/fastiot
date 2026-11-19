@@ -538,7 +538,6 @@ func (c *Client) stepRamps(active *activeTable, now time.Time, outcome *rule.Out
 		}
 		if spec, ok := active.safety[output]; ok {
 			limiter := safety.Limiter{
-				MaxAge:  15 * time.Second,
 				Outputs: map[string]safety.Output{output: spec},
 				Samples: active.values,
 			}
