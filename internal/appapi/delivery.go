@@ -2,6 +2,7 @@ package appapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/simpleiot/simpleiot/data"
 
 	"fastiot/internal/decision"
+	"fastiot/internal/ems/channel"
 )
 
 type DeliveryItem struct {
@@ -40,6 +42,13 @@ func (h *Handler) deliveryCheck(w http.ResponseWriter, identity Identity) {
 	}
 
 	var ruleFailures, ruleWarnings, manual, disabled, busFailures, busWarnings, commandFailures []string
+	now := time.Now()
+	running := make(map[string]*channel.Channel)
+	if h.ems != nil && h.ems.Service != nil {
+		for _, ch := range h.ems.Service.Channels() {
+			running[ch.ID] = ch
+		}
+	}
 	for _, node := range nodes {
 		switch node.Type {
 		case "decisionTable":
@@ -68,12 +77,6 @@ func (h *Handler) deliveryCheck(w http.ResponseWriter, identity Identity) {
 			if value, _ := node.Points.Value(data.PointTypeDisabled, ""); value != 0 {
 				disabled = append(disabled, node.Desc())
 			}
-			if text, _ := node.Points.Text("lastCommand", ""); text != "" {
-				var command CommandResult
-				if json.Unmarshal([]byte(text), &command) == nil && (command.Status == "unknown" || command.Status == "failed") {
-					commandFailures = append(commandFailures, node.Desc()+": "+command.Status)
-				}
-			}
 		case data.NodeTypeModbus:
 			children, err := client.GetNodes(h.nc, node.ID, "all", "", false)
 			if err == nil && len(children) == 0 {
@@ -83,24 +86,38 @@ func (h *Handler) deliveryCheck(w http.ResponseWriter, identity Identity) {
 				busWarnings = append(busWarnings, node.Desc()+": 连接已停用")
 				continue
 			}
-			heartbeat, ok := node.Points.Find("lastGoodPoll", "")
-			if !ok || heartbeat.Time.IsZero() {
-				busFailures = append(busFailures, node.Desc()+": 尚无完整成功轮询")
+			bus, ok := running[node.ID]
+			if !ok {
+				busFailures = append(busFailures, node.Desc()+": 通道未启动")
 				continue
 			}
-			poll, _ := node.Points.Value(data.PointTypePollPeriod, "")
-			timeout, _ := node.Points.Value(data.PointTypeTimeout, "")
-			maxAge := 5 * time.Second
-			if duration := 5 * time.Duration(poll) * time.Millisecond; duration > maxAge {
-				maxAge = duration
+			degraded, offline, unknown := 0, 0, 0
+			for _, device := range bus.Devices {
+				switch bus.Health(device.ID, now, h.ems.MaxAge) {
+				case channel.HealthDegraded:
+					degraded++
+				case channel.HealthOffline:
+					offline++
+				case channel.HealthUnknown:
+					unknown++
+				}
 			}
-			if duration := 3 * time.Duration(timeout) * time.Millisecond; duration > maxAge {
-				maxAge = duration
+			switch {
+			case len(bus.Devices) == 0:
+				busWarnings = append(busWarnings, node.Desc()+": 尚未配置设备")
+			case offline > 0:
+				busFailures = append(busFailures, fmt.Sprintf("%s: %d 台设备离线", node.Desc(), offline))
 			}
-			if age := time.Since(heartbeat.Time); age > maxAge || age < -5*time.Second {
-				busFailures = append(busFailures, node.Desc()+": 最近成功轮询已过期")
+			if degraded > 0 {
+				busWarnings = append(busWarnings, fmt.Sprintf("%s: %d 台设备通信不稳定", node.Desc(), degraded))
+			}
+			if unknown > 0 {
+				busWarnings = append(busWarnings, fmt.Sprintf("%s: %d 台设备状态未知（尚未成功轮询）", node.Desc(), unknown))
 			}
 		}
+	}
+	for _, finding := range h.commandFindings(nodes) {
+		commandFailures = append(commandFailures, finding.Object+": "+finding.State)
 	}
 	add("rules", "规则发布与运行", ruleFailures, ruleWarnings, "已启用规则均已发布，未发现运行异常")
 	add("manual", "人工接管", nil, manual, "当前没有点位处于人工接管")

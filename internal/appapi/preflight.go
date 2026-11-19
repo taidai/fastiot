@@ -334,31 +334,11 @@ func (h *Handler) ruleGate(nodes []data.NodeEdge) preflightGate {
 }
 
 func (h *Handler) commandGate(nodes []data.NodeEdge) preflightGate {
-	var failed int
-	var object string
-	for _, node := range nodes {
-		if node.Type != data.NodeTypeVariable && node.Type != data.NodeTypeModbusIO {
-			continue
-		}
-		text, _ := node.Points.Text("lastCommand", "")
-		if text == "" {
-			continue
-		}
-		var command CommandResult
-		if json.Unmarshal([]byte(text), &command) != nil {
-			continue
-		}
-		if command.Status == "unknown" || command.Status == "failed" {
-			failed++
-			if object == "" {
-				object = node.Desc()
-			}
-		}
-	}
+	findings := h.commandFindings(nodes)
 	gate := preflightGate{Key: "commands", Title: "命令结果"}
-	if failed > 0 {
-		gate.Status, gate.Object = "fail", object
-		gate.Detail = fmt.Sprintf("存在 %d 条结果未知或失败的命令", failed)
+	if len(findings) > 0 {
+		gate.Status, gate.Object = "fail", findings[0].Object
+		gate.Detail = fmt.Sprintf("存在 %d 条结果未知或失败的命令", len(findings))
 		gate.NextStep = "在调度追溯里核对命令并重新下发"
 		return gate
 	}
