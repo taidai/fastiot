@@ -139,6 +139,15 @@ const errorTexts: Record<string, string> = {
   virtual_input_rollback_unsupported: "项目含虚拟输入，暂不支持项目版本回退；未执行写入",
   history_export_limit_exceeded: "完整导出超过 10000 条上限，请缩小点位或时间范围后重试",
   export_required: "当前账号没有导出权限",
+  read_only: "该点位只读，不能写入",
+  node_disabled: "该点位已停用，不能写入",
+  manual_takeover: "该点位处于人工接管状态，自动写入已拒绝",
+  invalid_safety_config: "安全配置无效，已拒绝写入；请检查点位安全设置",
+  invalid_command: "命令格式不完整，已拒绝写入",
+  operation_not_allowed: "当前状态下不允许此操作",
+  request_id_conflict: "请求标识已被其他写入使用，请读取当前状态后再试",
+  command_not_accepted: "命令未被接受",
+  command_state_unavailable: "命令状态暂不可用，请刷新确认后再试",
   admin_required: "需要管理员权限",
   forbidden: "当前账号无权执行此操作",
   not_found: "对象不存在或已删除",
@@ -176,8 +185,11 @@ const errorTexts: Record<string, string> = {
   slot_out_of_range: "计划值超出允许范围",
 }
 
-function errorMessage(code: string, status: number): string {
+export function errorMessage(code: string, status: number): string {
   if (code && errorTexts[code]) return errorTexts[code]
+  // Safety refusals carry an explanatory sentence, not a code. Show the
+  // server's reason verbatim so the operator sees why the write was refused.
+  if (code && /\s/.test(code)) return code
   if (status === 401) return "登录已失效，请重新登录"
   if (status === 403) return "当前账号无权执行此操作"
   if (status === 404) return "对象不存在或已删除"
