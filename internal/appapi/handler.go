@@ -23,6 +23,7 @@ import (
 	"fastiot/internal/authz"
 	"fastiot/internal/calculation"
 	"fastiot/internal/decision"
+	"fastiot/internal/ems/command"
 	"fastiot/internal/emsapi"
 )
 
@@ -38,6 +39,7 @@ type Handler struct {
 	inputLastWall      time.Time
 	ownershipMu        sync.Mutex
 	ems                *emsapi.Handler
+	localCommands      *command.Manager
 	opcua              *OpcuaManager
 
 	siteGoalMu    sync.Mutex
@@ -66,6 +68,7 @@ func New(nc *nats.Conn, users api.UserAuthority, ready *atomic.Bool) *Handler {
 		sessions:           map[string]sessionState{},
 		sessionTimeout:     30 * time.Minute,
 		maxSessions:        5,
+		localCommands:      command.New(nil, nil, nil, 0, 0),
 	}
 }
 
@@ -818,7 +821,7 @@ func (h *Handler) writeValue(w http.ResponseWriter, r *http.Request, identity Id
 		_ = h.recordCommand(id, CommandResult{
 			RequestID: input.RequestID, Status: "failed", Target: input.Value,
 			Actor: identity.UserID, CreatedAt: time.Now(),
-		})
+		}, verdict.Reason)
 		status := http.StatusConflict
 		if verdict.Reason == "read_only" {
 			status = http.StatusForbidden
@@ -834,11 +837,11 @@ func (h *Handler) writeValue(w http.ResponseWriter, r *http.Request, identity Id
 	point.Origin = identity.UserID
 	if err := client.SendNodePoint(h.nc, id, point, true); err != nil {
 		result.Status = "failed"
-		_ = h.recordCommand(id, result)
+		_ = h.recordCommand(id, result, err.Error())
 		writeError(w, http.StatusBadGateway, "command_not_accepted")
 		return
 	}
-	if err := h.recordCommand(id, result); err != nil {
+	if err := h.recordCommand(id, result, ""); err != nil {
 		writeError(w, http.StatusInternalServerError, "command_state_unavailable")
 		return
 	}

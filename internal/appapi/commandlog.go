@@ -31,6 +31,7 @@ type commandLogRecord struct {
 	Stage       string    `json:"stage,omitempty"`
 	FallbackOf  string    `json:"fallback_of,omitempty"`
 	Fingerprint string    `json:"fingerprint,omitempty"`
+	External    bool      `json:"external,omitempty"`
 }
 
 // WireCommandHistory replays persisted command outcomes into the manager and
@@ -54,7 +55,7 @@ func WireCommandHistory(dataDir string, manager *command.Manager) {
 			Actor: record.Actor, State: command.State(record.State), Reason: record.Reason,
 			StartedAt: record.StartedAt, UpdatedAt: record.UpdatedAt,
 			DispatchID: record.DispatchID, Source: record.Source, Stage: record.Stage,
-			FallbackOf: record.FallbackOf, Fingerprint: record.Fingerprint,
+			FallbackOf: record.FallbackOf, Fingerprint: record.Fingerprint, External: record.External,
 		})
 	}
 	manager.Preload(outcomes)
@@ -70,7 +71,7 @@ func WireCommandHistory(dataDir string, manager *command.Manager) {
 			Actor: outcome.Actor, State: string(outcome.State), Reason: outcome.Reason,
 			StartedAt: outcome.StartedAt, UpdatedAt: outcome.UpdatedAt,
 			DispatchID: outcome.DispatchID, Source: outcome.Source, Stage: outcome.Stage,
-			FallbackOf: outcome.FallbackOf, Fingerprint: outcome.Fingerprint,
+			FallbackOf: outcome.FallbackOf, Fingerprint: outcome.Fingerprint, External: outcome.External,
 		})
 	}
 }

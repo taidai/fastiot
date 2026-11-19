@@ -88,6 +88,11 @@ type Outcome struct {
 	// Restored marks an outcome replayed from a previous run: shown in
 	// history, deduplicated by request id, but never re-raising alarms.
 	Restored bool
+	// External marks a request the caller dispatches and confirms itself, such
+	// as a manual point write applied through the node store. The manager keeps
+	// its one canonical outcome but writes nothing; Tick and Supersede never
+	// advance it, the caller reports progress with SetState.
+	External bool
 }
 
 // Dispatcher writes command values to a device. It must not retry internally.
@@ -275,6 +280,54 @@ func (m *Manager) submitLocked(now time.Time, request Request) (Outcome, error) 
 	return outcome, nil
 }
 
+// Track records a point write the caller dispatches and confirms itself. The
+// manager keeps the one canonical outcome for the request but writes nothing
+// and never advances it; the caller reports each state change with SetState.
+// A repeated id with identical semantics returns the existing outcome; the
+// same id with another device or value is a conflict.
+func (m *Manager) Track(now time.Time, request Request) (Outcome, error) {
+	m.Mu.Lock()
+	defer m.Mu.Unlock()
+	if request.ID == "" || request.DeviceID == "" || request.Point == "" || request.CommandID != "" {
+		return Outcome{}, errors.New("tracked requests need an id, a device and one point")
+	}
+	if !request.Value.Valid() {
+		return Outcome{}, errors.New("point write value is not finite")
+	}
+	fingerprint := fingerprintOf(request)
+	if existing, ok := m.orders[request.ID]; ok {
+		if existing.Fingerprint != fingerprint {
+			return Outcome{}, fmt.Errorf("request id %s already used with different parameters", request.ID)
+		}
+		return existing, nil
+	}
+	outcome := Outcome{
+		RequestID: request.ID, DeviceID: request.DeviceID,
+		Actor: request.Actor, State: Accepted, StartedAt: now, UpdatedAt: now,
+		Writes: []device.Write{{Point: request.Point, Value: request.Value}},
+		Source: request.Source, Stage: request.Stage, DispatchID: request.DispatchID,
+		Fingerprint: fingerprint, External: true,
+	}
+	m.store(outcome)
+	return outcome, nil
+}
+
+// SetState advances an externally tracked request. Requests the manager
+// dispatched itself are advanced by Tick and cannot be changed here.
+func (m *Manager) SetState(now time.Time, requestID string, state State, reason string) (Outcome, bool) {
+	m.Mu.Lock()
+	defer m.Mu.Unlock()
+	outcome, ok := m.orders[requestID]
+	if !ok || !outcome.External {
+		return Outcome{}, false
+	}
+	outcome.State = state
+	outcome.Reason = reason
+	outcome.UpdatedAt = now
+	m.store(outcome)
+	return outcome, true
+}
+
 // fingerprintOf renders the normalized semantics used for duplicate detection.
 func fingerprintOf(request Request) string {
 	if request.Point != "" {
@@ -316,7 +369,7 @@ func (m *Manager) Supersede(deviceID string) int {
 	now := time.Now()
 	for _, id := range m.order {
 		outcome := m.orders[id]
-		if outcome.DeviceID != deviceID || (outcome.State != Accepted && outcome.State != Executing) {
+		if outcome.DeviceID != deviceID || (outcome.State != Accepted && outcome.State != Executing) || outcome.External {
 			continue
 		}
 		outcome.State = Superseded
@@ -347,11 +400,20 @@ func (m *Manager) store(outcome Outcome) {
 	kept := make([]string, 0, len(m.order))
 	for _, id := range m.order {
 		if drop > 0 {
-			switch m.orders[id].State {
+			outcome := m.orders[id]
+			switch outcome.State {
 			case Confirmed, Submitted, Superseded:
 				delete(m.orders, id)
 				drop--
 				continue
+			case Accepted, Executing:
+				// A caller-advanced request that never reached a terminal state
+				// (for example a variable write) must not pin memory forever.
+				if outcome.External {
+					delete(m.orders, id)
+					drop--
+					continue
+				}
 			}
 		}
 		kept = append(kept, id)
@@ -402,6 +464,9 @@ func (m *Manager) Tick(now time.Time) {
 	for _, id := range m.order {
 		outcome := m.orders[id]
 		if outcome.State != Accepted && outcome.State != Executing {
+			continue
+		}
+		if outcome.External {
 			continue
 		}
 		timeout := m.Default
