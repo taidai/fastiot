@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"fastiot/internal/ems/device"
+	"fastiot/internal/ems/safety"
 	"fastiot/internal/ems/signal"
 )
 
@@ -95,6 +96,14 @@ type Dispatcher interface {
 	Write(deviceID, requestID string, writes []device.Write) error
 }
 
+// GuardRequest is the normalized command before it reaches a protocol writer.
+type GuardRequest struct {
+	DeviceID  string
+	Point     string
+	Writes    []device.Write
+	Automatic bool
+}
+
 // Manager tracks commands until they confirm, fail or time out. A timeout is
 // reported as Unknown: the device may or may not have executed the command.
 type Manager struct {
@@ -104,6 +113,7 @@ type Manager struct {
 	Samples  func(deviceID string, now time.Time) map[string]signal.Sample
 	MaxAge   time.Duration
 	Writer   Dispatcher
+	Guard    func(GuardRequest) safety.Verdict
 	// Persist, when set, receives every stored state change. It is called
 	// under the manager lock, so it must not call back into the manager.
 	Persist func(Outcome)
@@ -217,6 +227,18 @@ func (m *Manager) submitLocked(now time.Time, request Request) (Outcome, error) 
 		Writes: writes, Readback: readback,
 		DispatchID: request.DispatchID, Source: request.Source, Stage: request.Stage,
 		FallbackOf: request.FallbackOf, Fingerprint: fingerprint, SafeFallback: request.SafeFallback,
+	}
+	if m.Guard != nil {
+		verdict := m.Guard(GuardRequest{DeviceID: request.DeviceID, Point: request.Point, Writes: writes, Automatic: request.Source != "manual"})
+		if verdict.Decision == "refused" {
+			outcome.State = Failed
+			outcome.Reason = verdict.Reason
+			m.store(outcome)
+			return outcome, nil
+		}
+		if verdict.Decision == "clamped" && len(writes) > 0 {
+			writes[0].Value = signal.Num(verdict.Value)
+		}
 	}
 	if m.Writer == nil {
 		outcome.State = Failed

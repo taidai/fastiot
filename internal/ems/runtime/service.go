@@ -13,6 +13,7 @@ import (
 	"fastiot/internal/ems/command"
 	"fastiot/internal/ems/device"
 	"fastiot/internal/ems/history"
+	"fastiot/internal/ems/safety"
 	"fastiot/internal/ems/signal"
 	"fastiot/internal/ems/state"
 )
@@ -65,6 +66,9 @@ func NewService(profiles func(string) (device.Profile, bool), maxAge, commandTim
 		},
 		maxAge, commandTimeout,
 	)
+	service.commands.Guard = func(request command.GuardRequest) safety.Verdict {
+		return safety.Evaluate(safety.Request{Requested: request.Writes[0].Value, Automatic: request.Automatic}, time.Now())
+	}
 	return service
 }
 

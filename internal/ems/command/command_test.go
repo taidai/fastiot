@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"fastiot/internal/ems/device"
+	"fastiot/internal/ems/safety"
 	"fastiot/internal/ems/signal"
 )
 
@@ -222,7 +223,59 @@ func pointRequest(id string, value float64) Request {
 	return Request{ID: id, DeviceID: "pcs1", Point: "power", Value: signal.Num(value), Actor: "operator", SafeFallback: true}
 }
 
-// 提交前已有的匹配样本不能确认命令：必须看到提交后的新样本。
+func TestSubmitGuardRefusesWithoutWriting(t *testing.T) {
+	writer := &fakeWriter{}
+	samples := map[string]signal.Sample{}
+	m := manager(writer, &samples)
+	m.Guard = func(request GuardRequest) safety.Verdict {
+		return safety.Verdict{Decision: "refused", Reason: "manual_takeover"}
+	}
+	outcome, err := m.Submit(t0, pointRequest("blocked", 40))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.State != Failed || outcome.Reason != "manual_takeover" || writer.calls != 0 {
+		t.Fatalf("refused command = %+v calls=%d", outcome, writer.calls)
+	}
+}
+
+func TestSubmitGuardClampsBeforeWriting(t *testing.T) {
+	writer := &fakeWriter{}
+	samples := map[string]signal.Sample{}
+	m := manager(writer, &samples)
+	m.Guard = func(request GuardRequest) safety.Verdict {
+		return safety.Verdict{Decision: "clamped", Value: 60, Reason: "clamped to available discharge power 60"}
+	}
+	outcome, err := m.Submit(t0, pointRequest("clamped", 90))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.State != Executing || len(writer.last) != 1 || writer.last[0].Value.Num != 60 {
+		t.Fatalf("clamped command = %+v writes=%+v", outcome, writer.last)
+	}
+	if _, err := m.Submit(t0.Add(time.Second), pointRequest("clamped", 90)); err != nil {
+		t.Fatal(err)
+	}
+	if writer.calls != 1 {
+		t.Fatalf("duplicate submit wrote %d times", writer.calls)
+	}
+}
+
+func TestGuardedNoReadbackRemainsSubmitted(t *testing.T) {
+	writer := &fakeWriter{}
+	samples := map[string]signal.Sample{}
+	m := manager(writer, &samples)
+	request := pointRequest("submitted", 50)
+	request.NoReadback = true
+	outcome, err := m.Submit(t0, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.State != Submitted {
+		t.Fatalf("no-readback outcome = %+v", outcome)
+	}
+}
+
 func TestPointWriteRequiresFreshReadback(t *testing.T) {
 	writer := &fakeWriter{}
 	samples := map[string]signal.Sample{
