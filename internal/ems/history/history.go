@@ -113,6 +113,25 @@ func (s *Store) QueryEvents(deviceID, pointID string, start, end time.Time, limi
 	return querySamples(list, start, end, limit)
 }
 
+// Timeline returns observations and quality events of one point as one
+// ascending, explicitly typed sequence. Callers that need gap evidence must
+// not merge Query and QueryEvents themselves.
+func (s *Store) Timeline(deviceID, pointID string, start, end time.Time, limit int) []Sample {
+	s.mu.RLock()
+	k := key(deviceID, pointID)
+	merged := make([]Sample, 0, len(s.points[k])+len(s.events[k]))
+	for _, list := range [][]Sample{s.points[k], s.events[k]} {
+		for _, sample := range list {
+			if sample.Kind == "" {
+				sample.Kind = KindObservation
+			}
+			merged = append(merged, sample)
+		}
+	}
+	s.mu.RUnlock()
+	return querySamples(merged, start, end, limit)
+}
+
 func querySamples(list []Sample, start, end time.Time, limit int) []Sample {
 	filtered := make([]Sample, 0, len(list))
 	for _, sample := range list {

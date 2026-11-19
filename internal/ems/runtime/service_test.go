@@ -218,3 +218,34 @@ func TestServiceRaisesOfflineAlarm(t *testing.T) {
 		return false
 	})
 }
+
+func TestIngestRecordsObservationsAndEventsThroughOnePath(t *testing.T) {
+	service := NewService(nil, time.Minute, time.Second, 100)
+	defer service.Close()
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	accepted := service.ingest(now, []channel.Result{
+		{DeviceID: "d1", PointID: "temp", Value: signal.Num(37), Quality: signal.Good, SourceTime: now.Add(-time.Second), Unit: "C"},
+		{DeviceID: "d1", PointID: "temp", Quality: signal.Invalid, Error: "timeout"},
+		{DeviceID: "d1", PointID: "temp", Value: signal.Num(12), Quality: signal.Good, SourceTime: now.Add(-time.Minute)},
+	})
+	if len(accepted) != 1 || accepted[0].Value.Num != 37 {
+		t.Fatalf("accepted = %+v", accepted)
+	}
+	observations := service.History.Query("d1", "temp", time.Time{}, time.Time{}, 10)
+	if len(observations) != 1 || observations[0].Value.Num != 37 || observations[0].ReceivedTime != now {
+		t.Fatalf("observations = %+v", observations)
+	}
+	events := service.History.Timeline("d1", "temp", time.Time{}, time.Time{}, 0)
+	if len(events) != 3 {
+		t.Fatalf("timeline = %+v", events)
+	}
+	if events[0].Kind != "observation" || !events[0].Late || events[0].Value.Num != 12 {
+		t.Fatalf("late observation = %+v", events[0])
+	}
+	if events[1].Kind != "observation" || events[1].Value.Num != 37 {
+		t.Fatalf("observation kind missing: %+v", events[1])
+	}
+	if events[2].Kind != "quality_event" || events[2].Reason != "timeout" {
+		t.Fatalf("quality event = %+v", events[2])
+	}
+}

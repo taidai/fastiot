@@ -5,60 +5,23 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sort"
 	"strconv"
 	"time"
 
-	"fastiot/internal/ems/history"
-	"fastiot/internal/ems/signal"
+	"fastiot/internal/ems/historyquery"
 	"github.com/simpleiot/simpleiot/client"
 	"github.com/simpleiot/simpleiot/data"
 )
 
+const (
+	historyPageLimit   = historyquery.PageLimit
+	historyExportLimit = historyquery.ExportLimit
+)
+
+// historyReader is the product store's point history, used by the history
+// query adapter and by aggregate and forecast readers.
 type historyReader interface {
 	PointHistory(nodeID, typ, key string, start, end time.Time, limit int) ([]data.Point, error)
-}
-
-const historyPageLimit = 2000
-const historyExportLimit = 10000
-
-type historyRecord struct {
-	PointID      string    `json:"point_id"`
-	DeviceID     string    `json:"device_id,omitempty"`
-	SourceTime   time.Time `json:"source_time,omitzero"`
-	ReceivedTime time.Time `json:"received_time,omitzero"`
-	BucketEnd    time.Time `json:"bucket_end,omitzero"`
-	Quality      string    `json:"quality,omitempty"`
-	Value        *float64  `json:"value,omitempty"`
-	Text         string    `json:"text,omitempty"`
-	Source       string    `json:"source"`
-	Unit         string    `json:"unit,omitempty"`
-	ConfigStamp  string    `json:"config_stamp,omitempty"`
-	TimeSource   string    `json:"time_source,omitempty"`
-	Kind         string    `json:"kind,omitempty"`
-	Reason       string    `json:"reason,omitempty"`
-	Late         bool      `json:"late,omitempty"`
-	SampleCount  int       `json:"sample_count,omitempty"`
-	Aggregate    string    `json:"aggregate,omitempty"`
-}
-type historyPointResult struct {
-	NodeID           string          `json:"node_id"`
-	DeviceID         string          `json:"device_id,omitempty"`
-	Source           string          `json:"source"`
-	SampleIntervalMS int             `json:"sample_interval_ms"`
-	Points           data.Points     `json:"points,omitempty"`
-	Records          []historyRecord `json:"records"`
-	Matched          int             `json:"matched"`
-	Returned         int             `json:"returned"`
-	Truncated        bool            `json:"truncated"`
-	NextBefore       time.Time       `json:"next_before,omitzero"`
-	NextBeforeCount  int             `json:"next_before_count"`
-}
-type historyReadResult struct {
-	records          []historyRecord
-	points           data.Points
-	deviceID, source string
-	sampleIntervalMS int
 }
 
 func parseHistoryTime(text string) (time.Time, error) {
@@ -67,25 +30,60 @@ func parseHistoryTime(text string) (time.Time, error) {
 	}
 	return time.Parse(time.RFC3339, text)
 }
-func historyNode(h *Handler, id string) (data.NodeEdge, error) {
-	nodes, err := client.GetNodes(h.nc, "all", id, "", false)
+
+// historyResolver resolves the product node a history request names. Node
+// lookup stays in the HTTP layer because it is a product-store concern.
+type historyResolver struct{ h *Handler }
+
+func (r historyResolver) Resolve(id string) (historyquery.Node, error) {
+	nodes, err := client.GetNodes(r.h.nc, "all", id, "", false)
 	if err != nil || len(nodes) == 0 {
-		return data.NodeEdge{}, errors.New("history_forbidden")
+		return historyquery.Node{}, historyquery.ErrForbidden
 	}
 	node := nodes[0]
-	if node.Type != data.NodeTypeVariable && node.Type != data.NodeTypeModbusIO && node.Type != NodeTypeOpcuaPoint && node.Type != "mqttSub" {
-		return node, errors.New("history_not_supported")
+	switch node.Type {
+	case data.NodeTypeVariable, data.NodeTypeModbusIO, NodeTypeOpcuaPoint, "mqttSub":
+	default:
+		return historyquery.Node{}, historyquery.ErrNotSupported
 	}
-	return node, nil
+	return historyquery.Node{ID: node.ID, Type: node.Type, Units: textPoint(node.Points, data.PointTypeUnits)}, nil
 }
 
-type historyCursor struct {
-	Before time.Time
-	Count  int
+// historyQuery wires the shared query to the product history and runtime
+// adapters available to this handler.
+func (h *Handler) historyQuery() *historyquery.Query {
+	query := &historyquery.Query{Nodes: historyResolver{h: h}}
+	if reader, ok := h.users.(historyquery.SIOT); ok {
+		query.SIOT = reader
+	}
+	if h.ems != nil && h.ems.Service != nil && h.ems.Buses != nil {
+		buses := h.ems.Buses
+		query.Runtime = &historyquery.StoreRuntime{
+			Store: h.ems.Service.History,
+			Points: func() ([]historyquery.DevicePoint, error) {
+				configs, err := buses()
+				if err != nil {
+					return nil, err
+				}
+				points := []historyquery.DevicePoint{}
+				for _, config := range configs {
+					for _, device := range config.Devices {
+						for _, point := range device.Points {
+							points = append(points, historyquery.DevicePoint{
+								PointID: point.ID, DeviceID: device.ID, IntervalMS: int(config.Period / time.Millisecond),
+							})
+						}
+					}
+				}
+				return points, nil
+			},
+		}
+	}
+	return query
 }
 
-func historyWindow(r *http.Request) (time.Time, time.Time, historyCursor, error) {
-	cursor := historyCursor{Count: -1}
+func historyWindow(r *http.Request) (time.Time, time.Time, historyquery.Cursor, error) {
+	cursor := historyquery.Cursor{Count: -1}
 	start, err := parseHistoryTime(r.URL.Query().Get("start"))
 	if err != nil {
 		return start, time.Time{}, cursor, err
@@ -105,11 +103,9 @@ func historyWindow(r *http.Request) (time.Time, time.Time, historyCursor, error)
 		}
 		cursor.Count = count
 	}
-	if !start.IsZero() && !end.IsZero() && end.Before(start) {
-		return start, end, cursor, fmt.Errorf("invalid_time_range")
-	}
 	return start, end, cursor, nil
 }
+
 func historyAggregation(value string) (time.Duration, error) {
 	switch value {
 	case "", "raw":
@@ -121,204 +117,29 @@ func historyAggregation(value string) (time.Duration, error) {
 	}
 	return 0, fmt.Errorf("invalid_aggregation")
 }
-func historySIOT(reader historyReader, id, typ, key string, start, end time.Time) ([]data.Point, error) {
-	result := []data.Point{}
-	for {
-		points, err := reader.PointHistory(id, typ, key, start, end, historyPageLimit)
-		if err != nil {
-			return nil, err
-		}
-		if len(points) == 0 {
-			break
-		}
-		result = append(result, points...)
-		if len(points) < historyPageLimit {
-			break
-		}
-		oldest := points[0].Time
-		if oldest.Equal(points[len(points)-1].Time) {
-			return nil, errors.New("history_time_cursor_saturated")
-		}
-		if !start.IsZero() && !oldest.After(start) {
-			break
-		}
-		end = oldest.Add(-time.Nanosecond)
-	}
-	sort.SliceStable(result, func(i, j int) bool {
-		if result[i].Time.Equal(result[j].Time) {
-			return result[i].Origin < result[j].Origin
-		}
-		return result[i].Time.Before(result[j].Time)
-	})
-	return result, nil
-}
-func siotHistoryRecords(node data.NodeEdge, points data.Points) []historyRecord {
-	records := make([]historyRecord, 0, len(points))
-	for _, point := range points {
-		record := historyRecord{PointID: node.ID, SourceTime: point.Time, Text: point.Txt(), Source: point.Origin, Unit: textPoint(node.Points, data.PointTypeUnits), Kind: history.KindObservation}
-		if value, err := point.ValueFloat(); err == nil {
-			v := value
-			record.Value = &v
-		}
-		records = append(records, record)
-	}
-	return records
-}
 
-func (h *Handler) readSIOTHistoryPoint(node data.NodeEdge, typ, key string, start, end time.Time) (historyReadResult, error) {
-	out := historyReadResult{source: "siot", records: []historyRecord{}}
-	reader, ok := h.users.(historyReader)
-	if !ok {
-		return out, errors.New("history_unavailable")
+func writeHistoryError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, historyquery.ErrForbidden),
+		errors.Is(err, historyquery.ErrNotSupported),
+		errors.Is(err, historyquery.ErrTimeCursorSaturated),
+		errors.Is(err, historyquery.ErrInvalidTimeRange),
+		errors.Is(err, historyquery.ErrNodeIDRequired),
+		errors.Is(err, historyquery.ErrTooManyPoints),
+		errors.Is(err, historyquery.ErrExportLimitExceeded):
+		status := http.StatusBadRequest
+		if errors.Is(err, historyquery.ErrForbidden) {
+			status = http.StatusForbidden
+		}
+		writeError(w, status, err.Error())
+	default:
+		writeError(w, http.StatusServiceUnavailable, "history_unavailable")
 	}
-	points, err := historySIOT(reader, node.ID, typ, key, start, end)
-	if err != nil {
-		return out, err
-	}
-	out.points = points
-	out.records = siotHistoryRecords(node, points)
-	return out, nil
-}
-
-func historySampleRecord(sample history.Sample, nodeID, deviceID, source string) historyRecord {
-	record := historyRecord{PointID: nodeID, DeviceID: deviceID, SourceTime: sample.SourceTime, ReceivedTime: sample.ReceivedTime, Quality: sample.Quality.String(), Source: source, Unit: sample.Unit, ConfigStamp: sample.ConfigStamp, TimeSource: sample.TimeSource, Kind: history.KindObservation, Reason: sample.Reason, Late: sample.Late}
-	if sample.Kind == history.KindQualityEvent {
-		record.Kind = history.KindQualityEvent
-		return record
-	}
-	if sample.Value.Kind == signal.Number {
-		value := sample.Value.Num
-		record.Value = &value
-	}
-	if sample.Value.Kind == signal.Bool {
-		value := data.BoolToFloat(sample.Value.Bool)
-		record.Value = &value
-	}
-	return record
-}
-
-func (h *Handler) readHistoryPoint(node data.NodeEdge, typ, key string, start, end time.Time, aggregate time.Duration) (historyReadResult, error) {
-	out := historyReadResult{source: "siot", records: []historyRecord{}}
-	if node.Type == data.NodeTypeModbusIO {
-		if h.ems == nil || h.ems.Service == nil || h.ems.Buses == nil {
-			return h.readSIOTHistoryPoint(node, typ, key, start, end)
-		}
-		configs, err := h.ems.Buses()
-		if err != nil {
-			return out, err
-		}
-		deviceID := ""
-		intervalMS := 0
-		for _, config := range configs {
-			for _, device := range config.Devices {
-				for _, point := range device.Points {
-					if point.ID == node.ID {
-						if deviceID != "" && deviceID != device.ID {
-							return out, errors.New("ambiguous_history_source")
-						}
-						deviceID = device.ID
-						intervalMS = int(config.Period / time.Millisecond)
-					}
-				}
-			}
-		}
-		if deviceID == "" {
-			return h.readSIOTHistoryPoint(node, typ, key, start, end)
-		}
-		out.deviceID, out.source, out.sampleIntervalMS = deviceID, "modbus_runtime", intervalMS
-		for _, sample := range h.ems.Service.History.Query(deviceID, node.ID, start, end, 0) {
-			if sample.SourceTime.IsZero() {
-				continue
-			}
-			out.records = append(out.records, historySampleRecord(sample, node.ID, deviceID, out.source))
-		}
-		for _, sample := range h.ems.Service.History.QueryEvents(deviceID, node.ID, start, end, 0) {
-			if sample.SourceTime.IsZero() {
-				continue
-			}
-			out.records = append(out.records, historySampleRecord(sample, node.ID, deviceID, out.source))
-		}
-	} else {
-		var err error
-		out, err = h.readSIOTHistoryPoint(node, typ, key, start, end)
-		if err != nil {
-			return out, err
-		}
-	}
-	sortHistoryRecords(out.records)
-	if aggregate == 0 {
-		return out, nil
-	}
-	records := []historyRecord{}
-	events := make([]historyRecord, 0)
-	var bucketStart time.Time
-	var sum float64
-	count := 0
-	quality, unit, timeSource := "", "", ""
-	flush := func() {
-		if count == 0 {
-			return
-		}
-		value := sum / float64(count)
-		records = append(records, historyRecord{PointID: node.ID, DeviceID: out.deviceID, SourceTime: bucketStart, BucketEnd: bucketStart.Add(aggregate), Quality: quality, Value: &value, Source: out.source, Unit: unit, TimeSource: timeSource, SampleCount: count, Aggregate: aggregate.String(), Kind: history.KindObservation})
-	}
-	for _, record := range out.records {
-		if record.Kind == history.KindQualityEvent {
-			events = append(events, record)
-			continue
-		}
-		if record.Value == nil || (node.Type == data.NodeTypeModbusIO && record.Quality != signal.Good.String()) {
-			continue
-		}
-		at := record.SourceTime.Truncate(aggregate)
-		if count > 0 && !at.Equal(bucketStart) {
-			flush()
-			count = 0
-			sum = 0
-		}
-		if count == 0 {
-			bucketStart = at
-			quality = record.Quality
-			unit = record.Unit
-			timeSource = record.TimeSource
-		} else {
-			if unit != record.Unit {
-				unit = ""
-			}
-			if timeSource != record.TimeSource {
-				timeSource = ""
-			}
-		}
-		sum += *record.Value
-		count++
-	}
-	flush()
-	out.records = append(records, events...)
-	sortHistoryRecords(out.records)
-	return out, nil
-}
-func sortHistoryRecords(records []historyRecord) {
-	sort.SliceStable(records, func(i, j int) bool { return records[i].SourceTime.Before(records[j].SourceTime) })
-}
-func filterHistoryRecords(records []historyRecord, cursor historyCursor) []historyRecord {
-	filtered := make([]historyRecord, 0, len(records))
-	boundarySeen := 0
-	for _, r := range records {
-		if cursor.Before.IsZero() || r.SourceTime.Before(cursor.Before) {
-			filtered = append(filtered, r)
-			continue
-		}
-		if cursor.Count >= 0 && r.SourceTime.Equal(cursor.Before) && boundarySeen < cursor.Count {
-			filtered = append(filtered, r)
-			boundarySeen++
-		}
-	}
-	return filtered
 }
 
 func (h *Handler) history(w http.ResponseWriter, r *http.Request, identity Identity, export bool) {
 	start, end, cursor, err := historyWindow(r)
-	if err != nil {
+	if err != nil || (!start.IsZero() && !end.IsZero() && end.Before(start)) {
 		writeError(w, 400, "invalid_time_range")
 		return
 	}
@@ -344,73 +165,19 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request, identity Ident
 		}
 	}
 	ids := r.URL.Query()["node_id"]
-	if len(ids) == 0 {
-		writeError(w, 400, "node_id_required")
-		return
-	}
-	if len(ids) > historyExportLimit/historyPageLimit {
-		writeError(w, 400, "too_many_history_points")
-		return
-	}
-	results := []historyPointResult{}
-	total := 0
-	matched := 0
-	legacy := data.Points{}
-	for _, id := range ids {
-		node, err := historyNode(h, id)
-		if err != nil {
-			if err.Error() == "history_not_supported" {
-				writeError(w, 400, err.Error())
-			} else {
-				writeError(w, 403, "history_forbidden")
-			}
-			return
-		}
-		read, err := h.readHistoryPoint(node, typ, r.URL.Query().Get("key"), start, end, aggregate)
-		if err != nil {
-			if err.Error() == "history_time_cursor_saturated" {
-				writeError(w, 400, err.Error())
-			} else {
-				writeError(w, 503, "history_unavailable")
-			}
-			return
-		}
-		pageLimit := limit
-		if export {
-			pageLimit = historyExportLimit + 1
-		}
-		filtered := filterHistoryRecords(read.records, cursor)
-		matchedCount := len(read.records)
-		if export {
-			matchedCount = len(filtered)
-		}
-		matched += matchedCount
-		total += len(filtered)
-		records := filtered
-		next := historyCursor{}
-		truncated := len(records) > pageLimit
-		if truncated {
-			records = records[len(records)-pageLimit:]
-			next.Before = records[0].SourceTime
-			for _, candidate := range filtered {
-				if candidate.SourceTime.Equal(next.Before) {
-					next.Count++
-				}
-			}
-			for _, candidate := range records {
-				if candidate.SourceTime.Equal(next.Before) {
-					next.Count--
-				}
-			}
-		}
-		results = append(results, historyPointResult{NodeID: id, DeviceID: read.deviceID, Source: read.source, SampleIntervalMS: read.sampleIntervalMS, Points: read.points, Records: records, Matched: matchedCount, Returned: len(records), Truncated: truncated, NextBefore: next.Before, NextBeforeCount: next.Count})
-		legacy = append(legacy, read.points...)
-	}
-	if export && total > historyExportLimit {
-		writeError(w, 400, "history_export_limit_exceeded")
+	results, matched, err := h.historyQuery().Execute(historyquery.Request{
+		NodeIDs: ids, Type: typ, Key: r.URL.Query().Get("key"),
+		Start: start, End: end, Cursor: cursor, Aggregate: aggregate, Limit: limit, Export: export,
+	})
+	if err != nil {
+		writeHistoryError(w, err)
 		return
 	}
 	if export {
+		total := 0
+		for _, result := range results {
+			total += len(result.Records)
+		}
 		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 		w.Header().Set("X-History-Returned", strconv.Itoa(total))
 		w.Header().Set("X-History-Limit", strconv.Itoa(historyExportLimit))
@@ -440,6 +207,10 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request, identity Ident
 		}
 		writer.Flush()
 		return
+	}
+	legacy := data.Points{}
+	for _, result := range results {
+		legacy = append(legacy, result.Points...)
 	}
 	response := map[string]any{"results": results, "start": start, "end": end, "aggregate": r.URL.Query().Get("aggregate"), "total_matched": matched}
 	if len(ids) == 1 {
