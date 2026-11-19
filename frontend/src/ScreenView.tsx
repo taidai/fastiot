@@ -6,6 +6,7 @@ import { observationForNode } from "./observations"
 import { useObservations } from "./useObservations"
 import ConfirmDialog from "./ConfirmDialog"
 import ScreenTemplates, { recordVersion } from "./ScreenTemplates"
+import AiScreenPanel from "./AiScreenPanel"
 import {
   EmsAlarm,
   fetchHistory,
@@ -73,6 +74,7 @@ export default function ScreenView({ token, snapshot, points, groups, alarms, is
   const [draft, setDraft] = useState<ScreenConfig | null>(null)
   const [editing, setEditing] = useState(false)
   const [templatesOpen, setTemplatesOpen] = useState(false)
+  const [aiOpen, setAiOpen] = useState(false)
   const [values, setValues] = useState<Record<string, number>>({})
   const [pendingWrite, setPendingWrite] = useState<{ node: Node; value: number } | null>(null)
 
@@ -147,6 +149,7 @@ export default function ScreenView({ token, snapshot, points, groups, alarms, is
       </label>
       {isAdmin && <button className="secondary-button" onClick={() => { setEditing(!editing); setDraft(config) }}>{editing ? "退出编辑" : "配置画面"}</button>}
       {isAdmin && <button className="secondary-button" onClick={() => setTemplatesOpen(true)}>模板 / 版本</button>}
+      {isAdmin && <button className="secondary-button" onClick={() => { setEditing(false); setAiOpen(true) }}>AI 生成</button>}
       <span className="screen-hint">配置保存在业务节点上，跟随节点权限</span>
     </div>
 
@@ -230,6 +233,13 @@ export default function ScreenView({ token, snapshot, points, groups, alarms, is
       draft={draft || config}
       onApply={(next) => { setDraft(next); setEditing(true) }}
       onClose={() => setTemplatesOpen(false)}
+    />}
+
+    {aiOpen && <AiScreenPanel
+      token={token}
+      pointIDs={(draft || config)?.point_ids || []}
+      context={draft || config ? JSON.stringify(draft || config) : ""}
+      onClose={() => setAiOpen(false)}
     />}
   </section>
 }
