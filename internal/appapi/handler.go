@@ -801,11 +801,29 @@ func (h *Handler) writeValue(w http.ResponseWriter, r *http.Request, identity Id
 	if input.RequestID == "" {
 		input.RequestID = data.NewID()
 	}
+	// One safety verdict for every write path: allowed writes the requested
+	// value, clamped writes the clamped value, refused writes nothing.
+	verdict := h.manualWriteVerdict(id, input.Value)
+	if verdict.Decision == "clamped" {
+		input.Value = verdict.Value
+	}
 	if existing, found, err := h.existingCommand(id, input.RequestID, input.Value); err != nil {
 		writeError(w, http.StatusConflict, "request_id_conflict")
 		return
 	} else if found {
 		writeJSON(w, existing)
+		return
+	}
+	if verdict.Decision == "refused" {
+		_ = h.recordCommand(id, CommandResult{
+			RequestID: input.RequestID, Status: "failed", Target: input.Value,
+			Actor: identity.UserID, CreatedAt: time.Now(),
+		})
+		status := http.StatusConflict
+		if verdict.Reason == "read_only" {
+			status = http.StatusForbidden
+		}
+		writeError(w, status, verdict.Reason)
 		return
 	}
 	result := CommandResult{

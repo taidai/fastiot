@@ -5,6 +5,7 @@ import (
 
 	"fastiot/internal/decision"
 	"fastiot/internal/ems/command"
+	"fastiot/internal/ems/device"
 	"fastiot/internal/ems/safety"
 	"fastiot/internal/ems/signal"
 	siotclient "github.com/simpleiot/simpleiot/client"
@@ -21,12 +22,17 @@ func (h *Handler) commandGuard(request command.GuardRequest) safety.Verdict {
 	now := time.Now()
 	req := safety.Request{
 		Output: write.Point, Requested: write.Value, Automatic: request.Automatic,
-		Samples: map[string]signal.Sample{}, MaxAge: h.ems.Service.MaxAge,
+		Samples: map[string]signal.Sample{},
 	}
-	for _, value := range h.ems.Service.State.Snapshot(now, h.ems.Service.MaxAge) {
-		req.Samples[value.PointID] = signal.Sample{
-			Input: value.PointID, Value: value.Value, Quality: value.Quality,
-			SourceTime: value.SourceTime, ReceivedTime: value.ReceivedTime,
+	// Without a mounted runtime there are no samples, so conditions fail
+	// closed; the envelope itself (range, capabilities) still applies.
+	if h.ems != nil && h.ems.Service != nil {
+		req.MaxAge = h.ems.Service.MaxAge
+		for _, value := range h.ems.Service.State.Snapshot(now, h.ems.Service.MaxAge) {
+			req.Samples[value.PointID] = signal.Sample{
+				Input: value.PointID, Value: value.Value, Quality: value.Quality,
+				SourceTime: value.SourceTime, ReceivedTime: value.ReceivedTime,
+			}
 		}
 	}
 	nodes, err := siotclient.GetNodes(h.nc, "all", write.Point, "", false)
@@ -58,4 +64,13 @@ func (h *Handler) commandGuard(request command.GuardRequest) safety.Verdict {
 		req.Spec = &spec
 	}
 	return safety.Evaluate(req, now)
+}
+
+// manualWriteVerdict judges one operator point write with the resolver the
+// command manager uses, so the point table cannot bypass the safety envelope.
+func (h *Handler) manualWriteVerdict(pointID string, value float64) safety.Verdict {
+	return h.commandGuard(command.GuardRequest{
+		Point:  pointID,
+		Writes: []device.Write{{Point: pointID, Value: signal.Num(value)}},
+	})
 }
