@@ -55,6 +55,40 @@ func TestAllocateEnergy(t *testing.T) {
 	})
 }
 
+func TestAllocateEnergyHonorsDeclaredPriorityAndWeight(t *testing.T) {
+	caps := CapabilityValues{
+		"a": {FieldRatedPower: 100, FieldAvailablePower: 100},
+		"b": {FieldRatedPower: 100, FieldAvailablePower: 100},
+	}
+	byID := func(allocations []EnergyAllocation) map[string]EnergyAllocation {
+		out := map[string]EnergyAllocation{}
+		for _, allocation := range allocations {
+			out[allocation.EnergyUnitID] = allocation
+		}
+		return out
+	}
+
+	priority, err := AllocateEnergy(150, []EnergyMember{
+		{EnergyUnitID: "a", Priority: 1}, {EnergyUnitID: "b"},
+	}, caps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := byID(priority); got["a"].SetpointKW != 100 || got["b"].SetpointKW != 50 {
+		t.Fatalf("priority did not fill the higher member first: %+v", got)
+	}
+
+	weighted, err := AllocateEnergy(120, []EnergyMember{
+		{EnergyUnitID: "a", Weight: 2}, {EnergyUnitID: "b"},
+	}, caps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := byID(weighted); got["a"].SetpointKW != 80 || got["b"].SetpointKW != 40 {
+		t.Fatalf("weight did not bias the share: %+v", got)
+	}
+}
+
 func TestAllocateEnergyDirectionalCapabilityAndStatus(t *testing.T) {
 	caps := CapabilityValues{
 		"eu": {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"time"
 )
 
@@ -23,6 +24,31 @@ type Member struct {
 	MaxDischarge       float64
 	AvailableCharge    float64
 	AvailableDischarge float64
+	// Priority fills higher-priority members to capacity before lower ones.
+	Priority int
+	// Weight biases the proportional share within one priority level (1 =
+	// default). It never raises the member's hard capacity.
+	Weight float64
+	// Detail is the most specific explanation for excluding this member, such
+	// as a constraint or manual takeover. It takes precedence over the generic
+	// online/fault reason.
+	Detail string
+}
+
+func (m Member) weightFactor() float64 {
+	if m.Weight <= 0 || math.IsNaN(m.Weight) || math.IsInf(m.Weight, 0) {
+		return 1
+	}
+	return m.Weight
+}
+
+// exclusionReason prefers the caller's specific explanation over the generic
+// state reason.
+func exclusionReason(member Member, fallback string) string {
+	if member.Detail != "" {
+		return member.Detail
+	}
+	return fallback
 }
 
 func (m Member) capacity(direction float64) float64 {
@@ -64,8 +90,11 @@ type Result struct {
 
 const epsilon = 1e-9
 
-// Allocate splits a signed target across members. Positive is discharge,
-// negative is charge. It has no state and no side effects.
+// Allocate splits a signed target across members: unavailable members are
+// excluded first, then the request is filled by descending priority, then
+// proportionally to weighted capability within one priority level, honoring
+// minimum power. Positive is discharge, negative is charge. It has no state
+// and no side effects.
 func Allocate(request float64, members []Member) (Result, error) {
 	if math.IsNaN(request) || math.IsInf(request, 0) {
 		return Result{}, errors.New("request must be finite")
@@ -83,22 +112,22 @@ func Allocate(request float64, members []Member) (Result, error) {
 		share.MemberID = member.ID
 		switch {
 		case member.Disabled:
-			share.Excluded, share.Reason = true, "disabled"
+			share.Excluded, share.Reason = true, exclusionReason(member, "disabled")
 		case member.Faulted:
-			share.Excluded, share.Reason = true, "faulted"
+			share.Excluded, share.Reason = true, exclusionReason(member, "faulted")
 		case !member.Online:
-			share.Excluded, share.Reason = true, "offline"
+			share.Excluded, share.Reason = true, exclusionReason(member, "offline")
 		default:
 			share.Capacity = member.capacity(direction)
 			if share.Capacity <= 0 {
-				share.Excluded, share.Reason = true, "no available capacity in this direction"
+				share.Excluded, share.Reason = true, exclusionReason(member, "no available capacity in this direction")
 				continue
 			}
 			candidates = append(candidates, i)
 		}
 	}
 
-	allocations := waterFill(target, direction, members, candidates, &result)
+	allocations := fillByPriority(target, direction, members, candidates, &result)
 	delivered := 0.0
 	for i := range result.Shares {
 		share := &result.Shares[i]
@@ -116,49 +145,90 @@ func Allocate(request float64, members []Member) (Result, error) {
 	return result, nil
 }
 
-func waterFill(target, direction float64, members []Member, candidates []int, result *Result) map[string]float64 {
-	active := append([]int(nil), candidates...)
-	remaining := target
+// fillByPriority fills higher-priority members to capacity before lower ones.
+// Within one priority level the request is split proportionally to weighted
+// capability.
+func fillByPriority(target, direction float64, members []Member, candidates []int, result *Result) map[string]float64 {
+	groups := make(map[int][]int)
+	for _, index := range candidates {
+		priority := members[index].Priority
+		groups[priority] = append(groups[priority], index)
+	}
+	priorities := make([]int, 0, len(groups))
+	for priority := range groups {
+		priorities = append(priorities, priority)
+	}
+	sort.Sort(sort.Reverse(sort.IntSlice(priorities)))
+
 	allocations := make(map[string]float64)
+	remaining := target
+	for _, priority := range priorities {
+		if remaining <= epsilon {
+			break
+		}
+		group := groups[priority]
+		groupCapacity := 0.0
+		for _, index := range group {
+			groupCapacity += members[index].capacity(direction)
+		}
+		if remaining >= groupCapacity {
+			for _, index := range group {
+				allocations[members[index].ID] = members[index].capacity(direction)
+			}
+			remaining -= groupCapacity
+			continue
+		}
+		fillProportional(remaining, direction, members, group, allocations, result)
+		return allocations
+	}
+	return allocations
+}
+
+// fillProportional distributes target across one priority group by weighted
+// capability. A member whose weighted share would exceed its hard capacity is
+// frozen at capacity and the remainder re-split; a share below MinPower is
+// excluded.
+func fillProportional(target, direction float64, members []Member, group []int, allocations map[string]float64, result *Result) {
+	active := append([]int(nil), group...)
+	remaining := target
 	for len(active) > 0 && remaining > epsilon {
 		sum := 0.0
 		for _, index := range active {
-			sum += members[index].capacity(direction)
+			sum += members[index].capacity(direction) * members[index].weightFactor()
 		}
 		if sum <= 0 {
-			break
-		}
-		if remaining >= sum {
-			for _, index := range active {
-				allocations[members[index].ID] = members[index].capacity(direction)
-			}
-			remaining -= sum
-			break
+			return
 		}
 		next := make([]int, 0, len(active))
-		values := make(map[int]float64, len(active))
-		excluded := 0
+		changed := false
 		for _, index := range active {
-			value := remaining * members[index].capacity(direction) / sum
-			if members[index].MinPower > 0 && value < members[index].MinPower {
-				result.Shares[index].Excluded = true
-				result.Shares[index].Reason = fmt.Sprintf(
-					"share %.1f kW is below the %.1f kW minimum", value, members[index].MinPower)
-				excluded++
+			capacity := members[index].capacity(direction)
+			value := remaining * capacity * members[index].weightFactor() / sum
+			if value >= capacity-epsilon {
+				allocations[members[index].ID] = capacity
+				remaining -= capacity
+				changed = true
 				continue
 			}
-			values[index] = value
+			if members[index].MinPower > 0 && value < members[index].MinPower {
+				share := &result.Shares[index]
+				share.Excluded = true
+				share.Reason = fmt.Sprintf(
+					"share %.1f kW is below the %.1f kW minimum", value, members[index].MinPower)
+				changed = true
+				continue
+			}
 			next = append(next, index)
 		}
-		if excluded == 0 {
-			for index, value := range values {
-				allocations[members[index].ID] = value
+		if !changed {
+			for _, index := range next {
+				capacity := members[index].capacity(direction)
+				allocations[members[index].ID] = remaining * capacity * members[index].weightFactor() / sum
 			}
-			return allocations
+			return
 		}
 		active = next
 	}
-	return allocations
 }
 
 type heldState struct {
@@ -208,11 +278,11 @@ func (t *Tracker) Apply(now time.Time, request float64, members []Member) (Resul
 		}
 		switch {
 		case member.Disabled:
-			excludedReasons[member.ID] = "disabled"
+			excludedReasons[member.ID] = exclusionReason(member, "disabled")
 		case member.Faulted:
-			excludedReasons[member.ID] = "faulted"
+			excludedReasons[member.ID] = exclusionReason(member, "faulted")
 		case !member.Online:
-			excludedReasons[member.ID] = "offline"
+			excludedReasons[member.ID] = exclusionReason(member, "offline")
 		}
 		if now.Sub(state.offlineSince) <= t.Grace && state.setpoint != 0 && math.Signbit(state.setpoint) == math.Signbit(direction) {
 			held[member.ID] = math.Abs(state.setpoint)

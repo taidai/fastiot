@@ -3,6 +3,7 @@ package decision
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"fastiot/internal/ems/health"
@@ -188,18 +189,19 @@ func ValidateAllocationOwnership(nc *nats.Conn, ruleID, nodeID string) error {
 
 // allocationMember resolves online state, manual takeover, current
 // capabilities and constraint limits. The values are read again on every
-// dispatch cycle. The returned reasons explain why a member was taken over or
-// constrained; they are empty when the member is healthy.
-func allocationMember(nc *nats.Conn, member AllocatorMember) (alloc.Member, []string, error) {
+// dispatch cycle. Member.Detail carries why the member was taken over or
+// constrained; it is empty when the member is healthy.
+func allocationMember(nc *nats.Conn, member AllocatorMember) (alloc.Member, error) {
 	result := alloc.Member{
 		ID: member.ID, Online: true,
 		MinPower: member.MinPower, MaxCharge: member.MaxCharge, MaxDischarge: member.MaxDischarge,
 		AvailableCharge: member.MaxCharge, AvailableDischarge: member.MaxDischarge,
+		Priority: member.Priority, Weight: member.Weight,
 	}
 	var reasons []string
 	nodes, err := siotclient.GetNodes(nc, "all", member.Target.NodeID, "", false)
 	if err != nil || len(nodes) == 0 {
-		return result, nil, fmt.Errorf("member %s target unavailable", member.ID)
+		return result, fmt.Errorf("member %s target unavailable", member.ID)
 	}
 	node := nodes[0]
 	if disabled, _ := node.Points.Value(data.PointTypeDisabled, ""); disabled != 0 {
@@ -219,7 +221,7 @@ func allocationMember(nc *nats.Conn, member AllocatorMember) (alloc.Member, []st
 	if member.Fault != nil {
 		fault, found, err := readNumber(nc, *member.Fault)
 		if err != nil {
-			return result, nil, err
+			return result, err
 		}
 		if !found || fault != 0 {
 			result.Faulted = true
@@ -228,7 +230,7 @@ func allocationMember(nc *nats.Conn, member AllocatorMember) (alloc.Member, []st
 	if member.AvailableDischarge != nil {
 		value, found, err := readNumber(nc, *member.AvailableDischarge)
 		if err != nil {
-			return result, nil, err
+			return result, err
 		}
 		if !found {
 			if result.Online && !result.Faulted {
@@ -243,7 +245,7 @@ func allocationMember(nc *nats.Conn, member AllocatorMember) (alloc.Member, []st
 	if member.AvailableCharge != nil {
 		value, found, err := readNumber(nc, *member.AvailableCharge)
 		if err != nil {
-			return result, nil, err
+			return result, err
 		}
 		if !found {
 			if result.Online && !result.Faulted {
@@ -272,7 +274,8 @@ func allocationMember(nc *nats.Conn, member AllocatorMember) (alloc.Member, []st
 			result.Disabled = true
 		}
 	}
-	return result, reasons, nil
+	result.Detail = strings.Join(reasons, "; ")
+	return result, nil
 }
 
 func busHealthy(nc *nats.Conn, busID string) bool {

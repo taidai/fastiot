@@ -206,7 +206,7 @@ func TestAllocationMemberRejectsUnknownHealth(t *testing.T) {
 	if err := siotclient.SendNode(nc, point, "test"); err != nil {
 		t.Fatal(err)
 	}
-	member, _, err := allocationMember(nc, AllocatorMember{Target: Target{NodeID: point.ID}})
+	member, err := allocationMember(nc, AllocatorMember{Target: Target{NodeID: point.ID}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func TestAllocationMemberRejectsUnknownHealth(t *testing.T) {
 	if err := siotclient.SendNodePoint(nc, point.ID, data.NewPointString("health", "", "degraded"), true); err != nil {
 		t.Fatal(err)
 	}
-	member, _, err = allocationMember(nc, AllocatorMember{Target: Target{NodeID: point.ID}})
+	member, err = allocationMember(nc, AllocatorMember{Target: Target{NodeID: point.ID}})
 	if err != nil {
 		t.Fatal(err)
 	}

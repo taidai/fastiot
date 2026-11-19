@@ -52,6 +52,8 @@ func AllocateEnergy(requestKW float64, members []EnergyMember, caps CapabilityVa
 			MaxDischarge:       rated,
 			AvailableCharge:    availableCharge,
 			AvailableDischarge: availableDischarge,
+			Priority:           m.Priority,
+			Weight:             m.Weight,
 		})
 	}
 	result, err := alloc.Allocate(requestKW, allocMembers)

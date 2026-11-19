@@ -18,6 +18,8 @@ import (
 	siotmodbus "github.com/simpleiot/simpleiot/modbus"
 	"github.com/simpleiot/simpleiot/respreader"
 	"go.bug.st/serial"
+
+	"fastiot/internal/ems/pointconfig"
 )
 
 type ModbusConnectionInput struct {
@@ -59,19 +61,9 @@ func serialPoints(input ModbusConnectionInput) data.Points {
 	}
 }
 
-type ModbusIOInput struct {
-	Parent      string  `json:"parent"`
-	Description string  `json:"description"`
-	ServerID    int     `json:"server_id"`
-	Address     int     `json:"address"`
-	IOType      string  `json:"io_type"`
-	DataFormat  string  `json:"data_format"`
-	ReadOnly    bool    `json:"read_only"`
-	Scale       float64 `json:"scale"`
-	Offset      float64 `json:"offset"`
-	Units       string  `json:"units"`
-	Disabled    bool    `json:"disabled"`
-}
+// ModbusIOInput is the wire value for one point's configuration. The config
+// module owns its encode/decode/validate/diff/CSV operations.
+type ModbusIOInput = pointconfig.Point
 
 func (h *Handler) createModbus(w http.ResponseWriter, r *http.Request, identity Identity) {
 	var input ModbusConnectionInput
@@ -122,7 +114,7 @@ func (h *Handler) createModbusIO(w http.ResponseWriter, r *http.Request, identit
 		return
 	}
 	input.Parent = busID
-	if err := validateModbusIO(input); err != nil {
+	if err := pointconfig.Validate(input); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -137,7 +129,7 @@ func (h *Handler) createModbusIO(w http.ResponseWriter, r *http.Request, identit
 func newModbusIONode(busID string, input ModbusIOInput) data.NodeEdge {
 	return data.NodeEdge{
 		ID: data.NewID(), Parent: busID, Type: data.NodeTypeModbusIO,
-		Points: append(modbusIOConfigPoints(input), data.NewPointString("businessId", "", data.NewID())),
+		Points: append(pointconfig.Encode(input), data.NewPointString("businessId", "", data.NewID())),
 	}
 }
 
@@ -163,20 +155,10 @@ func (h *Handler) importModbusCSV(w http.ResponseWriter, r *http.Request, identi
 		writeError(w, http.StatusBadRequest, "empty_or_invalid_csv")
 		return
 	}
-	columns := map[string]int{}
-	for i, name := range records[0] {
-		name = strings.TrimSpace(strings.TrimPrefix(name, "\xef\xbb\xbf"))
-		if _, exists := columns[name]; exists {
-			writeError(w, http.StatusBadRequest, "duplicate_csv_column")
-			return
-		}
-		columns[name] = i
-	}
-	for _, required := range []string{"名称", "站号", "地址", "类型"} {
-		if _, ok := columns[required]; !ok {
-			writeError(w, http.StatusBadRequest, "missing_csv_column: "+required)
-			return
-		}
+	table, err := pointconfig.NewTable(records[0])
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 	query := r.URL.Query()
 	diffMode := query.Get("diff") == "true" || query.Get("apply") == "diff"
@@ -200,69 +182,12 @@ func (h *Handler) importModbusCSV(w http.ResponseWriter, r *http.Request, identi
 		if blank {
 			continue
 		}
-		if len(record) != len(records[0]) {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("第 %d 行字段数量不正确", rowIndex+2))
+		input, err := table.Point(record, rowIndex+2)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		cell := func(name string) string {
-			index, ok := columns[name]
-			if !ok {
-				return ""
-			}
-			return strings.TrimSpace(record[index])
-		}
-		serverID, err1 := strconv.Atoi(cell("站号"))
-		address, err2 := strconv.Atoi(cell("地址"))
-		if err1 != nil || err2 != nil {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("第 %d 行站号或地址无效", rowIndex+2))
-			return
-		}
-		typeNames := map[string]string{
-			"保持寄存器": data.PointValueModbusHoldingRegister,
-			"输入寄存器": data.PointValueModbusInputRegister,
-			"线圈":    data.PointValueModbusCoil,
-			"离散输入":  data.PointValueModbusDiscreteInput,
-		}
-		ioType := cell("类型")
-		if mapped, ok := typeNames[ioType]; ok {
-			ioType = mapped
-		}
-		readOnly := ioType == data.PointValueModbusDiscreteInput || ioType == data.PointValueModbusInputRegister
-		if text := cell("只读"); text != "" {
-			readOnly, err = parseCSVBool(text)
-			if err != nil {
-				writeError(w, http.StatusBadRequest, fmt.Sprintf("第 %d 行只读字段无效", rowIndex+2))
-				return
-			}
-		}
-		scale := 1.0
-		offset := 0.0
-		if text := cell("缩放"); text != "" {
-			scale, err = strconv.ParseFloat(text, 64)
-			if err != nil {
-				writeError(w, http.StatusBadRequest, fmt.Sprintf("第 %d 行缩放无效", rowIndex+2))
-				return
-			}
-		}
-		if text := cell("偏移"); text != "" {
-			offset, err = strconv.ParseFloat(text, 64)
-			if err != nil {
-				writeError(w, http.StatusBadRequest, fmt.Sprintf("第 %d 行偏移无效", rowIndex+2))
-				return
-			}
-		}
-		input := ModbusIOInput{
-			Parent: busID, Description: cell("名称"), ServerID: serverID, Address: address,
-			IOType: ioType, DataFormat: cell("数据格式"), ReadOnly: readOnly,
-			Scale: scale, Offset: offset, Units: cell("单位"),
-		}
-		if input.DataFormat == "" {
-			input.DataFormat = data.PointValueUINT16
-		}
-		if err := validateModbusIO(input); err != nil {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("第 %d 行: %s", rowIndex+2, err.Error()))
-			return
-		}
+		input.Parent = busID
 		if existing[input.Description] {
 			writeError(w, http.StatusConflict, "duplicate_point_name: "+input.Description)
 			return
@@ -288,17 +213,6 @@ func (h *Handler) importModbusCSV(w http.ResponseWriter, r *http.Request, identi
 		return
 	}
 	writeJSON(w, map[string]int{"imported": len(inputs)})
-}
-
-func parseCSVBool(value string) (bool, error) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "是", "true", "1", "yes":
-		return true, nil
-	case "否", "false", "0", "no":
-		return false, nil
-	default:
-		return false, fmt.Errorf("invalid boolean")
-	}
 }
 
 func (h *Handler) createModbusBatch(busID string, inputs []ModbusIOInput, origin string) error {
@@ -338,23 +252,9 @@ func (h *Handler) existingModbusIOs(busID string) ([]existingModbusIO, error) {
 		if node.Type != data.NodeTypeModbusIO {
 			continue
 		}
-		serverID, _ := node.Points.Value(data.PointTypeID, "")
-		address, _ := node.Points.Value(data.PointTypeAddress, "")
-		scale, _ := node.Points.Value(data.PointTypeScale, "")
-		if scale == 0 {
-			scale = 1
-		}
-		offset, _ := node.Points.Value(data.PointTypeOffset, "")
-		readOnly, _ := node.Points.Value(data.PointTypeReadOnly, "")
-		items = append(items, existingModbusIO{NodeID: node.ID, Input: ModbusIOInput{
-			Parent:      busID,
-			Description: textPoint(node.Points, data.PointTypeDescription),
-			ServerID:    int(serverID), Address: int(address),
-			IOType:     textPoint(node.Points, data.PointTypeModbusIOType),
-			DataFormat: textPoint(node.Points, data.PointTypeDataFormat),
-			ReadOnly:   readOnly != 0, Scale: scale, Offset: offset,
-			Units: textPoint(node.Points, data.PointTypeUnits),
-		}})
+		item := pointconfig.Decode(node)
+		item.Parent = busID
+		items = append(items, existingModbusIO{NodeID: node.ID, Input: item})
 	}
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].Input.Address != items[j].Input.Address {
@@ -363,36 +263,6 @@ func (h *Handler) existingModbusIOs(busID string) ([]existingModbusIO, error) {
 		return items[i].Input.Description < items[j].Input.Description
 	})
 	return items, nil
-}
-
-func modbusDiffFields(before, after ModbusIOInput) []string {
-	fields := []string{}
-	if before.ServerID != after.ServerID {
-		fields = append(fields, "站号")
-	}
-	if before.Address != after.Address {
-		fields = append(fields, "地址")
-	}
-	if before.IOType != after.IOType {
-		fields = append(fields, "类型")
-	}
-	register := after.IOType == data.PointValueModbusHoldingRegister || after.IOType == data.PointValueModbusInputRegister
-	if register && before.DataFormat != after.DataFormat {
-		fields = append(fields, "数据格式")
-	}
-	if before.ReadOnly != after.ReadOnly {
-		fields = append(fields, "只读")
-	}
-	if before.Scale != after.Scale {
-		fields = append(fields, "缩放")
-	}
-	if before.Offset != after.Offset {
-		fields = append(fields, "偏移")
-	}
-	if strings.TrimSpace(before.Units) != strings.TrimSpace(after.Units) {
-		fields = append(fields, "单位")
-	}
-	return fields
 }
 
 // modbusCSVDiff compares a validated CSV against the channel's current point
@@ -418,9 +288,6 @@ func (h *Handler) modbusCSVDiff(w http.ResponseWriter, r *http.Request, identity
 	unchanged := 0
 	inCSV := map[string]bool{}
 	for i := range inputs {
-		if inputs[i].Scale == 0 {
-			inputs[i].Scale = 1
-		}
 		input := inputs[i]
 		inCSV[input.Description] = true
 		current, ok := byName[input.Description]
@@ -428,7 +295,7 @@ func (h *Handler) modbusCSVDiff(w http.ResponseWriter, r *http.Request, identity
 			added = append(added, input)
 			continue
 		}
-		fields := modbusDiffFields(current.Input, input)
+		fields := pointconfig.Diff(current.Input, input)
 		if len(fields) == 0 {
 			unchanged++
 			continue
@@ -560,7 +427,7 @@ func (h *Handler) updateModbusIO(w http.ResponseWriter, r *http.Request, identit
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	if err := validateModbusIO(input); err != nil {
+	if err := pointconfig.Validate(input); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -571,29 +438,9 @@ func (h *Handler) updateModbusIO(w http.ResponseWriter, r *http.Request, identit
 	writeJSON(w, map[string]bool{"saved": true})
 }
 
-// modbusIOConfigPoints lists only editable configuration. Encoding ModbusIo
-// would also publish zero value/valueSet and reset runtime counters.
-func modbusIOConfigPoints(input ModbusIOInput) data.Points {
-	if input.Scale == 0 {
-		input.Scale = 1
-	}
-	return data.Points{
-		data.NewPointString(data.PointTypeDescription, "", input.Description),
-		data.NewPointFloat(data.PointTypeID, "", float64(input.ServerID)),
-		data.NewPointFloat(data.PointTypeAddress, "", float64(input.Address)),
-		data.NewPointString(data.PointTypeModbusIOType, "", input.IOType),
-		data.NewPointString(data.PointTypeDataFormat, "", input.DataFormat),
-		data.NewPointFloat(data.PointTypeReadOnly, "", data.BoolToFloat(input.ReadOnly)),
-		data.NewPointFloat(data.PointTypeScale, "", input.Scale),
-		data.NewPointFloat(data.PointTypeOffset, "", input.Offset),
-		data.NewPointFloat(data.PointTypeDisabled, "", data.BoolToFloat(input.Disabled)),
-		data.NewPointString(data.PointTypeUnits, "", input.Units),
-	}
-}
-
 func (h *Handler) updateModbusIOFields(id string, input ModbusIOInput, origin string) error {
 	defer h.CalculationRuntime().Invalidate([]string{id})
-	points := modbusIOConfigPoints(input)
+	points := pointconfig.Encode(input)
 	for i := range points {
 		points[i].Origin = origin
 	}
@@ -625,26 +472,9 @@ func (h *Handler) exportModbusCSV(w http.ResponseWriter, identity Identity, busI
 	var buffer bytes.Buffer
 	buffer.WriteString("\xef\xbb\xbf")
 	writer := csv.NewWriter(&buffer)
-	_ = writer.Write([]string{"名称", "站号", "地址", "类型", "数据格式", "只读", "缩放", "偏移", "单位"})
-	typeNames := map[string]string{
-		data.PointValueModbusHoldingRegister: "保持寄存器", data.PointValueModbusInputRegister: "输入寄存器",
-		data.PointValueModbusCoil: "线圈", data.PointValueModbusDiscreteInput: "离散输入",
-	}
+	_ = writer.Write(pointconfig.Columns)
 	for _, node := range children {
-		name, _ := node.Points.Text(data.PointTypeDescription, "")
-		serverID, _ := node.Points.Value(data.PointTypeID, "")
-		address, _ := node.Points.Value(data.PointTypeAddress, "")
-		ioType, _ := node.Points.Text(data.PointTypeModbusIOType, "")
-		format, _ := node.Points.Text(data.PointTypeDataFormat, "")
-		readOnly, _ := node.Points.Value(data.PointTypeReadOnly, "")
-		scale, _ := node.Points.Value(data.PointTypeScale, "")
-		offset, _ := node.Points.Value(data.PointTypeOffset, "")
-		units, _ := node.Points.Text(data.PointTypeUnits, "")
-		_ = writer.Write([]string{
-			name, strconv.Itoa(int(serverID)), strconv.Itoa(int(address)), typeNames[ioType], format,
-			map[bool]string{true: "是", false: "否"}[readOnly != 0],
-			strconv.FormatFloat(scale, 'g', -1, 64), strconv.FormatFloat(offset, 'g', -1, 64), units,
-		})
+		_ = writer.Write(pointconfig.Row(pointconfig.Decode(node)))
 	}
 	writer.Flush()
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
@@ -684,37 +514,6 @@ func validateModbusConnection(input ModbusConnectionInput) error {
 	}
 	if input.PollPeriod < 0 || input.PollPeriod > 60_000 || input.Timeout < 0 || input.Timeout > 10_000 {
 		return fmt.Errorf("invalid timing")
-	}
-	return nil
-}
-
-func validateModbusIO(input ModbusIOInput) error {
-	if input.Description == "" || input.ServerID < 1 || input.ServerID > 247 || input.Address < 0 || input.Address > 65535 {
-		return fmt.Errorf("invalid_modbus_address")
-	}
-	if !finite(input.Scale) || !finite(input.Offset) {
-		return fmt.Errorf("invalid_scaling")
-	}
-	switch input.IOType {
-	case data.PointValueModbusDiscreteInput, data.PointValueModbusInputRegister:
-		if !input.ReadOnly {
-			return fmt.Errorf("input_points_must_be_read_only")
-		}
-	case data.PointValueModbusCoil, data.PointValueModbusHoldingRegister:
-	default:
-		return fmt.Errorf("invalid_modbus_io_type")
-	}
-	if input.IOType == data.PointValueModbusCoil || input.IOType == data.PointValueModbusDiscreteInput {
-		return nil
-	}
-	switch input.DataFormat {
-	case data.PointValueUINT16, data.PointValueINT16:
-	case data.PointValueUINT32, data.PointValueINT32, data.PointValueFLOAT32:
-		if input.Address > 65534 {
-			return fmt.Errorf("register_pair_out_of_range")
-		}
-	default:
-		return fmt.Errorf("invalid_modbus_data_format")
 	}
 	return nil
 }
