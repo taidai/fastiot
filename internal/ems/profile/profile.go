@@ -5,7 +5,10 @@ package profile
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/csv"
+	"encoding/hex"
+	"encoding/json"
 	"sort"
 	"strconv"
 	"strings"
@@ -140,6 +143,24 @@ func (r *Registry) Get(id string) (Profile, bool) {
 		}
 	}
 	return Profile{}, false
+}
+
+// Fingerprint is the fixed version of one profile's mapping: a short hash of
+// its normalized definition. Equal content keeps the same fingerprint, while a
+// profile overridden on disk under the same ID gets a different one, so a
+// project package can refuse a substituted mapping instead of running it
+// silently.
+func (r *Registry) Fingerprint(id string) (string, bool) {
+	profile, ok := r.Get(id)
+	if !ok {
+		return "", false
+	}
+	raw, err := json.Marshal(profile)
+	if err != nil {
+		return "", false
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:6]), true
 }
 
 // Candidate is one ranked identification suggestion. Strong candidates matched

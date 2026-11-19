@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,6 +58,38 @@ func TestStartServesBaseWithEMSUninstalled(t *testing.T) {
 	}
 	if status, body := apiCall(t, http.MethodGet, base+"/snapshot", token, nil); status != http.StatusOK {
 		t.Fatalf("base snapshot after restart = %d %s", status, body)
+	}
+}
+
+// A site recorded at a package version this binary does not carry must not
+// boot: starting would run different semantics than the operator installed.
+func TestStartRefusesPackageVersionItDoesNotCarry(t *testing.T) {
+	dir := t.TempDir()
+	state := `{"version":1,"installed":{"ems":{"version":"0.9.0","installed_at":"2026-01-01T00:00:00Z"}}}`
+	if err := os.WriteFile(filepath.Join(dir, "industry-packages.json"), []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FASTEMS_ADMIN_PASSWORD", data.NewID())
+	t.Setenv("FASTEMS_SEED_DEMO", "0")
+	httpPort, err := FreePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+	natsPort, err := FreePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+	application, err := Start(context.Background(), Config{
+		DataDir: dir, HTTPPort: strconv.Itoa(httpPort), NATSPort: natsPort, Version: "0.1.0",
+	})
+	if err == nil {
+		if application != nil {
+			_ = application.Close()
+		}
+		t.Fatal("startup accepted a recorded package version this binary does not carry")
+	}
+	if !strings.Contains(err.Error(), "0.9.0") || !strings.Contains(err.Error(), industry.EMSPackageVersion) {
+		t.Fatalf("startup error = %v, want both versions named", err)
 	}
 }
 

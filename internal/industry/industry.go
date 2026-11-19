@@ -89,18 +89,25 @@ type Registry struct {
 	installed map[string]installedRecord
 }
 
-// Open loads the package state for a site. A missing file means the bundled
-// package is active. A corrupt file is an error: an unreadable decision must
-// never silently change what a site can control.
-func Open(dir string) (*Registry, error) {
-	registry := &Registry{
-		path:      filepath.Join(dir, stateFileName),
-		manifests: Bundled(),
-		installed: map[string]installedRecord{},
-	}
+// Default returns the bundled packages with every one active and no site
+// decision recorded: the state of a site that never chose, and of a handler
+// that was not wired to a package registry.
+func Default() *Registry {
+	registry := &Registry{manifests: Bundled(), installed: map[string]installedRecord{}}
 	for _, manifest := range registry.manifests {
 		registry.installed[manifest.ID] = installedRecord{Version: manifest.Version}
 	}
+	return registry
+}
+
+// Open loads the package state for a site. A missing file means the bundled
+// package is active. A corrupt file is an error: an unreadable decision must
+// never silently change what a site can control. A recorded package the binary
+// does not carry, or carries at another version, is also an error: starting
+// would replace or downgrade installed semantics without the operator deciding.
+func Open(dir string) (*Registry, error) {
+	registry := Default()
+	registry.path = filepath.Join(dir, stateFileName)
 	raw, err := os.ReadFile(registry.path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -114,6 +121,13 @@ func Open(dir string) (*Registry, error) {
 	}
 	registry.installed = map[string]installedRecord{}
 	for id, record := range state.Installed {
+		manifest, ok := registry.manifest(id)
+		if !ok {
+			return nil, fmt.Errorf("%s: 行业包 %s（记录版本 %s）不在本软件中，拒绝启动而不是换一个行业包运行", stateFileName, id, record.Version)
+		}
+		if record.Version != manifest.Version {
+			return nil, fmt.Errorf("%s: 行业包 %s 记录为已安装 %s，本软件只提供 %s；请安装匹配版本，拒绝静默替换运行语义", stateFileName, id, record.Version, manifest.Version)
+		}
 		registry.installed[id] = record
 	}
 	return registry, nil
@@ -164,6 +178,50 @@ func (r *Registry) Entries() []Entry {
 	return entries
 }
 
+// RequirementError reports why something that pins id at Required cannot run
+// here. Available is the version this binary carries; empty means the binary
+// does not carry the package at all. Inactive marks the case where the binary
+// carries the pinned version but this site has not installed the package.
+type RequirementError struct {
+	ID        string
+	Required  string
+	Available string
+	Inactive  bool
+}
+
+func (e *RequirementError) Error() string {
+	switch {
+	case e.Available == "":
+		return fmt.Sprintf("missing_dependency:industry:%s@%s", e.ID, e.Required)
+	case e.Inactive:
+		return fmt.Sprintf("missing_dependency:industry:%s@%s:not_installed", e.ID, e.Required)
+	default:
+		return fmt.Sprintf("incompatible_dependency:industry:%s:required@%s:available@%s", e.ID, e.Required, e.Available)
+	}
+}
+
+// Check reports whether this site can run something that requires id@version.
+// It never substitutes another version and never treats an uninstalled package
+// as available.
+func (r *Registry) Check(id, version string) error {
+	if r == nil {
+		r = Default()
+	}
+	manifest, ok := r.manifest(id)
+	if !ok {
+		return &RequirementError{ID: id, Required: version}
+	}
+	if manifest.Version != version {
+		return &RequirementError{ID: id, Required: version, Available: manifest.Version}
+	}
+	r.mu.Lock()
+	_, active := r.installed[id]
+	r.mu.Unlock()
+	if !active {
+		return &RequirementError{ID: id, Required: version, Available: manifest.Version, Inactive: true}
+	}
+	return nil
+}
 // Install activates one bundled package at exactly the bundled version.
 func (r *Registry) Install(id, version string) (Entry, error) {
 	r.mu.Lock()
