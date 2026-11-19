@@ -63,7 +63,7 @@ func (h *Handler) buildAcceptanceReport() acceptanceReport {
 			Detail: "没有配置任何通道", NextStep: "在部署页添加通道并确认健康",
 		})
 	} else {
-		healthy, degraded, offline, devices := 0, 0, 0, 0
+		healthy, degraded, offline, unknown, devices := 0, 0, 0, 0, 0
 		object := channels[0].ID
 		for _, ch := range channels {
 			for _, device := range ch.Devices {
@@ -76,19 +76,25 @@ func (h *Handler) buildAcceptanceReport() acceptanceReport {
 				case channel.HealthOffline:
 					offline++
 					object = device.ID
+				case channel.HealthUnknown:
+					unknown++
+					object = device.ID
 				}
 			}
 		}
 		status := "passed"
 		next := ""
-		if offline > 0 {
+		switch {
+		case offline > 0:
 			status, next = "failed", "检查通道地址、串口占用、接线与站号"
-		} else if degraded > 0 {
-			status, next = "warning", "查看通信错误与响应时间"
+		case devices == 0:
+			status, next = "warning", "在通道下添加站号与点位"
+		case degraded > 0 || unknown > 0:
+			status, next = "warning", "查看通信错误与响应时间，并确认设备已至少成功轮询一次"
 		}
 		checks = append(checks, acceptanceCheck{
 			Key: "channels", Title: "通道通信", Status: status, Object: object, NextStep: next,
-			Detail: fmt.Sprintf("%d 条通道、%d 台设备：正常 %d，不稳定 %d，离线 %d", len(channels), devices, healthy, degraded, offline),
+			Detail: fmt.Sprintf("%d 条通道、%d 台设备：正常 %d，不稳定 %d，离线 %d，状态未知 %d", len(channels), devices, healthy, degraded, offline, unknown),
 		})
 	}
 

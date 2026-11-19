@@ -77,9 +77,6 @@ func gateAcceptanceCheck(t *testing.T, report acceptanceReport, key string) acce
 	return acceptanceCheck{}
 }
 
-// A freshly configured channel has no observation yet: health is unknown.
-// Delivery, preflight and acceptance must agree that it is not passable, and
-// none of them may call it healthy.
 // blockingBus holds the first cycle open so the device has no observation yet,
 // which is the "awaiting first success" state of a brand new channel.
 type blockingBus struct{ release chan struct{} }
@@ -114,6 +111,9 @@ func (b *blockingBus) WriteHoldingRegister(byte, uint16, uint16) error {
 	return errors.New("released")
 }
 
+// A freshly configured channel has no observation yet: health is unknown.
+// Delivery, preflight and acceptance must agree that it is not passable, and
+// none of them may call it healthy.
 func TestUnknownChannelHealthIsNotPassedByAnyGate(t *testing.T) {
 	base, token, service, _ := startGateServer(t)
 	fixture := &pointConfigFixture{base: base, token: token}

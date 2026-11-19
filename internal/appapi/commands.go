@@ -2,10 +2,13 @@ package appapi
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/simpleiot/simpleiot/client"
 	"github.com/simpleiot/simpleiot/data"
+
+	"fastiot/internal/ems/command"
 )
 
 type CommandResult struct {
@@ -14,6 +17,69 @@ type CommandResult struct {
 	Target    float64   `json:"target"`
 	Actor     string    `json:"actor"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// commandFinding is one command whose result is failed or unknown, read from
+// the two places the runtime records results: the point-level lastCommand
+// record and the named command manager.
+type commandFinding struct {
+	Object string
+	State  string
+}
+
+// commandFindings collects failed or unknown command results for the nodes in
+// scope. Named commands are keyed by "<bus id>/<server id>", so they are
+// reported through the bus node that owns the device.
+func (h *Handler) commandFindings(nodes []data.NodeEdge) []commandFinding {
+	names := make(map[string]string, len(nodes))
+	for _, node := range nodes {
+		names[node.ID] = node.Desc()
+	}
+	describe := func(id string) string {
+		if name, ok := names[id]; ok && name != "" {
+			return name
+		}
+		return id
+	}
+
+	findings := make([]commandFinding, 0)
+	for _, node := range nodes {
+		if node.Type != data.NodeTypeVariable && node.Type != data.NodeTypeModbusIO {
+			continue
+		}
+		text, _ := node.Points.Text("lastCommand", "")
+		if text == "" {
+			continue
+		}
+		var result CommandResult
+		if json.Unmarshal([]byte(text), &result) != nil {
+			continue
+		}
+		if result.Status == "unknown" || result.Status == "failed" {
+			findings = append(findings, commandFinding{Object: describe(node.ID), State: result.Status})
+		}
+	}
+	if h.ems == nil || h.ems.Service == nil {
+		return findings
+	}
+	for _, outcome := range h.ems.Service.Commands().List() {
+		if outcome.State != command.Failed && outcome.State != command.Unknown {
+			continue
+		}
+		busID, server, named := strings.Cut(outcome.DeviceID, "/")
+		if !named {
+			busID = outcome.DeviceID
+		}
+		if _, ok := names[busID]; !ok {
+			continue
+		}
+		object := describe(busID)
+		if named {
+			object += "/" + server
+		}
+		findings = append(findings, commandFinding{Object: object, State: string(outcome.State)})
+	}
+	return findings
 }
 
 func (h *Handler) existingCommand(id, requestID string, target float64) (CommandResult, bool, error) {
