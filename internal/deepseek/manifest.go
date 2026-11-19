@@ -11,6 +11,9 @@ import (
 // its kind and its unit. Live values, timestamps, origins and register
 // addresses are deliberately absent.
 type PointSummary struct {
+	// ID is the opaque node ID the generated markup binds to. It is not an
+	// address, credential or live value.
+	ID   string `json:"id,omitempty"`
 	Name string `json:"name"`
 	Type string `json:"type"`
 	Unit string `json:"unit,omitempty"`
@@ -95,7 +98,7 @@ func BuildManifest(req Request) Manifest {
 	}
 	manifest.Categories = []Category{
 		{Key: "code", Label: "代码与上下文", Summary: fmt.Sprintf("指令 %d 字；现有画面配置 %d 字", utf8.RuneCountInString(instruction), utf8.RuneCountInString(req.Context))},
-		{Key: "device_model", Label: "设备模型摘要", Summary: fmt.Sprintf("%d 个点位，仅名称、类型、单位，不含实时值与寄存器地址", len(req.Points))},
+		{Key: "device_model", Label: "设备模型摘要", Summary: fmt.Sprintf("%d 个点位，仅名称、类型、单位与点位 id，不含实时值与寄存器地址", len(req.Points))},
 		{Key: "screenshots", Label: "截图", Summary: fmt.Sprintf("%d 张截图，仅文件名与标注文字，不发送图片像素", len(req.Screenshots))},
 	}
 
@@ -179,7 +182,14 @@ type Message struct {
 // MessagesForManifest renders the model request from the reviewed manifest.
 // Only the fields shown in the manifest are included.
 func MessagesForManifest(manifest Manifest) []Message {
-	const system = "你是工业组态画面生成助手。只使用下方给出的设备模型，不虚构点位、单位或数值；只输出可运行的网页代码。"
+	const system = "你是工业组态画面生成助手。只使用下方给出的设备模型，不虚构点位、单位或数值；" +
+		"只输出一个完整的 HTML 文档，不要输出解释文字。\n" +
+		"绑定规则（预览与发布都按此执行）：\n" +
+		"- 读取点位：在元素上写 data-fastiot-point=\"<点位 ID>\"，可用 data-fastiot-format=\"number|text\" 与 data-fastiot-decimals=\"1\" 控制显示。\n" +
+		"- 写入点位：只在 <button> 上写 data-fastiot-write=\"<点位 ID>\" 和 data-fastiot-value=\"<数值>\"。\n" +
+		"- 画面运行在离线隔离沙箱中：不能访问网络、外部脚本/字体/图片 URL、localStorage、cookie、window.parent 或 eval；" +
+		"不要使用 onclick 等内联事件属性，交互用上述 data 属性或在 <script> 中 addEventListener。\n" +
+		"- 样式写在 <style> 或 style 属性中；图片只能用 data: URI。"
 	var user strings.Builder
 	user.WriteString("用户要求：\n")
 	user.WriteString(manifest.Code.Instruction)
@@ -189,15 +199,15 @@ func MessagesForManifest(manifest Manifest) []Message {
 		user.WriteString(manifest.Code.Context)
 		user.WriteString("\n")
 	}
-	user.WriteString("\n设备模型（仅结构，不含实时值、历史与寄存器地址）：\n")
+	user.WriteString("\n设备模型（点位 id 用于绑定；不含实时值、历史与寄存器地址）：\n")
 	if len(manifest.DeviceModel) == 0 {
 		user.WriteString("（无点位）\n")
 	}
 	for _, point := range manifest.DeviceModel {
 		if point.Unit != "" {
-			fmt.Fprintf(&user, "- %s | %s | %s\n", point.Name, point.Type, point.Unit)
+			fmt.Fprintf(&user, "- %s | %s | %s | id=%s\n", point.Name, point.Type, point.Unit, point.ID)
 		} else {
-			fmt.Fprintf(&user, "- %s | %s\n", point.Name, point.Type)
+			fmt.Fprintf(&user, "- %s | %s | id=%s\n", point.Name, point.Type, point.ID)
 		}
 	}
 	if len(manifest.Screenshots) > 0 {
