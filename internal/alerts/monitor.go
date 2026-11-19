@@ -133,16 +133,13 @@ func (m *Monitor) scan() error {
 		heartbeat, found := bus.Points.Find("lastGoodPoll", "")
 		poll, _ := bus.Points.Value(data.PointTypePollPeriod, "")
 		timeout, _ := bus.Points.Value(data.PointTypeTimeout, "")
-		createdAt := time.Time{}
-		if created, hasCreated := bus.Points.Find(data.PointTypeDescription, ""); hasCreated {
-			createdAt = created.Time
-		}
+		createdAt := health.CreatedAt(bus.Points)
 		lastSuccess := time.Time{}
 		if found {
-			lastSuccess = heartbeat.Time
+			lastSuccess = time.Unix(int64(heartbeat.Val()), 0)
 		}
 		verdict := health.Evaluate(health.Input{
-			Requests: 1, LastSuccess: lastSuccess,
+			Requests: 1, ConsecutiveFailures: 1, LastSuccess: lastSuccess,
 			PollPeriod: time.Duration(poll) * time.Millisecond,
 			Timeout:    time.Duration(timeout) * time.Millisecond,
 			CreatedAt:  createdAt,

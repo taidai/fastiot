@@ -15,6 +15,7 @@ import (
 	"fastiot/internal/ems/alarm"
 	"fastiot/internal/ems/alarmtype"
 	"fastiot/internal/ems/bridge"
+	"fastiot/internal/ems/health"
 	"fastiot/internal/ems/signal"
 	"fastiot/internal/ems/state"
 )
@@ -120,7 +121,7 @@ func (w *Watcher) Scan(now time.Time) error {
 					view.ValueTime = point.Time
 				}
 			}
-			if point.Type == "description" {
+			if point.Type == data.PointTypeDescription || point.Type == data.PointTypeCreated {
 				view.Created = point.Time
 			}
 			if point.Type == "easyemsAlarmType" {
@@ -318,23 +319,15 @@ func channelOffline(view NodeView, now time.Time) bool {
 		return false
 	}
 	since, found := view.Num["lastGoodPoll"]
-	poll, timeout := view.Num["pollPeriod"], view.Num["timeout"]
-	maxAge := 5 * time.Second
-	if value := time.Duration(poll) * 5 * time.Second / 1000; value > maxAge {
-		maxAge = value
+	lastSuccess := time.Time{}
+	if found && since > 0 {
+		lastSuccess = time.Unix(int64(since), 0)
 	}
-	if value := time.Duration(timeout) * 3 * time.Second / 1000; value > maxAge {
-		maxAge = value
-	}
-	if !found || since <= 0 {
-		if !view.Created.IsZero() && now.Sub(view.Created) < maxAge {
-			return false
-		}
-		return true
-	}
-	age := now.Sub(time.Unix(int64(since), 0))
-	if age < -5*time.Second {
-		age = -age
-	}
-	return age > maxAge
+	verdict := health.Evaluate(health.Input{
+		Requests: 1, ConsecutiveFailures: 1, LastSuccess: lastSuccess,
+		PollPeriod: time.Duration(view.Num["pollPeriod"]) * time.Millisecond,
+		Timeout:    time.Duration(view.Num["timeout"]) * time.Millisecond,
+		CreatedAt:  view.Created,
+	}, now)
+	return verdict.State == health.Offline
 }

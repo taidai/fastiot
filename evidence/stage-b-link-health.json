@@ -1,0 +1,42 @@
+{
+  "ticket": "architecture-governance-stage-b-link-health",
+  "spec": "https://github.com/taidai/fastiot/issues/2",
+  "design": "docs/superpowers/specs/2026-11-18-stage-b-link-health-design.md",
+  "verified_on": "2026-11-18",
+  "commits": ["19faad0", "97ca022", "7fd618f"],
+  "scope": "Stage B final slice: one link-health verdict for channels, delivery, allocation and alarm monitors",
+  "module": {
+    "interface": "health.Evaluate accepts requests, consecutive failures, last success, poll/timeout/maxAge and creation time; returns state, reason and age",
+    "unknown": "No observation or creation grace returns unknown, never healthy or offline",
+    "no_success": "Configured polling after grace without success returns offline/no_success",
+    "expiry": "A successful poll that becomes too old returns offline/source_expired",
+    "degraded": "Recent success with consecutive failures returns degraded/consecutive_failures",
+    "future": "Timestamp more than 5 seconds in the future returns offline/invalid_time"
+  },
+  "adapters": {
+    "channel": "Channel.Health maps Stats into the shared verdict; delivery, preflight, acceptance and EMS inherit it",
+    "alarmwatch": "Configured polling uses Requests=1 and raises only offline findings with the verdict reason",
+    "legacy_alerts": "alerts.Monitor uses the same verdict instead of its own threshold",
+    "allocation": "decision.busHealthy accepts healthy/degraded and rejects offline/unknown; lastGoodPoll's timestamp value drives freshness; allocationMember rejects unknown and accepts degraded, including capability reads",
+    "timestamps": "CreatedAt uses PointTypeCreated rather than rename time; zero lastGood is no_success and future timestamps are invalid_time"
+  },
+  "verification": {
+    "go_full": "go test -p 1 -count=1 ./... passed (36 packages, including health)",
+    "frontend": ["npm run build", "check:navigation", "check:consistency", "check:observations", "check:acceptance", "check:capabilities"],
+    "unit": "Verdict table covers grace, no observation, no success, healthy, degraded, expiry, future timestamp and explicit MaxAge",
+    "adapters": "Alarmwatch no-success-after-grace, busHealthy fresh/stale and decision integration tests pass",
+    "real_cycle": "A local Modbus simulator plus real restart produced healthy, degraded, healthy recovery and offline; /ems/channels, /delivery/gates and /ems/alarms changed consistently",
+    "cleanup": "Simulator and temporary channel removed",
+    "review": "Independent review found unknown allocation, negative timestamp clearing, rename-grace and a second alarmwatch verdict; all were fixed with regression tests"
+  },
+  "remaining": [
+    "Stage C command/write seam and safety",
+    "Stage D history query and timeline",
+    "Stage E allocation and Modbus configuration",
+    "Stage F dead-code deletion"
+  ],
+  "limits": [
+    "No production device connection or physical write",
+    "No Stage F deletion, formula or public-shape changes"
+  ]
+}

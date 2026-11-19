@@ -210,7 +210,7 @@ func allocationMember(nc *nats.Conn, member AllocatorMember) (alloc.Member, []st
 		reasons = append(reasons, "manual takeover")
 	}
 	if health, _ := node.Points.Text("health", ""); health != "" {
-		result.Online = health != "offline"
+		result.Online = health != "offline" && health != "unknown"
 	} else if node.Type == data.NodeTypeModbusIO {
 		// No heartbeat is an offline member, not a reason to block every
 		// other member. Healthy members still wait for capability values.
@@ -287,12 +287,9 @@ func busHealthy(nc *nats.Conn, busID string) bool {
 	}
 	poll, _ := nodes[0].Points.Value(data.PointTypePollPeriod, "")
 	timeout, _ := nodes[0].Points.Value(data.PointTypeTimeout, "")
-	createdAt := time.Time{}
-	if created, hasCreated := nodes[0].Points.Find(data.PointTypeDescription, ""); hasCreated {
-		createdAt = created.Time
-	}
+	createdAt := health.CreatedAt(nodes[0].Points)
 	verdict := health.Evaluate(health.Input{
-		Requests: 1, LastSuccess: lastSuccess,
+		Requests: 1, ConsecutiveFailures: 1, LastSuccess: lastSuccess,
 		PollPeriod: time.Duration(poll) * time.Millisecond,
 		Timeout:    time.Duration(timeout) * time.Millisecond,
 		CreatedAt:  createdAt,
@@ -306,7 +303,7 @@ func readNumber(nc *nats.Conn, target Target) (float64, bool, error) {
 		return 0, false, fmt.Errorf("capability input unavailable")
 	}
 	if nodes[0].Type == data.NodeTypeModbusIO {
-		if health, _ := nodes[0].Points.Text("health", ""); health == "offline" {
+		if health, _ := nodes[0].Points.Text("health", ""); health == "offline" || health == "unknown" {
 			return 0, false, nil
 		} else if health == "" && !busHealthy(nc, nodes[0].Parent) {
 			return 0, false, nil

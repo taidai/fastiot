@@ -55,7 +55,7 @@ func Evaluate(nodes []NodeView, now time.Time) []Finding {
 				lastSuccess = time.Unix(int64(since), 0)
 			}
 			verdict := health.Evaluate(health.Input{
-				Requests: 1, LastSuccess: lastSuccess,
+				Requests: 1, ConsecutiveFailures: 1, LastSuccess: lastSuccess,
 				PollPeriod: time.Duration(node.Num["pollPeriod"]) * time.Millisecond,
 				Timeout:    time.Duration(node.Num["timeout"]) * time.Millisecond,
 				CreatedAt:  node.Created,

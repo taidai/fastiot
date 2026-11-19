@@ -182,6 +182,48 @@ func TestBusHealthyUsesSharedVerdict(t *testing.T) {
 	}
 }
 
+func TestAllocationMemberRejectsUnknownHealth(t *testing.T) {
+	opts := server.TestServerOptions
+	opts.ID = "easyems-allocation-health-test"
+	opts.DataDir = filepath.Join(t.TempDir(), "data")
+	opts.NatsPort = 19711
+	opts.NatsServer = "nats://127.0.0.1:19711"
+	opts.HTTPPort = "9703"
+	opts.NatsMonitorPort = 19714
+	opts.NatsWSPort = 19715
+	opts.NatsMQTTPort = 0
+	nc, _, stopServer, err := server.TestServerOpts(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopServer()
+	bus := data.NodeEdge{ID: "bus-health", Type: data.NodeTypeModbus, Parent: "root"}
+	if err := siotclient.SendNode(nc, bus, "test"); err != nil {
+		t.Fatal(err)
+	}
+	point := data.NodeEdge{ID: "io-health", Type: data.NodeTypeModbusIO, Parent: bus.ID, Points: data.Points{data.NewPointString("health", "", "unknown")}}
+	if err := siotclient.SendNode(nc, point, "test"); err != nil {
+		t.Fatal(err)
+	}
+	member, _, err := allocationMember(nc, AllocatorMember{Target: Target{NodeID: point.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if member.Online {
+		t.Fatal("unknown health must not be allocated")
+	}
+	if err := siotclient.SendNodePoint(nc, point.ID, data.NewPointString("health", "", "degraded"), true); err != nil {
+		t.Fatal(err)
+	}
+	member, _, err = allocationMember(nc, AllocatorMember{Target: Target{NodeID: point.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !member.Online {
+		t.Fatal("degraded health must remain eligible")
+	}
+}
+
 func createVariable(t *testing.T, nc *nats.Conn, parent, id string, value float64) {
 	t.Helper()
 	if err := siotclient.SendNode(nc, data.NodeEdge{
