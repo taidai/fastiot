@@ -124,6 +124,10 @@ func (c *Client) WriteSingleCoil(id byte, coil uint16, v bool) error {
 		fmt.Printf("Modbus client WriteSingleCoil ID:0x%x resp:%v\n", id, resp)
 	}
 
+	if err := resp.respException(); err != nil {
+		return err
+	}
+
 	if resp.FunctionCode != req.FunctionCode {
 		return errors.New("resp contains wrong function code")
 	}
@@ -325,6 +329,10 @@ func (c *Client) WriteSingleReg(id byte, reg, value uint16) error {
 
 	if c.debug >= 1 {
 		fmt.Printf("Modbus client WriteSingleReg ID:0x%x resp:%v\n", id, resp)
+	}
+
+	if err := resp.respException(); err != nil {
+		return err
 	}
 
 	if resp.FunctionCode != req.FunctionCode {

@@ -230,7 +230,7 @@ func (s *Service) runChannel(ctx context.Context, ch *channel.Channel, period ti
 	runner := &channel.Runner{
 		Channel: ch,
 		Period:  period,
-		OnCycle: func(now time.Time, results []channel.Result, _ []channel.WriteResult) {
+		OnCycle: func(now time.Time, results []channel.Result, writes []channel.WriteResult) {
 			s.observationMu.Lock()
 			s.mu.Lock()
 			if s.channels[ch.ID] != ch || ctx.Err() != nil {
@@ -248,6 +248,11 @@ func (s *Service) runChannel(ctx context.Context, ch *channel.Channel, period ti
 				s.OnObservations(s.State.Capture(func() time.Time { return received }, s.MaxAge))
 			}
 			s.observationMu.Unlock()
+			for _, write := range writes {
+				if write.Rejected {
+					s.commands.FailWrite(now, write.RequestID, write.Error)
+				}
+			}
 			s.updateDeviceAlarms(now, ch)
 			if s.OnResults != nil && len(accepted) > 0 {
 				s.OnResults(ch.ID, accepted)

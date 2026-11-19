@@ -130,7 +130,19 @@ type WriteResult struct {
 	RequestID string
 	Value     signal.Value
 	Error     string
+	// Rejected is true only when the device itself refused the write, so the
+	// value was definitely not applied. Transport failures leave it false.
+	Rejected bool
 }
+
+// Refusal is a write the device rejected, such as a Modbus exception reply.
+// Unlike a transport error it proves the value never reached the device.
+type Refusal struct{ Reason string }
+
+func (r Refusal) Error() string { return "device refused write: " + r.Reason }
+
+// Refuse builds a refusal error for protocol adapters.
+func Refuse(reason string) error { return Refusal{Reason: reason} }
 
 type pendingWrite struct {
 	deviceID  string
@@ -273,6 +285,8 @@ func (c *Channel) RunOnce(ctx context.Context, now func() time.Time) ([]Result, 
 		result := WriteResult{DeviceID: write.deviceID, PointID: write.pointID, RequestID: write.requestID, Value: write.value}
 		if err := c.write(device.ServerID, point, write.value); err != nil {
 			result.Error = err.Error()
+			var refusal Refusal
+			result.Rejected = errors.As(err, &refusal)
 			c.recordFailure(write.deviceID, err, now())
 		} else {
 			c.recordSuccess(write.deviceID, now())

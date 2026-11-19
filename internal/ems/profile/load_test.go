@@ -105,3 +105,46 @@ func TestLoadMissingDirIsClean(t *testing.T) {
 		t.Fatal("builtin profiles missing")
 	}
 }
+
+func TestLoadCommandReadbackAndTimeout(t *testing.T) {
+	dir := t.TempDir()
+	writeProfile(t, dir, "pump.json", `{
+		"id": "acme-pump",
+		"vendor": "ACME",
+		"model": "泵控制器",
+		"point_specs": [
+			{"name": "运行反馈", "function": "discreteInput", "address": 0, "read_only": true, "role": "status"},
+			{"name": "启停", "address": 1, "role": "setpoint"}
+		],
+		"command_specs": [
+			{"id": "start", "name": "启动", "point": "启停", "value": 1, "readback": "运行反馈", "readback_value": 1, "timeout_ms": 4000}
+		]
+	}`)
+	registry := Load(dir)
+	if len(registry.LoadErrors) != 0 {
+		t.Fatalf("unexpected load errors: %v", registry.LoadErrors)
+	}
+	loaded, _ := registry.Get("acme-pump")
+	command := loaded.CommandSpecs[0]
+	if command.Readback != "运行反馈" || command.ReadbackValue != 1 || command.TimeoutMS != 4000 {
+		t.Fatalf("readback fields not kept: %+v", command)
+	}
+}
+
+func TestLoadRejectsUndeclaredReadback(t *testing.T) {
+	dir := t.TempDir()
+	writeProfile(t, dir, "pump.json", `{
+		"id": "acme-pump",
+		"vendor": "ACME",
+		"model": "泵控制器",
+		"point_specs": [{"name": "启停", "address": 1, "role": "setpoint"}],
+		"command_specs": [{"id": "start", "name": "启动", "point": "启停", "value": 1, "readback": "运行反馈"}]
+	}`)
+	registry := Load(dir)
+	if len(registry.LoadErrors) == 0 {
+		t.Fatal("an undeclared readback point must be reported, not silently dropped")
+	}
+	if _, ok := registry.Get("acme-pump"); ok {
+		t.Fatal("invalid profile must not be loaded")
+	}
+}
