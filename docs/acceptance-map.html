@@ -160,9 +160,9 @@
     <b>V1 可签收范围</b>
     <span>以 EMS 为行业包的配置式交付平台：项目在一台实例内完成复用、适配、策略、联调、发布、交接与升级回退。逐行证据与缺口见 <code>docs/acceptance-evidence.md</code>。</span>
     <div class="scope-states">
-      <span class="ok">已实现 A01–A05 · A08 · A09 · A11 · A12 · A15</span>
-      <span class="part">部分 A06 A07 A10 A13 A14 A16 A19 A20 A22</span>
-      <span class="none">未实现 A17 · A18 · A21 · A23</span>
+      <span class="ok">已实现 A01–A05 · A08 · A09 · A11 · A12 · A15 · A17 · A22</span>
+      <span class="part">部分 A06 A07 A10 A13 A14 A16 A19 A20</span>
+      <span class="none">未实现 A18 · A21 · A23</span>
     </div>
   </div>
 
@@ -292,8 +292,8 @@
         <div class="asset"><b>版本</b><span>基线、定制、依赖、迁移与回退点</span></div>
       </div>
       <div class="states"><span class="state">草稿</span><span class="state-arrow">→</span><span class="state">验证</span><span class="state-arrow">→</span><span class="state active">发布</span><span class="state-arrow">·</span><span class="state">需要时回退</span></div>
-      <div class="output"><b>已实现：</b>同实例内从已验收项目复用；规则与配置随版本发布；发布前预检、投运门槛与证据汇总。</div>
-      <div class="output warn"><b>未实现：</b>跨机导出/导入、manifest 哈希与引用重写、包级一键发布与失败原子性。对外不得声称"项目包可直接搬到另一台"。见 A17–A19。</div>
+      <div class="output"><b>已实现：</b>同实例内从已验收项目复用；项目包跨机导出/导入（引用重写、依赖版本锁定）并在干净实例离线部署；规则与配置随版本发布；发布前预检、投运门槛与证据汇总。</div>
+      <div class="output warn"><b>未实现：</b>升级三方差异的人工确认、包级一键发布与失败原子性；画面构建产物与仿真场景见 A18。见 A17–A19。</div>
     </div>
 
     <div class="card">

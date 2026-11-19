@@ -29,6 +29,7 @@ import (
 
 	"fastiot/internal/appapi"
 	"fastiot/internal/audit"
+	"fastiot/internal/datadir"
 	"fastiot/internal/decision"
 	"fastiot/internal/deepseek"
 	"fastiot/internal/ems/alarmwatch"
@@ -106,6 +107,20 @@ func Start(ctx context.Context, cfg Config) (*App, error) {
 	if cfg.Version == "" {
 		cfg.Version = "development"
 	}
+	// A second process on the same data directory would corrupt both the
+	// JetStream store and any offline backup taken meanwhile.
+	if err := datadir.CheckStopped(cfg.DataDir); err != nil {
+		return nil, err
+	}
+	if err := datadir.Write(cfg.DataDir, cfg.Version); err != nil {
+		return nil, err
+	}
+	claimed := true
+	defer func() {
+		if claimed {
+			datadir.Remove(cfg.DataDir)
+		}
+	}()
 
 	runCtx, runCancel := context.WithCancel(ctx)
 	var closeOnce sync.Once
@@ -308,7 +323,7 @@ func Start(ctx context.Context, cfg Config) (*App, error) {
 	group.Add(func() error {
 		<-runCtx.Done()
 		return nil
-	}, func(error) {})
+	}, func(error) { datadir.Remove(cfg.DataDir) })
 
 	done := make(chan error, 1)
 	go func() { done <- group.Run() }()
@@ -329,6 +344,7 @@ func Start(ctx context.Context, cfg Config) (*App, error) {
 
 	select {
 	case <-readyCh:
+		claimed = false
 		return application, nil
 	case err := <-startupErr:
 		closeApp()

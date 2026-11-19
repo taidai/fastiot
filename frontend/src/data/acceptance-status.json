@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-11-11",
+  "updated_at": "2026-11-20",
   "source": "docs/acceptance-evidence.md",
   "rows": [
     {
@@ -199,11 +199,15 @@
     {
       "id": "A17",
       "title": "项目包导出与干净主机导入",
-      "status": "unimplemented",
-      "summary": "无项目包导出、manifest 与引用重写",
-      "evidence": [],
-      "gap": "全部未实现",
-      "updated_at": "2026-11-11"
+      "status": "implemented",
+      "summary": "导出/导入、引用重写、依赖版本锁定与干净实例离线部署均已实现",
+      "evidence": [
+        "TestProjectPackageRoundTrip",
+        "TestProjectImportRefusesUnmetDependenciesBeforeCreatingNodes",
+        "TestCleanInstanceImportsProjectPackageAndRuns"
+      ],
+      "gap": "",
+      "updated_at": "2026-11-20"
     },
     {
       "id": "A18",
@@ -249,14 +253,16 @@
     {
       "id": "A22",
       "title": "整目录备份与恢复",
-      "status": "partial",
-      "summary": "离线整目录恢复脚本可用；未覆盖 EMS 计数校验",
+      "status": "implemented",
+      "summary": "离线整目录备份/恢复、快照时间与数据损失窗口、恢复后历史/报警/审计可查",
       "evidence": [
-        "restore-check.mjs",
-        "TestAppendQueryAndCSV"
+        "TestRestoreToCleanDirectoryRecordsSnapshotAndDataLoss",
+        "TestRestoreMovesThePreviousDataDirectoryAside",
+        "TestOfflineRestoreKeepsHistoryAlarmsAndAudit",
+        "TestPointHistorySurvivesRestart"
       ],
-      "gap": "未校验单元/历史/审计计数",
-      "updated_at": "2026-11-11"
+      "gap": "",
+      "updated_at": "2026-11-20"
     },
     {
       "id": "A23",

@@ -51,6 +51,7 @@ var routeRequirements = []routeRequirement{
 	actionRoute(http.MethodPut, "audit-settings", SiteSettings, "admin_required"),
 	actionRoute(http.MethodGet, "audit", AuditView, "admin_required"),
 	actionRoute(http.MethodGet, "audit/export", AuditView, "admin_required"),
+	actionRoute(http.MethodGet, "recovery", SiteSettings, "admin_required"),
 	authenticatedRoute(http.MethodGet, "history-settings"),
 	actionRoute(http.MethodPut, "history-settings", SiteSettings, "admin_required"),
 	actionRoute(http.MethodGet, "profile-verifications", Export, "admin_required"),

@@ -131,10 +131,7 @@ func (h *Handler) buildPreflight(identity Identity, siteID string) (preflightRep
 	gates = append(gates, h.disabledGate(nodes))
 	gates = append(gates, h.alarmGate())
 	gates = append(gates, h.historyGate())
-	gates = append(gates, preflightGate{
-		Key: "backup", Title: "备份", Status: "warn", Informational: true,
-		Detail: "尚未验证离线完整备份", NextStep: "停机复制数据目录并做一次恢复演练",
-	})
+	gates = append(gates, h.backupGate())
 	gates = append(gates, preflightGate{
 		Key: "permissions", Title: "权限边界", Status: "pass",
 		Detail: "服务端逐请求校验账号、角色与业务树范围",

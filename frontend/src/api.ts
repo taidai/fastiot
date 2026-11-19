@@ -198,6 +198,14 @@ const errorTexts: Record<string, string> = {
 
 export function errorMessage(code: string, status: number): string {
   if (code && errorTexts[code]) return errorTexts[code]
+  if (code.startsWith("missing_dependency:")) return `缺少依赖：${code.slice("missing_dependency:".length)}。请先安装对应版本后再导入`
+  if (code.startsWith("incompatible_dependency:")) return `依赖版本不匹配：${code.slice("incompatible_dependency:".length)}。请使用与项目包一致的版本`
+  if (code.startsWith("undeclared_dependency:")) return `项目包内容使用了未声明的依赖：${code.slice("undeclared_dependency:".length)}`
+  if (code.startsWith("unsupported_package_version:")) return `项目包格式版本 ${code.slice("unsupported_package_version:".length)} 不受支持，请用当前版本重新导出`
+  if (code === "instance_running") return "实例正在运行：离线备份与恢复都必须先停止实例"
+  if (code === "invalid_backup") return "备份文件无效，或不是本应用的完整数据目录备份"
+  if (code === "backup_incomplete") return "备份文件与其清单不一致，未执行恢复"
+  if (code === "unsafe_backup_path") return "备份文件包含不安全路径，已拒绝恢复"
   // Safety refusals carry an explanatory sentence, not a code. Show the
   // server's reason verbatim so the operator sees why the write was refused.
   if (code && /\s/.test(code)) return code
@@ -230,6 +238,58 @@ export async function downloadCSV(token: string, path: string, filename = "fasti
   link.download = filename
   link.click()
   URL.revokeObjectURL(url)
+}
+
+export type RecoveryStatus = {
+  restored: boolean
+  recovery?: {
+    restored_at: string
+    snapshot_at: string
+    backup_app_version?: string
+    data_loss: { after: string; before: string; detail: string }
+    replaced_data_dir?: string
+    snapshot_inventory?: { audit_records: number; alarm_events: number; project_versions: number; project_sites: number }
+    includes?: string[]
+    not_version_rollback: string
+  }
+  backup?: { created_at: string; archive: string; files: number; bytes: number }
+  offline_only: boolean
+  version_rollback: string
+  note?: string
+}
+
+export function recoveryStatus(token: string) {
+  return request<RecoveryStatus>(token, "/recovery")
+}
+
+export async function downloadProjectPackage(token: string, site: string, filename = "project.package.json") {
+  const response = await fetch(`/api/projects/export?site=${encodeURIComponent(site)}`, { headers: { Authorization: `Bearer ${token}` } })
+  if (!response.ok) {
+    const result = await response.json().catch(() => ({ error: "" }))
+    throw new ApiError(errorMessage(result.error, response.status), response.status, result.error || "")
+  }
+  const url = URL.createObjectURL(await response.blob())
+  const link = document.createElement("a")
+  link.href = url
+  link.download = filename
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+export type ProjectImportResult = {
+  site_id: string
+  name: string
+  created: number
+  model: number
+  channels: number
+  rules: number
+  version_id?: string
+  ignored?: { node: string; point?: string; reason: string }[]
+  warnings?: string[]
+}
+
+export function importProjectPackage(token: string, pkg: unknown, name?: string) {
+  return request<ProjectImportResult>(token, "/projects/import", "POST", { package: pkg, name })
 }
 
 export function point(node: Node, type: string) {

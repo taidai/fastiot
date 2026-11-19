@@ -937,6 +937,17 @@ func (db *DbJetStream) loadStream(cfg jetstream.StreamConfig) error {
 	db.loadEdgeSubjects(s, origin, fmt.Sprintf("inst.%v.%v.*.ep.>", boundary, origin))
 	db.loadPointSubjects(s, origin, fmt.Sprintf("inst.%v.%v.*.p.>", boundary, origin))
 
+	// History reads resolve streams from db.streams, and a write is what
+	// otherwise registers them. Without this a restarted instance answers
+	// every history query from an empty set until its first new write.
+	if origin == db.meta.RootID {
+		db.streamMu.Lock()
+		if _, exists := db.streams[cfg.Name]; !exists {
+			db.streams[cfg.Name] = s
+		}
+		db.streamMu.Unlock()
+	}
+
 	return nil
 }
 
