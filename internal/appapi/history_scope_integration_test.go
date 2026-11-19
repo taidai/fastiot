@@ -44,16 +44,12 @@ func TestHistoryCursorAndAggregateStayConsistent(t *testing.T) {
 		t.Fatalf("history fixture lost samples: %d", got)
 	}
 	hq := h.historyQuery()
-	raw, _, err := hq.Execute(historyquery.Request{NodeIDs: []string{point}, Type: "value", Start: at, End: at.Add(599 * time.Second), Limit: 2000})
-	if err != nil {
+	if _, _, err := hq.Execute(historyquery.Request{NodeIDs: []string{point}, Type: "value", Start: at, End: at.Add(599 * time.Second), Limit: 2000}); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("raw first=%+v raw last=%+v", raw[0].Records[0], raw[0].Records[len(raw[0].Records)-1])
-	read, _, err := hq.Execute(historyquery.Request{NodeIDs: []string{point}, Type: "value", Start: at, End: at.Add(599 * time.Second), Aggregate: 5 * time.Minute, Limit: 2000})
-	if err != nil {
+	if _, _, err := hq.Execute(historyquery.Request{NodeIDs: []string{point}, Type: "value", Start: at, End: at.Add(599 * time.Second), Aggregate: 5 * time.Minute, Limit: 2000}); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("aggregate records=%+v", read[0].Records)
 	query := url.Values{"node_id": []string{point}, "start": []string{at.Format(time.RFC3339)}, "end": []string{at.Add(599 * time.Second).Format(time.RFC3339)}, "aggregate": []string{"5m"}, "limit": []string{"1"}}
 	var page struct {
 		Results []struct {
@@ -318,7 +314,7 @@ func TestHistoryAggregateExportUsesAllRawSamples(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 35 || rows[1][6] != "149.5" || rows[1][9] != "C" || rows[1][11] != "300" {
+	if len(rows) != 35 || rows[1][6] != "149.5" || rows[1][8] != historyquery.SourceRuntime || rows[1][10] != "C" || rows[1][12] != "300" {
 		t.Fatalf("first aggregate bucket lost raw samples: rows=%d first=%v", len(rows), rows[1])
 	}
 }

@@ -20,6 +20,13 @@ const (
 	ExportLimit = 10000
 )
 
+// Source values on PointResult.Source and Record.Source name the history
+// channel that answered the request.
+const (
+	SourceSIOT    = "siot"
+	SourceRuntime = "modbus_runtime"
+)
+
 // Record is one history row. Kind is always observation or quality_event.
 type Record struct {
 	PointID      string    `json:"point_id"`
@@ -30,15 +37,20 @@ type Record struct {
 	Quality      string    `json:"quality,omitempty"`
 	Value        *float64  `json:"value,omitempty"`
 	Text         string    `json:"text,omitempty"`
-	Source       string    `json:"source"`
-	Unit         string    `json:"unit,omitempty"`
-	ConfigStamp  string    `json:"config_stamp,omitempty"`
-	TimeSource   string    `json:"time_source,omitempty"`
-	Kind         string    `json:"kind,omitempty"`
-	Reason       string    `json:"reason,omitempty"`
-	Late         bool      `json:"late,omitempty"`
-	SampleCount  int       `json:"sample_count,omitempty"`
-	Aggregate    string    `json:"aggregate,omitempty"`
+	// Source is the history channel that produced this record: SourceSIOT or
+	// SourceRuntime.
+	Source string `json:"source"`
+	// Origin is the upstream origin the SIOT adapter recorded for the point;
+	// empty for runtime history.
+	Origin      string `json:"origin,omitempty"`
+	Unit        string `json:"unit,omitempty"`
+	ConfigStamp string `json:"config_stamp,omitempty"`
+	TimeSource  string `json:"time_source,omitempty"`
+	Kind        string `json:"kind,omitempty"`
+	Reason      string `json:"reason,omitempty"`
+	Late        bool   `json:"late,omitempty"`
+	SampleCount int    `json:"sample_count,omitempty"`
+	Aggregate   string `json:"aggregate,omitempty"`
 }
 
 // PointResult is the paginated history of one point.
@@ -49,11 +61,14 @@ type PointResult struct {
 	SampleIntervalMS int         `json:"sample_interval_ms"`
 	Points           data.Points `json:"points,omitempty"`
 	Records          []Record    `json:"records"`
-	Matched          int         `json:"matched"`
-	Returned         int         `json:"returned"`
-	Truncated        bool        `json:"truncated"`
-	NextBefore       time.Time   `json:"next_before,omitzero"`
-	NextBeforeCount  int         `json:"next_before_count"`
+	// Matched is the number of records matching the time window and filter
+	// before the pagination cursor is applied; it is the same for a query page
+	// and for an export.
+	Matched         int       `json:"matched"`
+	Returned        int       `json:"returned"`
+	Truncated       bool      `json:"truncated"`
+	NextBefore      time.Time `json:"next_before,omitzero"`
+	NextBeforeCount int       `json:"next_before_count"`
 }
 
 // Cursor is the pagination position: only rows older than Before are returned,
@@ -129,8 +144,9 @@ type readResult struct {
 }
 
 // Execute resolves each node, selects its source, merges records, aggregates,
-// applies the cursor and paginates. The returned total is the number matched
-// before pagination.
+// applies the cursor and paginates. The returned total is the number of
+// records matching the time window and filter before the pagination cursor,
+// identical for a query page and for an export.
 func (q *Query) Execute(req Request) ([]PointResult, int, error) {
 	if !req.Start.IsZero() && !req.End.IsZero() && req.End.Before(req.Start) {
 		return nil, 0, ErrInvalidTimeRange
@@ -158,9 +174,6 @@ func (q *Query) Execute(req Request) ([]PointResult, int, error) {
 		}
 		filtered := filterRecords(read.records, req.Cursor)
 		matchedCount := len(read.records)
-		if req.Export {
-			matchedCount = len(filtered)
-		}
 		matched += matchedCount
 		total += len(filtered)
 		pageLimit := limit
@@ -200,7 +213,7 @@ func (q *Query) Execute(req Request) ([]PointResult, int, error) {
 // source answered, so a SIOT fallback is never silently left out of an
 // aggregated result.
 func (q *Query) read(node Node, typ, key string, start, end time.Time, aggregate time.Duration) (readResult, error) {
-	out := readResult{source: "siot", records: []Record{}}
+	out := readResult{source: SourceSIOT, records: []Record{}}
 	runtimePoint := node.Type == data.NodeTypeModbusIO && q.Runtime != nil
 	if runtimePoint {
 		deviceID, intervalMS, ok, err := q.Runtime.Locate(node.ID)
@@ -208,7 +221,7 @@ func (q *Query) read(node Node, typ, key string, start, end time.Time, aggregate
 			return out, err
 		}
 		if ok {
-			out.deviceID, out.source, out.sampleIntervalMS = deviceID, "modbus_runtime", intervalMS
+			out.deviceID, out.source, out.sampleIntervalMS = deviceID, SourceRuntime, intervalMS
 			for _, sample := range q.Runtime.Timeline(deviceID, node.ID, start, end) {
 				if sample.SourceTime.IsZero() {
 					continue
@@ -274,7 +287,7 @@ func SIOTPoints(reader SIOT, nodeID, typ, key string, start, end time.Time) ([]d
 func siotRecords(node Node, points data.Points) []Record {
 	records := make([]Record, 0, len(points))
 	for _, point := range points {
-		record := Record{PointID: node.ID, SourceTime: point.Time, Text: point.Txt(), Source: point.Origin, Unit: node.Units, Kind: history.KindObservation}
+		record := Record{PointID: node.ID, SourceTime: point.Time, Text: point.Txt(), Source: SourceSIOT, Origin: point.Origin, Unit: node.Units, Kind: history.KindObservation}
 		if value, err := point.ValueFloat(); err == nil {
 			v := value
 			record.Value = &v
