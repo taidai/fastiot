@@ -5,6 +5,7 @@ package modbusrt
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -115,18 +116,24 @@ func New(transport modbus.Transport) *Bus {
 	return &Bus{client: modbus.NewClient(transport, 0)}
 }
 
-// OpenRTUConfig opens a serial port with explicit framing parameters.
-func OpenRTUConfig(cfg SerialConfig, timeout time.Duration) (*Bus, error) {
+// OpenSerialPort opens the configured port for a caller that has to own the
+// raw stream, such as a simulated station acting as an RTU slave.
+func OpenSerialPort(cfg SerialConfig) (io.ReadWriteCloser, error) {
 	mode, err := cfg.mode()
 	if err != nil {
 		return nil, err
 	}
-	port, err := serial.Open(cfg.Port, mode)
+	return serial.Open(cfg.Port, mode)
+}
+
+// OpenRTUConfig opens a serial port with explicit framing parameters.
+func OpenRTUConfig(cfg SerialConfig, timeout time.Duration) (*Bus, error) {
+	port, err := OpenSerialPort(cfg)
 	if err != nil {
 		return nil, err
 	}
 	reader := respreader.NewReadWriteCloser(port, timeout, 20*time.Millisecond)
-	return New(&recordingTransport{Transport: modbus.NewRTU(reader), peer: cfg.Port}), nil
+	return New(&stationGuard{Transport: &recordingTransport{Transport: modbus.NewRTU(reader), peer: cfg.Port}}), nil
 }
 
 // OpenRTU opens a serial port with 8N1 for callers without explicit framing.
