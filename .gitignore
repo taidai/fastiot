@@ -20,3 +20,6 @@ encore.gen.cue
 /evidence/verify-encore/
 /fastiot-verify.exe
 /modbus-simulator.exe
+
+/pumphouse-data/
+/pumphouse.exe

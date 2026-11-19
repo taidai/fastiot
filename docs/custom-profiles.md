@@ -33,7 +33,14 @@
 | `command_specs[].id` / `name` | 是 | 命令 ID 与显示名 |
 | `command_specs[].point` | 否 | 写入的点位名称，必须在 `point_specs` 中声明 |
 | `command_specs[].value` | 否 | 固定命令写入值 |
+| `command_specs[].readback` | 否 | 确认命令生效的回读点位名称，必须在 `point_specs` 中声明；省略时回读写入点自身 |
+| `command_specs[].readback_value` | 否 | 回读点应达到的值（默认 0）；布尔点用 0/1 |
+| `command_specs[].timeout_ms` | 否 | 命令超时，0–60000，默认 5000 |
 | `command_specs[].parameters[]` | 否 | 操作员输入参数：`name`、`label`、`point`（必须已声明）、`kind`（`number`/`bool`）、`has_range`+`min`+`max`、`default` |
+
+回读点是“设备真的做了”的证据：例如启动命令写保持寄存器 1，回读点用运行反馈离散输入，
+这样写入成功不会冒充启动成功。设备以 Modbus 异常拒绝写入时，命令直接以失败结束；
+没有回读或回读未出现时，命令在超时后是“未知”，两者都不是成功。
 
 角色（`role`）是声明，不是猜测：设备详情与绑定界面按它分组着色。
 没有绑定 Profile 的原始点位，全局点位表仍按名称/类型推断角色。

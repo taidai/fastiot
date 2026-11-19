@@ -328,6 +328,22 @@ func (m *Manager) SetState(now time.Time, requestID string, state State, reason 
 	return outcome, true
 }
 
+// FailWrite marks an accepted request failed because the device refused the
+// write. The outcome is terminal: later readback cannot confirm a command the
+// device never accepted. Caller-owned (External) requests are left alone.
+func (m *Manager) FailWrite(now time.Time, requestID, reason string) {
+	m.Mu.Lock()
+	defer m.Mu.Unlock()
+	outcome, ok := m.orders[requestID]
+	if !ok || outcome.External || (outcome.State != Accepted && outcome.State != Executing) {
+		return
+	}
+	outcome.State = Failed
+	outcome.Reason = reason
+	outcome.UpdatedAt = now
+	m.store(outcome)
+}
+
 // fingerprintOf renders the normalized semantics used for duplicate detection.
 func fingerprintOf(request Request) string {
 	if request.Point != "" {

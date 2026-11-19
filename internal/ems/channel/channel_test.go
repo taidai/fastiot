@@ -398,3 +398,31 @@ func TestHealthGoesOfflineWhenSuccessIsStale(t *testing.T) {
 		t.Fatalf("stale health = %s, want offline", got)
 	}
 }
+
+func TestDeviceRefusalMarksWriteRejected(t *testing.T) {
+	bus := newFakeBus()
+	bus.writeErr = Refuse("Modbus exception: SERVER DEVICE FAILURE")
+	ch, err := New("c1", bus, []Device{device("d1", 1, tempPoint(10))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ch.QueueWrite("d1", "temp", signal.Num(5), "req-1"); err != nil {
+		t.Fatal(err)
+	}
+	_, writes := ch.RunOnce(context.Background(), func() time.Time { return t0 })
+	if len(writes) != 1 {
+		t.Fatalf("write results = %d, want 1", len(writes))
+	}
+	if !writes[0].Rejected {
+		t.Fatalf("write result = %+v, want Rejected for a device refusal", writes[0])
+	}
+
+	bus2 := newFakeBus()
+	bus2.writeErr = errors.New("timeout")
+	ch2, _ := New("c2", bus2, []Device{device("d2", 1, tempPoint(10))})
+	_ = ch2.QueueWrite("d2", "temp", signal.Num(5), "req-2")
+	_, writes2 := ch2.RunOnce(context.Background(), func() time.Time { return t0 })
+	if writes2[0].Rejected {
+		t.Fatal("a transport timeout does not prove the device refused the write")
+	}
+}

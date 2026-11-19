@@ -420,3 +420,44 @@ func TestFallbackUsesLastConfirmedAndSupersede(t *testing.T) {
 		t.Fatalf("supersede must not write, calls %d -> %d", before, writer.calls)
 	}
 }
+
+func TestFailWriteMarksAcceptedRequestFailed(t *testing.T) {
+	manager := New(&fakeWriter{}, nil, func(string, time.Time) map[string]signal.Sample {
+		return nil
+	}, time.Minute, 5*time.Second)
+	outcome, err := manager.Submit(t0, Request{ID: "r1", DeviceID: "d", Point: "cmd", Value: signal.Num(1)})
+	if err != nil || outcome.State != Accepted {
+		t.Fatalf("submit = %+v, %v", outcome, err)
+	}
+	manager.FailWrite(t0.Add(time.Second), "r1", "device refused write: SERVER DEVICE FAILURE")
+	got, _ := manager.Get("r1")
+	if got.State != Failed {
+		t.Fatalf("state = %s, want failed", got.State)
+	}
+	if !strings.Contains(got.Reason, "refused") {
+		t.Fatalf("reason = %q", got.Reason)
+	}
+	if !got.UpdatedAt.Equal(t0.Add(time.Second)) {
+		t.Fatalf("updated = %v", got.UpdatedAt)
+	}
+	// A terminal outcome is never rewritten by a late refusal.
+	manager.FailWrite(t0.Add(2*time.Second), "r1", "second")
+	again, _ := manager.Get("r1")
+	if again.Reason != got.Reason {
+		t.Fatalf("terminal outcome changed: %q", again.Reason)
+	}
+}
+
+func TestFailWriteIgnoresCallerOwnedRequests(t *testing.T) {
+	manager := New(&fakeWriter{}, nil, func(string, time.Time) map[string]signal.Sample {
+		return nil
+	}, time.Minute, 5*time.Second)
+	if _, err := manager.Track(t0, Request{ID: "manual", DeviceID: "d", Point: "cmd", Value: signal.Num(1)}); err != nil {
+		t.Fatal(err)
+	}
+	manager.FailWrite(t0.Add(time.Second), "manual", "device refused write")
+	got, _ := manager.Get("manual")
+	if got.State != Accepted || got.Reason != "" {
+		t.Fatalf("caller-owned outcome changed: %+v", got)
+	}
+}

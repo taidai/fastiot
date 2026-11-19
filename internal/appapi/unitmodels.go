@@ -70,14 +70,18 @@ type unitModelParameter struct {
 }
 
 type unitModelCommand struct {
-	ID         string               `json:"id"`
-	Name       string               `json:"name"`
-	PointID    string               `json:"point_id,omitempty"`
-	PointName  string               `json:"point_name"`
-	Value      float64              `json:"value"`
-	Parameters []unitModelParameter `json:"parameters,omitempty"`
-	Available  bool                 `json:"available"`
-	Reason     string               `json:"reason,omitempty"`
+	ID                string               `json:"id"`
+	Name              string               `json:"name"`
+	PointID           string               `json:"point_id,omitempty"`
+	PointName         string               `json:"point_name"`
+	Value             float64              `json:"value"`
+	ReadbackPointID   string               `json:"readback_point_id,omitempty"`
+	ReadbackPointName string               `json:"readback_point_name,omitempty"`
+	ReadbackValue     float64              `json:"readback_value,omitempty"`
+	TimeoutMS         int                  `json:"timeout_ms,omitempty"`
+	Parameters        []unitModelParameter `json:"parameters,omitempty"`
+	Available         bool                 `json:"available"`
+	Reason            string               `json:"reason,omitempty"`
 }
 
 func (h *Handler) unitModel(w http.ResponseWriter, r *http.Request, identity Identity, channelID string, server int) {
@@ -170,7 +174,8 @@ func unitModelResponse(channelID string, server int, model unitModelConfig, hasM
 			seen := map[string]bool{}
 			for _, spec := range prof.CommandSpecs {
 				pointID := model.PointMap[spec.Point]
-				item := unitModelCommand{ID: spec.ID, Name: spec.Name, PointID: pointID, PointName: spec.Point, Value: spec.Value}
+				item := unitModelCommand{ID: spec.ID, Name: spec.Name, PointID: pointID, PointName: spec.Point, Value: spec.Value,
+					ReadbackPointName: spec.Readback, ReadbackValue: spec.ReadbackValue, TimeoutMS: spec.TimeoutMS}
 				available := true
 				reason := ""
 				if spec.Point != "" {
@@ -187,6 +192,20 @@ func unitModelResponse(channelID string, server int, model unitModelConfig, hasM
 					} else if point.ReadOnly {
 						available = false
 						reason = "点位为只读"
+					}
+				}
+				if spec.Readback != "" {
+					item.ReadbackPointID = model.PointMap[spec.Readback]
+					if item.ReadbackPointID == "" {
+						available = false
+						reason = "回读点未映射"
+						if !seen[spec.Readback] {
+							view.Missing = append(view.Missing, spec.Readback)
+							seen[spec.Readback] = true
+						}
+					} else if _, ok := findPoint(points, item.ReadbackPointID); !ok {
+						available = false
+						reason = "回读点不存在"
 					}
 				}
 				for _, parameter := range spec.Parameters {
@@ -301,16 +320,19 @@ func (h *Handler) commandProfile(deviceID string) (device.Profile, bool) {
 	profilePoints := make([]device.Point, 0, len(prof.PointSpecs))
 	kinds := map[string]signal.Kind{}
 	seenPoints := map[string]bool{}
+	kindOf := func(point unitModelPointView) signal.Kind {
+		if point.IOType == data.PointValueModbusCoil || point.IOType == data.PointValueModbusDiscreteInput {
+			return signal.Bool
+		}
+		return signal.Number
+	}
 	for _, spec := range prof.PointSpecs {
 		id := model.PointMap[spec.Name]
 		point, ok := byID[id]
 		if !ok || seenPoints[id] {
 			continue
 		}
-		kind := signal.Number
-		if point.IOType == data.PointValueModbusCoil || point.IOType == data.PointValueModbusDiscreteInput {
-			kind = signal.Bool
-		}
+		kind := kindOf(point)
 		kinds[id] = kind
 		seenPoints[id] = true
 		profilePoints = append(profilePoints, device.Point{
@@ -324,10 +346,7 @@ func (h *Handler) commandProfile(deviceID string) (device.Profile, bool) {
 		valid := true
 		if spec.Point != "" {
 			id := model.PointMap[spec.Point]
-			if id == "" {
-				continue
-			}
-			if _, ok := byID[id]; !ok {
+			if _, ok := byID[id]; id == "" || !ok {
 				continue
 			}
 			kind := kinds[id]
@@ -336,7 +355,21 @@ func (h *Handler) commandProfile(deviceID string) (device.Profile, bool) {
 				value = signal.Flag(spec.Value != 0)
 			}
 			writes = []device.Write{{Point: id, Value: value}}
-			readback = []device.Readback{{Point: id, Op: "eq", Value: value}}
+			readbackPoint, readbackKind, readbackValue := id, kind, spec.Value
+			if spec.Readback != "" {
+				readbackPoint = model.PointMap[spec.Readback]
+				readbackView, found := byID[readbackPoint]
+				if readbackPoint == "" || !found {
+					continue
+				}
+				readbackKind = kindOf(readbackView)
+				readbackValue = spec.ReadbackValue
+			}
+			confirmed := signal.Num(readbackValue)
+			if readbackKind == signal.Bool {
+				confirmed = signal.Flag(readbackValue != 0)
+			}
+			readback = []device.Readback{{Point: readbackPoint, Op: "eq", Value: confirmed}}
 		}
 		parameters := make([]device.Parameter, 0, len(spec.Parameters))
 		for _, parameter := range spec.Parameters {
@@ -356,8 +389,12 @@ func (h *Handler) commandProfile(deviceID string) (device.Profile, bool) {
 		if !valid || (len(writes) == 0 && len(parameters) == 0) {
 			continue
 		}
+		timeout := 5 * time.Second
+		if spec.TimeoutMS > 0 {
+			timeout = time.Duration(spec.TimeoutMS) * time.Millisecond
+		}
 		commands = append(commands, device.Command{
-			ID: spec.ID, Name: spec.Name, Timeout: 5 * time.Second,
+			ID: spec.ID, Name: spec.Name, Timeout: timeout,
 			Writes: writes, Readback: readback, Parameters: parameters,
 		})
 	}

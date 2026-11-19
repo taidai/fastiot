@@ -3,6 +3,7 @@
 package modbusrt
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -12,6 +13,8 @@ import (
 	"github.com/simpleiot/simpleiot/modbus"
 	"github.com/simpleiot/simpleiot/respreader"
 	"go.bug.st/serial"
+
+	"fastiot/internal/ems/channel"
 )
 
 // Bus is one Modbus master connection.
@@ -157,11 +160,24 @@ func (b *Bus) ReadInputRegisters(server byte, address, count uint16) ([]uint16, 
 }
 
 func (b *Bus) WriteCoil(server byte, address uint16, value bool) error {
-	return b.client.WriteSingleCoil(server, address, value)
+	return refuse(b.client.WriteSingleCoil(server, address, value))
 }
 
 func (b *Bus) WriteHoldingRegister(server byte, address, value uint16) error {
-	return b.client.WriteSingleReg(server, address, value)
+	return refuse(b.client.WriteSingleReg(server, address, value))
+}
+
+// refuse marks a protocol exception as a device refusal: the device answered
+// and did not apply the write, which is different from a lost response.
+func refuse(err error) error {
+	if err == nil {
+		return nil
+	}
+	var exception modbus.ExceptionCode
+	if errors.As(err, &exception) {
+		return channel.Refuse("Modbus exception: " + err.Error())
+	}
+	return err
 }
 
 // Close releases the transport.

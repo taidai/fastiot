@@ -24,6 +24,7 @@
 - 一页看懂的总图：[`docs/master-map.html`](docs/master-map.html)。
 - 厂商 Profile 库：[`docs/vendor-profiles.md`](docs/vendor-profiles.md)；自定义 Profile（无需改代码）：[`docs/custom-profiles.md`](docs/custom-profiles.md)；M5 现场执行：[`docs/m5-site-acceptance.md`](docs/m5-site-acceptance.md)。
 - 最终验收状态：[`evidence/final-acceptance.md`](evidence/final-acceptance.md)。
+- 两泵一水箱泵房样板（不安装 EMS，模拟设备）：[`docs/pumphouse-sample.md`](docs/pumphouse-sample.md)。
 - 新工作按当前规格的用户旅程、样板验收和明确非目标拆分；旧冻结期规则不阻止已确认的底座与行业包目标。
 
 ## 当前代码状态
