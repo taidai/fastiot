@@ -744,6 +744,8 @@ type AllocationMember struct {
 	MaxDischarge       float64 `json:"max_discharge"`
 	AvailableCharge    float64 `json:"available_charge"`
 	AvailableDischarge float64 `json:"available_discharge"`
+	Priority           int     `json:"priority,omitempty"`
+	Weight             float64 `json:"weight,omitempty"`
 }
 
 // AllocationInput is a calculation-only request.
@@ -768,6 +770,7 @@ func (h *Handler) allocationPreview(w http.ResponseWriter, r *http.Request, _ Ac
 			ID: member.ID, Online: member.Online, Faulted: member.Faulted, Disabled: member.Disabled,
 			MinPower: member.MinPower, MaxCharge: member.MaxCharge, MaxDischarge: member.MaxDischarge,
 			AvailableCharge: member.AvailableCharge, AvailableDischarge: member.AvailableDischarge,
+			Priority: member.Priority, Weight: member.Weight,
 		})
 	}
 	result, err := alloc.Allocate(input.Target, members)

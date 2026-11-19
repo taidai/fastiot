@@ -154,6 +154,89 @@ func TestTrackerHoldsThroughGraceThenReallocates(t *testing.T) {
 	}
 }
 
+func TestPriorityFillsHigherPriorityFirst(t *testing.T) {
+	low := member("low", 100, 100)
+	high := member("high", 100, 100)
+	high.Priority = 1
+	result, err := Allocate(150, []Member{low, high})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := shareOf(t, result, "high").Setpoint; got != 100 {
+		t.Errorf("high setpoint = %v, want 100", got)
+	}
+	if got := shareOf(t, result, "low").Setpoint; got != 50 {
+		t.Errorf("low setpoint = %v, want 50", got)
+	}
+}
+
+func TestWeightBiasesProportionalShare(t *testing.T) {
+	a := member("A", 100, 100)
+	a.Weight = 2
+	b := member("B", 100, 100)
+	result, err := Allocate(150, []Member{a, b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := shareOf(t, result, "A").Setpoint; got != 100 {
+		t.Errorf("A setpoint = %v, want 100", got)
+	}
+	if got := shareOf(t, result, "B").Setpoint; got != 50 {
+		t.Errorf("B setpoint = %v, want 50", got)
+	}
+}
+
+func TestWeightNeverRaisesCapacity(t *testing.T) {
+	a := member("A", 100, 100)
+	a.Weight = 2
+	b := member("B", 100, 100)
+	result, err := Allocate(180, []Member{a, b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := shareOf(t, result, "A").Setpoint; got != 100 {
+		t.Errorf("A setpoint = %v, want 100 (capped at capacity)", got)
+	}
+	if got := shareOf(t, result, "B").Setpoint; got != 80 {
+		t.Errorf("B setpoint = %v, want 80", got)
+	}
+}
+
+func TestDetailExplainsExclusion(t *testing.T) {
+	disabled := member("A", 100, 100)
+	disabled.Disabled = true
+	disabled.Detail = "SOC 95 exceeds 90, excluded"
+	result, _ := Allocate(100, []Member{disabled})
+	if got := shareOf(t, result, "A"); !got.Excluded || got.Reason != disabled.Detail {
+		t.Errorf("detail lost: %+v", got)
+	}
+}
+
+func TestDetailExplainsZeroCapacityDirection(t *testing.T) {
+	derated := member("A", 100, 100)
+	derated.AvailableCharge = 0
+	derated.Detail = "SOC 95 exceeds 90, derated"
+	result, _ := Allocate(-100, []Member{derated})
+	if got := shareOf(t, result, "A"); !got.Excluded || got.Reason != derated.Detail {
+		t.Errorf("derated member should carry the detail, got %+v", got)
+	}
+	result, _ = Allocate(100, []Member{derated})
+	if got := shareOf(t, result, "A"); got.Excluded || got.Setpoint != 100 {
+		t.Errorf("discharge direction should still work, got %+v", got)
+	}
+}
+
+func TestProportionalSplitWithWeightsStaysBalanced(t *testing.T) {
+	a := member("A", 200, 200)
+	a.Weight = 1
+	b := member("B", 200, 200)
+	b.Weight = 1
+	result, _ := Allocate(275, []Member{a, b})
+	if a, b := shareOf(t, result, "A").Setpoint, shareOf(t, result, "B").Setpoint; a != 137.5 || b != 137.5 {
+		t.Errorf("expected 137.5/137.5, got %v/%v", a, b)
+	}
+}
+
 func TestTrackerDropsHeldValueWhenDirectionFlips(t *testing.T) {
 	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
 	tracker := NewTracker(10 * time.Second)

@@ -463,6 +463,36 @@ func TestAllocationPreview(t *testing.T) {
 	}
 }
 
+func TestAllocationPreviewHonorsPriorityAndWeight(t *testing.T) {
+	service := runtime.NewService(nil, 5*time.Second, time.Second, 100)
+	defer service.Close()
+	handler := New(service, 5*time.Second)
+	body := `{"target":150,"members":[
+		{"id":"high","online":true,"available_discharge":100,"max_discharge":100,"priority":1},
+		{"id":"low","online":true,"available_discharge":100,"max_discharge":100}]}`
+	response := call(t, handler, Access{UserID: "viewer"}, http.MethodPost, "/api/ems/allocation/preview", body)
+	if response.Code != http.StatusOK {
+		t.Fatalf("preview = %d %s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Result struct {
+			Shares []struct {
+				MemberID string  `json:"member_id"`
+				Setpoint float64 `json:"setpoint"`
+			} `json:"shares"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]float64{"high": 100, "low": 50}
+	for _, share := range payload.Result.Shares {
+		if share.Setpoint != want[share.MemberID] {
+			t.Errorf("%s = %v, want %v", share.MemberID, share.Setpoint, want[share.MemberID])
+		}
+	}
+}
+
 func TestTreeScopeFiltersProxyReads(t *testing.T) {
 	service := runtime.NewService(nil, 5*time.Second, time.Second, 100)
 	defer service.Close()

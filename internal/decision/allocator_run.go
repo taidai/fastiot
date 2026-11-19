@@ -28,10 +28,9 @@ type allocationRun struct {
 	requested     float64
 	startedAt     time.Time
 	lastRequested float64
-	// Grace state: the last setpoint and the moment a member went unavailable,
-	// so a brief outage holds the member instead of stepping power.
-	lastSetpoint map[string]float64
-	offlineSince map[string]time.Time
+	// tracker keeps the last setpoint and grace period so a brief outage holds
+	// a member instead of stepping power.
+	tracker *alloc.Tracker
 	// recorded is true once this run's terminal outcome has been written to the
 	// allocator's history, so a completed dispatch is not recorded twice.
 	recorded bool
@@ -45,98 +44,34 @@ type allocationStep struct {
 
 func newAllocationRun(parent string, config AllocatorConfig) *allocationRun {
 	return &allocationRun{
-		parent:       parent,
-		config:       config,
-		lastSetpoint: make(map[string]float64),
-		offlineSince: make(map[string]time.Time),
+		parent:  parent,
+		config:  config,
+		tracker: alloc.NewTracker(config.grace()),
 	}
 }
 
-// allocate resolves every member, holds members still within their grace
-// period, and distributes the remaining request by priority and weight. It has
-// no side effects beyond reading current state.
+// allocate resolves every member and hands them to the shared allocation
+// implementation, which holds members still within their grace period and
+// distributes the remaining request by priority and weight. It has no side
+// effects beyond reading current state.
 func (r *allocationRun) allocate(nc *nats.Conn, requested float64, now time.Time) (alloc.Result, int, error) {
-	resolved := make([]resolvedMember, 0, len(r.config.Members))
+	members := make([]alloc.Member, 0, len(r.config.Members))
 	notReady := 0
 	for _, cfg := range r.config.Members {
-		member, reasons, err := allocationMember(nc, cfg)
+		member, err := allocationMember(nc, cfg)
 		if err != nil {
 			return alloc.Result{}, 0, err
 		}
 		if member.NotReady {
 			notReady++
 		}
-		resolved = append(resolved, resolvedMember{
-			member: member, priority: cfg.Priority, weight: cfg.Weight, reasons: reasons,
-		})
+		members = append(members, member)
 	}
-
-	direction := 1.0
-	if requested < 0 {
-		direction = -1.0
+	result, err := r.tracker.Apply(now, requested, members)
+	if err != nil {
+		return alloc.Result{}, 0, err
 	}
-	held := make(map[string]float64)
-	heldTotal := 0.0
-	nonHeld := make([]resolvedMember, 0, len(resolved))
-	for _, rm := range resolved {
-		m := rm.member
-		if m.Online && !m.Faulted && !m.Disabled {
-			r.offlineSince[m.ID] = time.Time{}
-			nonHeld = append(nonHeld, rm)
-			continue
-		}
-		since, ok := r.offlineSince[m.ID]
-		if !ok || since.IsZero() {
-			r.offlineSince[m.ID] = now
-		}
-		if now.Sub(r.offlineSince[m.ID]) <= r.config.grace() &&
-			r.lastSetpoint[m.ID] != 0 && math.Signbit(r.lastSetpoint[m.ID]) == math.Signbit(direction) {
-			held[m.ID] = math.Abs(r.lastSetpoint[m.ID])
-			heldTotal += math.Abs(r.lastSetpoint[m.ID])
-			continue
-		}
-		nonHeld = append(nonHeld, rm)
-	}
-
-	remaining := requested
-	if direction > 0 {
-		remaining = math.Max(0, requested-heldTotal)
-	} else {
-		remaining = math.Min(0, requested+heldTotal)
-	}
-	distributed := distribute(remaining, nonHeld)
-	byID := make(map[string]alloc.Share, len(distributed.Shares))
-	for _, share := range distributed.Shares {
-		byID[share.MemberID] = share
-	}
-
-	final := alloc.Result{Requested: requested, Shares: make([]alloc.Share, 0, len(resolved))}
-	delivered := 0.0
-	for _, rm := range resolved {
-		m := rm.member
-		if value, ok := held[m.ID]; ok {
-			final.Shares = append(final.Shares, alloc.Share{
-				MemberID: m.ID, Setpoint: direction * value, Held: true,
-				Reason: "offline within grace; holding last setpoint",
-			})
-			delivered += value
-			r.lastSetpoint[m.ID] = direction * value
-			continue
-		}
-		share := byID[m.ID]
-		if !share.Excluded && !share.Held {
-			delivered += math.Abs(share.Setpoint)
-			r.lastSetpoint[m.ID] = share.Setpoint
-		}
-		final.Shares = append(final.Shares, share)
-	}
-	final.Delivered = direction * delivered
-	if math.Abs(requested) > delivered+1e-9 {
-		final.Shortfall = direction * (math.Abs(requested) - delivered)
-		final.Notes = append(final.Notes, fmt.Sprintf(
-			"delivered %.1f kW of the %.1f kW request", delivered, math.Abs(requested)))
-	}
-	return final, notReady, nil
+	return result, notReady, nil
 }
 
 func (r *allocationRun) start(nc *nats.Conn, requested float64, now time.Time) error {
@@ -210,7 +145,7 @@ func (r *allocationRun) step(nc *nats.Conn, now time.Time) {
 			continue
 		}
 		if !step.sent {
-			resolved, _, err := allocationMember(nc, step.member)
+			resolved, err := allocationMember(nc, step.member)
 			if err != nil {
 				r.fail("unknown", step, err.Error())
 				return
