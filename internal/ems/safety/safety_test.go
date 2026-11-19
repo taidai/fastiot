@@ -68,3 +68,39 @@ func TestBoolPassesThrough(t *testing.T) {
 		t.Fatalf("bool output should pass: %+v", result)
 	}
 }
+
+// The limiter must not own a second copy of the envelope: it has to return
+// exactly the verdict Evaluate gives for the same inputs.
+func TestLimiterReturnsEvaluateVerdict(t *testing.T) {
+	output := Output{Kind: signal.Number, HasRange: true, Min: 0, Max: 100,
+		Conditions: []Condition{{Input: "soc", Op: "ge", Value: signal.Num(10)}}}
+	samples := map[string]signal.Sample{"soc": sample("soc", signal.Num(5), signal.Good)}
+	l := limiter(map[string]Output{"pcs": output}, samples)
+	result := l.Limit(now, "pcs", signal.Num(500))
+	verdict := Evaluate(Request{Output: "pcs", Requested: signal.Num(500), Spec: &output, Samples: samples, MaxAge: 5 * time.Second}, now)
+	if !result.Blocked || verdict.Decision != "refused" || result.Reason != verdict.Reason {
+		t.Fatalf("limiter drifted from Evaluate: %+v vs %+v", result, verdict)
+	}
+
+	output.Conditions = nil
+	l = limiter(map[string]Output{"pcs": output}, samples)
+	result = l.Limit(now, "pcs", signal.Num(500))
+	verdict = Evaluate(Request{Output: "pcs", Requested: signal.Num(500), Spec: &output, Samples: samples, MaxAge: 5 * time.Second}, now)
+	if result.Blocked || result.Value.Num != verdict.Value || result.Reason != verdict.Reason {
+		t.Fatalf("limiter drifted from Evaluate: %+v vs %+v", result, verdict)
+	}
+}
+
+// A limiter with no MaxAge must inherit Evaluate's freshness default rather
+// than silently skipping the staleness check.
+func TestLimiterUsesEvaluateFreshnessDefault(t *testing.T) {
+	spec := Output{Kind: signal.Number, Requires: []string{"soc"}}
+	stale := sample("soc", signal.Num(50), signal.Good)
+	stale.SourceTime = now.Add(-20 * time.Second)
+	stale.ReceivedTime = stale.SourceTime
+	l := Limiter{Outputs: map[string]Output{"pcs": spec}, Samples: map[string]signal.Sample{"soc": stale}}
+	result := l.Limit(now, "pcs", signal.Num(10))
+	if !result.Blocked || !strings.Contains(result.Reason, "not usable") {
+		t.Fatalf("stale input must block: %+v", result)
+	}
+}
