@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { IonCardContent } from "@ionic/react"
 import { downloadHistory, EmsAlarm, fetchAlarms, fetchHistory, HistoryPointResult, HistoryRecord, nameOf, Node, point, request } from "./api"
 import { EmsButton, EmsCard, EmsInput, EmsSectionHeader, EmsSelect, EmsSelectOption, EmptyState, InlineNotice, SegmentedTabs } from "./components/ems"
@@ -168,6 +168,7 @@ export default function HistoryView({ token, points, initialPoint, onError, isAd
   canExport?: boolean
   onOpenPoints?: () => void
 }) {
+  const exportReasonId = useId()
   const [requestedSelection, setSelected] = useState<string[]>(() => {
     const first = initialPoint ? points.some((item) => item.id === initialPoint) ? initialPoint : "" : recentPoint(points)
     return first ? [first] : []
@@ -420,7 +421,8 @@ export default function HistoryView({ token, points, initialPoint, onError, isAd
           })}
         </div>
         <EmsButton variant="secondary" size="small" disabled={selected.length === 0 || loading} onClick={() => setQueryKey(key => key + 1)}>读取历史</EmsButton>
-        {canExport && <EmsButton variant="secondary" size="small" disabled={!queryResult || selected.length === 0 || exportState.busy} onClick={() => void exportSelected()}>{exportState.busy ? "导出中…" : "导出所选 CSV"}</EmsButton>}
+        <EmsButton variant="secondary" size="small" aria-label={canExport ? undefined : "导出所选 CSV，当前账号没有导出权限"} aria-describedby={canExport ? undefined : exportReasonId} disabled={!canExport || !queryResult || selected.length === 0 || exportState.busy} onClick={() => void exportSelected()}>{exportState.busy ? "导出中…" : "导出所选 CSV"}</EmsButton>
+        {!canExport && <span id={exportReasonId} className="text-xs text-ems-muted">当前账号没有导出权限</span>}
       </div>
 
       <div className="flex min-w-0 flex-wrap items-end gap-3">
