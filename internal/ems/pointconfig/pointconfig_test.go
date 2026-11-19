@@ -141,6 +141,95 @@ func TestValidateRules(t *testing.T) {
 	}
 }
 
+func indexOfColumn(id columnID) int {
+	for index, definition := range columnOrder {
+		if definition.id == id {
+			return index
+		}
+	}
+	panic("unknown column")
+}
+
+func TestColumnsAreDefinedOnce(t *testing.T) {
+	seen := map[columnID]bool{}
+	for _, definition := range columnOrder {
+		if seen[definition.id] {
+			t.Fatalf("column %d is defined twice", definition.id)
+		}
+		seen[definition.id] = true
+		if definition.name == "" || definition.value == nil {
+			t.Fatalf("column %d has an incomplete definition", definition.id)
+		}
+	}
+	if !reflect.DeepEqual(Columns, columnNames()) {
+		t.Fatalf("export header %v does not come from the column table %v", Columns, columnNames())
+	}
+}
+
+// Renaming the one column definition must move the export cell, the import
+// lookup and the Diff name together; no path may keep reading the old name.
+func TestColumnVocabularyMovesTogether(t *testing.T) {
+	index := indexOfColumn(colServerID)
+	saved := columnOrder[index].name
+	columnOrder[index].name = "站号X"
+	t.Cleanup(func() { columnOrder[index].name = saved })
+
+	point := sample()
+	table, err := NewTable(columnNames())
+	if err != nil {
+		t.Fatalf("renamed header rejected: %v", err)
+	}
+	parsed, err := table.Point(Row(point), 2)
+	if err != nil {
+		t.Fatalf("import does not follow the renamed column: %v", err)
+	}
+	if parsed.ServerID != point.ServerID {
+		t.Fatalf("import read the station id from the wrong column: %+v", parsed)
+	}
+	after := point
+	after.ServerID = 4
+	if fields := Diff(point, after); len(fields) != 1 || fields[0] != "站号X" {
+		t.Fatalf("Diff still names the old column: %v", fields)
+	}
+	stale := columnNames()
+	stale[index] = saved
+	if _, err := NewTable(stale); err == nil || !strings.Contains(err.Error(), "missing_csv_column") {
+		t.Fatalf("a header with the old name must fail loudly, got %v", err)
+	}
+}
+
+// The Diff name and the exported cell it describes must come from the same
+// column, so a renamed or reordered column cannot silently disagree.
+func TestDiffNamesTheCellThatChanged(t *testing.T) {
+	base := sample()
+	cases := []struct {
+		id     columnID
+		mutate func(*Point)
+	}{
+		{colServerID, func(p *Point) { p.ServerID = 4 }},
+		{colAddress, func(p *Point) { p.Address = 41 }},
+		{colIOType, func(p *Point) { p.IOType = data.PointValueModbusCoil }},
+		{colDataFormat, func(p *Point) { p.DataFormat = data.PointValueUINT32 }},
+		{colReadOnly, func(p *Point) { p.ReadOnly = true }},
+		{colScale, func(p *Point) { p.Scale = 2 }},
+		{colOffset, func(p *Point) { p.Offset = 2 }},
+		{colUnits, func(p *Point) { p.Units = "L/min" }},
+	}
+	for _, tc := range cases {
+		after := base
+		tc.mutate(&after)
+		fields := Diff(base, after)
+		if len(fields) != 1 || fields[0] != columnName(tc.id) {
+			t.Errorf("column %d: Diff = %v, want [%s]", tc.id, fields, columnName(tc.id))
+			continue
+		}
+		index := indexOfColumn(tc.id)
+		if Row(base)[index] == Row(after)[index] {
+			t.Errorf("%s: Diff names a column whose exported cell did not change", fields[0])
+		}
+	}
+}
+
 func TestDiffNamesOneChangedColumn(t *testing.T) {
 	base := sample()
 	cases := []struct {
