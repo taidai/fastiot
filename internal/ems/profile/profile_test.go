@@ -3,7 +3,10 @@ package profile
 import (
 	"bytes"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -34,6 +37,48 @@ func TestMatchSkipsProfilesWithoutIdentity(t *testing.T) {
 		return nil, nil
 	}); ok {
 		t.Fatal("generic profile must not auto-match")
+	}
+}
+
+// Fingerprint is the pinned version of a profile's mapping: stable for equal
+// content and different as soon as one register meaning changes, so a project
+// package can refuse a substituted profile instead of running it silently.
+func TestFingerprintTracksProfileContent(t *testing.T) {
+	fingerprint := func(t *testing.T, scale float64) string {
+		t.Helper()
+		dir := t.TempDir()
+		document := map[string]any{
+			"id": "custom-pcs", "vendor": "测试", "model": "X", "protocol": "modbus",
+			"point_specs": []map[string]any{{
+				"name": "有功功率", "function": "holdingRegister", "address": 10,
+				"format": "float32", "scale": scale, "role": "telemetry",
+			}},
+		}
+		raw, err := json.Marshal(document)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "custom.json"), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		value, ok := Load(dir).Fingerprint("custom-pcs")
+		if !ok || value == "" {
+			t.Fatalf("fingerprint missing for custom-pcs")
+		}
+		return value
+	}
+	if first, second := fingerprint(t, 0.1), fingerprint(t, 0.1); first != second {
+		t.Fatalf("same content produced %q and %q", first, second)
+	}
+	if first, changed := fingerprint(t, 0.1), fingerprint(t, 0.2); first == changed {
+		t.Fatalf("changed scaling kept fingerprint %q", first)
+	}
+	if _, ok := Default().Fingerprint("missing"); ok {
+		t.Fatal("unknown profile reported a fingerprint")
+	}
+	builtIn, ok := Default().Fingerprint("enjo-pcs")
+	if !ok || builtIn == "" {
+		t.Fatalf("built-in fingerprint = %q ok=%v", builtIn, ok)
 	}
 }
 

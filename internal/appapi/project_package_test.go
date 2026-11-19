@@ -3,6 +3,7 @@ package appapi
 import (
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"fastiot/internal/decision"
 	"fastiot/internal/ems/profile"
 	"fastiot/internal/emsapi"
+	"fastiot/internal/industry"
 )
 
 func TestPackagePointRewrite(t *testing.T) {
@@ -67,18 +69,27 @@ func TestProjectPackageValidation(t *testing.T) {
 		pkg  projectPackage
 		want string
 	}{
-		{"format", projectPackage{Format: "other", FormatVersion: 1, Nodes: valid.Nodes}, "invalid_package_format"},
+		{"format", projectPackage{Format: "other", FormatVersion: projectPackageFormatVersion, Nodes: valid.Nodes}, "invalid_package_format"},
 		{"version", projectPackage{Format: projectPackageFormat, FormatVersion: 99, Nodes: valid.Nodes}, "unsupported_package_version"},
-		{"empty", projectPackage{Format: projectPackageFormat, FormatVersion: 1}, "invalid_package_structure"},
-		{"missing_parent", projectPackage{Format: projectPackageFormat, FormatVersion: 1, Nodes: []packageNode{
+		{"empty", projectPackage{Format: projectPackageFormat, FormatVersion: projectPackageFormatVersion}, "invalid_package_structure"},
+		{"missing_parent", projectPackage{Format: projectPackageFormat, FormatVersion: projectPackageFormatVersion, Nodes: []packageNode{
 			{Ref: "n1", Type: NodeTypeSite}, {Ref: "n2", Type: NodeTypePlant, Parent: "ghost"},
 		}}, "invalid_package_structure"},
-		{"duplicate_ref", projectPackage{Format: projectPackageFormat, FormatVersion: 1, Nodes: []packageNode{
+		{"duplicate_ref", projectPackage{Format: projectPackageFormat, FormatVersion: projectPackageFormatVersion, Nodes: []packageNode{
 			{Ref: "n1", Type: NodeTypeSite}, {Ref: "n1", Type: NodeTypePlant, Parent: "n1"},
 		}}, "invalid_package_structure"},
-		{"credential_node", projectPackage{Format: projectPackageFormat, FormatVersion: 1, Nodes: []packageNode{
+		{"credential_node", projectPackage{Format: projectPackageFormat, FormatVersion: projectPackageFormatVersion, Nodes: []packageNode{
 			{Ref: "n1", Type: NodeTypeSite}, {Ref: "n2", Type: "authToken", Parent: "n1"},
 		}}, "invalid_package_structure"},
+		// 依赖必须带确定版本，未知种类和重复声明都在结构检查阶段拒绝。
+		{"dependency_kind", projectPackage{Format: projectPackageFormat, FormatVersion: projectPackageFormatVersion, Nodes: valid.Nodes,
+			Dependencies: []packageDependency{{Kind: "plugin", ID: "x", Version: "1.0.0"}}}, "invalid_package_structure"},
+		{"dependency_version", projectPackage{Format: projectPackageFormat, FormatVersion: projectPackageFormatVersion, Nodes: valid.Nodes,
+			Dependencies: []packageDependency{{Kind: dependencyKindProfile, ID: "x"}}}, "invalid_package_structure"},
+		{"dependency_duplicate", projectPackage{Format: projectPackageFormat, FormatVersion: projectPackageFormatVersion, Nodes: valid.Nodes,
+			Dependencies: []packageDependency{
+				{Kind: dependencyKindProfile, ID: "x", Version: "a"}, {Kind: dependencyKindProfile, ID: "x", Version: "a"},
+			}}, "invalid_package_structure"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -94,6 +105,7 @@ func TestProjectPackageValidation(t *testing.T) {
 // 模型/适配/规则可用，且包内无旧地址、凭据与控制授权。
 func TestProjectPackageRoundTrip(t *testing.T) {
 	baseA, tokenA, handlerA, _ := startInputServer(t, t.TempDir(), data.NewID())
+	handlerA.SetEMS(&emsapi.Handler{Profiles: profile.Default()})
 	baseB, tokenB, handlerB, _ := startInputServer(t, t.TempDir(), data.NewID())
 	handlerB.SetEMS(&emsapi.Handler{Profiles: profile.Default()})
 
@@ -189,7 +201,15 @@ func TestProjectPackageRoundTrip(t *testing.T) {
 	if exported.Format != projectPackageFormat || exported.FormatVersion != projectPackageFormatVersion || exported.Version < 1 {
 		t.Fatalf("package header = %#v", exported)
 	}
-	if exported.Name != "一期工程" || len(exported.Profiles) != 1 || exported.Profiles[0] != "enjo-pcs" {
+	enjoVersion, fingerprinted := profile.Default().Fingerprint("enjo-pcs")
+	if !fingerprinted {
+		t.Fatal("built-in profile enjo-pcs missing")
+	}
+	wantDependencies := []packageDependency{
+		{Kind: dependencyKindIndustry, ID: industry.EMSPackageID, Version: industry.EMSPackageVersion},
+		{Kind: dependencyKindProfile, ID: "enjo-pcs", Version: enjoVersion},
+	}
+	if exported.Name != "一期工程" || !reflect.DeepEqual(exported.Dependencies, wantDependencies) {
 		t.Fatalf("package meta = %#v", exported)
 	}
 	encoded, _ := json.Marshal(exported)
@@ -356,24 +376,120 @@ func TestProjectPackageImportFailureLeavesNoNodes(t *testing.T) {
 		t.Fatalf("broken package import = %d %s", status, body)
 	}
 
-	missingDependency := projectPackage{
-		Format: projectPackageFormat, FormatVersion: projectPackageFormatVersion, Name: "缺依赖", Profiles: []string{"no-such-profile"},
-		Nodes: []packageNode{
-			{Ref: "n1", Type: NodeTypeSite, Points: data.Points{data.NewPointString("description", "", "缺依赖")}},
-			{Ref: "c1", Type: data.NodeTypeModbus, Points: data.Points{
-				data.NewPointString("description", "", "总线"),
-				data.NewPointString(unitModelPoint, "1", `{"name":"x","profile_id":"no-such-profile","point_map":{}}`),
-			}},
-		},
-	}
+	missingDependency := unitModelPackage("no-such-profile")
+	missingDependency.Dependencies = []packageDependency{{Kind: dependencyKindProfile, ID: "no-such-profile", Version: "1.0.0"}}
 	status, body = call(t, http.MethodPost, baseB+"/projects/import", tokenB, map[string]any{"package": missingDependency, "parent": rootB}, nil)
-	if status != http.StatusBadRequest || !strings.Contains(body, "missing_dependency") {
+	if status != http.StatusBadRequest || !strings.Contains(body, "missing_dependency:profile:no-such-profile@1.0.0") {
 		t.Fatalf("missing dependency import = %d %s", status, body)
 	}
 
 	after, _ := siotclient.GetNodes(handlerB.nc, "all", "all", "", false)
 	if len(after) != len(before) {
 		t.Fatalf("failed import left %d extra nodes", len(after)-len(before))
+	}
+}
+
+func managedPackage(nodes ...packageNode) projectPackage {
+	return projectPackage{
+		Format: projectPackageFormat, FormatVersion: projectPackageFormatVersion,
+		Name: "依赖测试", Nodes: nodes,
+	}
+}
+
+func unitModelPackage(profileID string) projectPackage {
+	return managedPackage(
+		packageNode{Ref: "n1", Type: NodeTypeSite, Points: data.Points{data.NewPointString("description", "", "依赖测试")}},
+		packageNode{Ref: "c1", Type: data.NodeTypeModbus, Parent: "n1", Points: data.Points{
+			data.NewPointString("description", "", "总线"),
+			data.NewPointString(unitModelPoint, "1", `{"name":"x","profile_id":"`+profileID+`","point_map":{}}`),
+		}},
+	)
+}
+
+// 依赖版本锁定：缺行业包、缺所需版本、Profile 被替换或未声明时，导入必须
+// 在创建任何节点前拒绝，并说明缺什么、需要哪个版本。
+func TestProjectImportRefusesUnmetDependenciesBeforeCreatingNodes(t *testing.T) {
+	base, token, handler, _ := startInputServer(t, t.TempDir(), data.NewID())
+	handler.SetEMS(&emsapi.Handler{Profiles: profile.Default()})
+	registry, err := industry.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Uninstall(industry.EMSPackageID); err != nil {
+		t.Fatal(err)
+	}
+	handler.SetPackages(registry)
+
+	industryPackage := func(id, version string) projectPackage {
+		pkg := managedPackage(packageNode{Ref: "n1", Type: NodeTypeSite,
+			Points: data.Points{data.NewPointString("description", "", "缺行业包")}})
+		pkg.Dependencies = []packageDependency{{Kind: dependencyKindIndustry, ID: id, Version: version}}
+		return pkg
+	}
+	profilePackage := func(version string, declared bool) projectPackage {
+		pkg := unitModelPackage("enjo-pcs")
+		if declared {
+			pkg.Dependencies = []packageDependency{{Kind: dependencyKindProfile, ID: "enjo-pcs", Version: version}}
+		}
+		return pkg
+	}
+
+	cases := []struct {
+		name string
+		pkg  projectPackage
+		want string
+	}{
+		{"industry_not_installed", industryPackage(industry.EMSPackageID, industry.EMSPackageVersion),
+			"missing_dependency:industry:ems@" + industry.EMSPackageVersion + ":not_installed"},
+		{"industry_not_carried", industryPackage("plant-optimizer", "1.0.0"), "missing_dependency:industry:plant-optimizer@1.0.0"},
+		{"industry_version_unavailable", industryPackage(industry.EMSPackageID, "0.9.0"),
+			"incompatible_dependency:industry:ems:required@0.9.0:available@" + industry.EMSPackageVersion},
+		{"industry_not_declared", managedPackage(
+			packageNode{Ref: "n1", Type: NodeTypeSite, Points: data.Points{data.NewPointString("description", "", "缺声明")}},
+			packageNode{Ref: "p1", Type: NodeTypePlant, Parent: "n1"},
+		), "undeclared_dependency:industry:ems"},
+		{"profile_version_changed", profilePackage("000000000000", true), "incompatible_dependency:profile:enjo-pcs"},
+		{"profile_not_declared", profilePackage("", false), "undeclared_dependency:profile:enjo-pcs"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			before, _ := siotclient.GetNodes(handler.nc, "all", "all", "", false)
+			status, body := call(t, http.MethodPost, base+"/projects/import", token, map[string]any{"package": test.pkg}, nil)
+			if status != http.StatusBadRequest || !strings.Contains(body, test.want) {
+				t.Fatalf("import = %d %s, want %s", status, body, test.want)
+			}
+			after, _ := siotclient.GetNodes(handler.nc, "all", "all", "", false)
+			if len(after) != len(before) {
+				t.Fatalf("refused import left %d extra nodes", len(after)-len(before))
+			}
+		})
+	}
+}
+
+// 未安装行业包时底座功能完整可用：不含行业依赖的项目照常导入。
+func TestBaseProjectImportsWithIndustryPackageUninstalled(t *testing.T) {
+	base, token, handler, _ := startInputServer(t, t.TempDir(), data.NewID())
+	registry, err := industry.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Uninstall(industry.EMSPackageID); err != nil {
+		t.Fatal(err)
+	}
+	handler.SetPackages(registry)
+
+	pkg := managedPackage(
+		packageNode{Ref: "n1", Type: NodeTypeSite, Points: data.Points{data.NewPointString("description", "", "底座工程")}},
+		packageNode{Ref: "c1", Type: data.NodeTypeModbus, Parent: "n1",
+			Points: data.Points{data.NewPointString("description", "", "一号总线")}},
+		packageNode{Ref: "r1", Type: "decisionTable", Parent: "n1",
+			Points: data.Points{data.NewPointString("description", "", "底座规则")}},
+	)
+	pkg.Dependencies = []packageDependency{}
+	var imported importProjectResult
+	status, body := call(t, http.MethodPost, base+"/projects/import", token, map[string]any{"package": pkg}, &imported)
+	if status != http.StatusOK || imported.SiteID == "" || imported.Channels != 1 || imported.Rules != 1 {
+		t.Fatalf("base-only import = %d %s", status, body)
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"fastiot/internal/audit"
 	"fastiot/internal/calculation"
 	"fastiot/internal/decision"
+	"fastiot/internal/industry"
 	"fastiot/internal/virtualinput"
 )
 
@@ -27,11 +28,26 @@ import (
 // 引用的节点用包内 ref 表示，导入时换成新 ID，所以不依赖源站任何外部状态。
 
 const (
-	projectPackageFormat        = "fastiot.project-package"
-	projectPackageFormatVersion = 1
+	projectPackageFormat = "fastiot.project-package"
+	// Version 2 pins every dependency at an exact version; a version 1 package
+	// carries dependency IDs without versions and is refused rather than
+	// imported with unpinned semantics.
+	projectPackageFormatVersion = 2
 	projectExportAction         = "项目导出"
 	projectImportAction         = "项目导入"
+
+	dependencyKindIndustry = "industry"
+	dependencyKindProfile  = "profile"
 )
+
+// packageDependency pins one thing the project needs to run with the same
+// semantics it was built with. Profile versions are content fingerprints so a
+// substituted mapping is a different version, not the same one.
+type packageDependency struct {
+	Kind    string `json:"kind"`
+	ID      string `json:"id"`
+	Version string `json:"version"`
+}
 
 type packageNode struct {
 	Ref    string      `json:"ref"`
@@ -47,18 +63,18 @@ type packageStrip struct {
 }
 
 type projectPackage struct {
-	Format        string         `json:"format"`
-	FormatVersion int            `json:"format_version"`
-	ID            string         `json:"id"`
-	Name          string         `json:"name"`
-	Version       int            `json:"version"`
-	SourceVersion string         `json:"source_version,omitempty"`
-	CreatedAt     time.Time      `json:"created_at"`
-	Operator      string         `json:"operator"`
-	Profiles      []string       `json:"profiles"`
-	Nodes         []packageNode  `json:"nodes"`
-	Stripped      []packageStrip `json:"stripped"`
-	Warnings      []string       `json:"warnings"`
+	Format        string              `json:"format"`
+	FormatVersion int                 `json:"format_version"`
+	ID            string              `json:"id"`
+	Name          string              `json:"name"`
+	Version       int                 `json:"version"`
+	SourceVersion string              `json:"source_version,omitempty"`
+	CreatedAt     time.Time           `json:"created_at"`
+	Operator      string              `json:"operator"`
+	Dependencies  []packageDependency `json:"dependencies"`
+	Nodes         []packageNode       `json:"nodes"`
+	Stripped      []packageStrip      `json:"stripped"`
+	Warnings      []string            `json:"warnings"`
 }
 
 type importProjectRequest struct {
@@ -116,6 +132,20 @@ func (pkg projectPackage) validate() error {
 	}
 	if len(pkg.Nodes) == 0 {
 		return fmt.Errorf("invalid_package_structure:empty")
+	}
+	declared := map[string]bool{}
+	for _, dependency := range pkg.Dependencies {
+		if dependency.Kind != dependencyKindIndustry && dependency.Kind != dependencyKindProfile {
+			return fmt.Errorf("invalid_package_structure:dependency_kind")
+		}
+		if strings.TrimSpace(dependency.ID) == "" || strings.TrimSpace(dependency.Version) == "" {
+			return fmt.Errorf("invalid_package_structure:dependency_version")
+		}
+		key := dependency.Kind + ":" + dependency.ID
+		if declared[key] {
+			return fmt.Errorf("invalid_package_structure:dependency_duplicate")
+		}
+		declared[key] = true
 	}
 	refs := map[string]bool{}
 	sites := 0
@@ -819,9 +849,10 @@ func (h *Handler) exportProjectPackage(identity Identity, siteID string) (projec
 	pkg := projectPackage{
 		Format: projectPackageFormat, FormatVersion: projectPackageFormatVersion,
 		ID: "pp-" + data.NewID(), Name: nodeName(nodes[0]), CreatedAt: time.Now().UTC(),
-		Operator: operator, Profiles: []string{}, Stripped: strips, Warnings: warnings,
+		Operator: operator, Dependencies: []packageDependency{}, Stripped: strips, Warnings: warnings,
 	}
 	profiles := map[string]bool{}
+	dependencies := map[string]packageDependency{}
 	for _, node := range nodes {
 		points := packagePoints(node, idMap, &pkg.Stripped, &pkg.Warnings)
 		parent := ""
@@ -843,9 +874,30 @@ func (h *Handler) exportProjectPackage(identity Identity, siteID string) (projec
 		}
 	}
 	for id := range profiles {
-		pkg.Profiles = append(pkg.Profiles, id)
+		version, ok := h.profileVersion(id)
+		if !ok {
+			return projectPackage{}, fmt.Errorf("missing_dependency:profile:%s", id)
+		}
+		dependencies[dependencyKindProfile+":"+id] = packageDependency{Kind: dependencyKindProfile, ID: id, Version: version}
 	}
-	sort.Strings(pkg.Profiles)
+	if packageNeedsIndustry(nodes) {
+		if err := h.packagesOrBundled().Check(industry.EMSPackageID, industry.EMSPackageVersion); err != nil {
+			return projectPackage{}, err
+		}
+		dependencies[dependencyKindIndustry+":"+industry.EMSPackageID] = packageDependency{
+			Kind: dependencyKindIndustry, ID: industry.EMSPackageID, Version: industry.EMSPackageVersion,
+		}
+	}
+	pkg.Dependencies = make([]packageDependency, 0, len(dependencies))
+	for _, dependency := range dependencies {
+		pkg.Dependencies = append(pkg.Dependencies, dependency)
+	}
+	sort.Slice(pkg.Dependencies, func(i, j int) bool {
+		if pkg.Dependencies[i].Kind != pkg.Dependencies[j].Kind {
+			return pkg.Dependencies[i].Kind < pkg.Dependencies[j].Kind
+		}
+		return pkg.Dependencies[i].ID < pkg.Dependencies[j].ID
+	})
 	versions, err := h.listVersions(siteID)
 	if err == nil && len(versions) > 0 {
 		pkg.SourceVersion = versions[0].ID
@@ -860,31 +912,69 @@ func (h *Handler) rollbackImportedNodes(created []data.NodeEdge, identity Identi
 	}
 }
 
-func (h *Handler) requireProfileDependencies(declared []string, used map[string]bool) error {
-	required := map[string]bool{}
-	for _, id := range declared {
-		if id != "" {
-			required[id] = true
+// packageNeedsIndustry reports whether the exported content is owned by the
+// EMS industry package. A project with no energy model pins no industry
+// package and stays installable on the bare base product.
+func packageNeedsIndustry(nodes []data.NodeEdge) bool {
+	for _, node := range nodes {
+		switch node.Type {
+		case NodeTypePlant, NodeTypeEnergyUnit, NodeTypeResourceGroup:
+			return true
 		}
 	}
-	for id := range used {
-		required[id] = true
-	}
-	if len(required) == 0 {
-		return nil
-	}
+	return false
+}
+
+func (h *Handler) profileVersion(id string) (string, bool) {
 	if h.ems == nil || h.ems.Profiles == nil {
-		return fmt.Errorf("profile_registry_unavailable")
+		return "", false
 	}
-	missing := []string{}
-	for id := range required {
-		if _, ok := h.ems.Profiles.Get(id); !ok {
-			missing = append(missing, id)
+	return h.ems.Profiles.Fingerprint(id)
+}
+
+// requireDependencies refuses an import whose dependencies this site cannot
+// satisfy at the pinned version. Content that uses a profile or an industry
+// model without pinning it is refused too: resolving it at whatever version
+// happens to be loaded would silently run a different mapping than the source
+// project.
+func (h *Handler) requireDependencies(declared []packageDependency, usedProfiles map[string]bool, needsIndustry bool) error {
+	pinned := map[string]string{}
+	for _, dependency := range declared {
+		pinned[dependency.Kind+":"+dependency.ID] = dependency.Version
+	}
+	undeclared := make([]string, 0, len(usedProfiles)+1)
+	for id := range usedProfiles {
+		if _, ok := pinned[dependencyKindProfile+":"+id]; !ok {
+			undeclared = append(undeclared, id)
 		}
 	}
-	if len(missing) > 0 {
-		sort.Strings(missing)
-		return fmt.Errorf("missing_dependency:profile:%s", strings.Join(missing, ","))
+	if len(undeclared) > 0 {
+		sort.Strings(undeclared)
+		return fmt.Errorf("undeclared_dependency:profile:%s", undeclared[0])
+	}
+	if needsIndustry {
+		if _, ok := pinned[dependencyKindIndustry+":"+industry.EMSPackageID]; !ok {
+			return fmt.Errorf("undeclared_dependency:industry:%s", industry.EMSPackageID)
+		}
+	}
+	for _, dependency := range declared {
+		switch dependency.Kind {
+		case dependencyKindIndustry:
+			if err := h.packagesOrBundled().Check(dependency.ID, dependency.Version); err != nil {
+				return err
+			}
+		case dependencyKindProfile:
+			if h.ems == nil || h.ems.Profiles == nil {
+				return fmt.Errorf("profile_registry_unavailable")
+			}
+			current, ok := h.ems.Profiles.Fingerprint(dependency.ID)
+			if !ok {
+				return fmt.Errorf("missing_dependency:profile:%s@%s", dependency.ID, dependency.Version)
+			}
+			if current != dependency.Version {
+				return fmt.Errorf("incompatible_dependency:profile:%s:required@%s:current@%s", dependency.ID, dependency.Version, current)
+			}
+		}
 	}
 	return nil
 }
@@ -960,7 +1050,7 @@ func (h *Handler) importProjectPackage(identity Identity, pkg projectPackage, pa
 		}
 		prepared = append(prepared, node)
 	}
-	if err := h.requireProfileDependencies(pkg.Profiles, profilesUsed); err != nil {
+	if err := h.requireDependencies(pkg.Dependencies, profilesUsed, packageNeedsIndustry(prepared)); err != nil {
 		return importProjectResult{}, err
 	}
 

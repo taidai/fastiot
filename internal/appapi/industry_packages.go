@@ -28,6 +28,16 @@ func (h *Handler) packageInstalled(id string) bool {
 	return registry.Installed(id)
 }
 
+// packagesOrBundled returns the site's package state, falling back to every
+// bundled package active when no registry is wired (direct handler embeddings).
+// The fallback keeps dependency checks on the same registry as route gating.
+func (h *Handler) packagesOrBundled() *industry.Registry {
+	if registry := h.packages.Load(); registry != nil {
+		return registry
+	}
+	return industry.Default()
+}
+
 func (h *Handler) industryPackages(w http.ResponseWriter) {
 	registry := h.packages.Load()
 	if registry == nil {
