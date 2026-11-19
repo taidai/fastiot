@@ -7,6 +7,8 @@ import (
 
 	"github.com/simpleiot/simpleiot/client"
 	"github.com/simpleiot/simpleiot/data"
+
+	"fastiot/internal/ems/pointconfig"
 )
 
 type DeviceTemplate struct {
@@ -55,20 +57,11 @@ func (h *Handler) saveTemplate(w http.ResponseWriter, r *http.Request, identity 
 		if child.Type != data.NodeTypeModbusIO {
 			continue
 		}
-		name, _ := child.Points.Text(data.PointTypeDescription, "")
-		serverID, _ := child.Points.Value(data.PointTypeID, "")
-		address, _ := child.Points.Value(data.PointTypeAddress, "")
-		ioType, _ := child.Points.Text(data.PointTypeModbusIOType, "")
-		format, _ := child.Points.Text(data.PointTypeDataFormat, "")
-		readOnly, _ := child.Points.Value(data.PointTypeReadOnly, "")
-		scale, _ := child.Points.Value(data.PointTypeScale, "")
-		offset, _ := child.Points.Value(data.PointTypeOffset, "")
-		units, _ := child.Points.Text(data.PointTypeUnits, "")
-		definition.Points = append(definition.Points, ModbusIOInput{
-			Description: name, ServerID: int(serverID), Address: int(address),
-			IOType: ioType, DataFormat: format, ReadOnly: readOnly != 0,
-			Scale: scale, Offset: offset, Units: units,
-		})
+		point := pointconfig.Decode(child)
+		// A template is a wiring definition; it never copies the source point's
+		// disabled state.
+		point.Disabled = false
+		definition.Points = append(definition.Points, point)
 	}
 	if len(definition.Points) == 0 {
 		writeError(w, http.StatusBadRequest, "template_has_no_points")
@@ -126,7 +119,7 @@ func (h *Handler) applyTemplate(w http.ResponseWriter, r *http.Request, identity
 	}
 	for i := range definition.Points {
 		definition.Points[i].Parent = bus.ID
-		if err := validateModbusIO(definition.Points[i]); err != nil || existing[definition.Points[i].Description] {
+		if err := pointconfig.Validate(definition.Points[i]); err != nil || existing[definition.Points[i].Description] {
 			writeError(w, http.StatusConflict, "template_conflict: "+definition.Points[i].Description)
 			return
 		}
