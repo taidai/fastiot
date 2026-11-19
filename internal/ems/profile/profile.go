@@ -11,6 +11,9 @@ import (
 	"strings"
 
 	"fastiot/internal/ems/channel"
+	"fastiot/internal/ems/pointconfig"
+
+	"github.com/simpleiot/simpleiot/data"
 )
 
 // Identity describes one register probe used to recognise a device. A probe
@@ -272,48 +275,46 @@ func (r *Registry) Match(read func(Identity) ([]uint16, error)) (Profile, bool) 
 	return Profile{}, false
 }
 
-// CSV renders the curated points in the same shape as the Modbus point-table
-// import (名称,站号,地址,类型,数据格式,只读,缩放,偏移,单位). The station id
-// is a placeholder chosen by the caller; addresses and scaling come from the
-// vendor document and remain unverified until a site read confirms them.
+// CSV renders the curated points in the Modbus point-table shape. The header,
+// column order, type labels and boolean labels all come from pointconfig so
+// this export cannot drift from the import it feeds. The station id is a
+// placeholder chosen by the caller; addresses and scaling come from the vendor
+// document and remain unverified until a site read confirms them.
 func (p Profile) CSV(serverID int) []byte {
 	var buf bytes.Buffer
 	writer := csv.NewWriter(&buf)
-	_ = writer.Write([]string{"名称", "站号", "地址", "类型", "数据格式", "只读", "缩放", "偏移", "单位"})
+	_ = writer.Write(pointconfig.Columns)
 	for _, point := range p.PointSpecs {
-		readOnly := "否"
-		if point.ReadOnly {
-			readOnly = "是"
-		}
 		format := point.Format
 		if format == "" {
-			format = "uint16"
+			format = data.PointValueUINT16
 		}
-		_ = writer.Write([]string{
-			point.Name,
-			strconv.Itoa(serverID),
-			strconv.Itoa(int(point.Address)),
-			csvFunction(point.Function),
-			format,
-			readOnly,
-			strconv.FormatFloat(point.Scale, 'f', -1, 64),
-			strconv.FormatFloat(point.Offset, 'f', -1, 64),
-			point.Unit,
-		})
+		_ = writer.Write(pointconfig.Row(pointconfig.Point{
+			Description: point.Name,
+			ServerID:    serverID,
+			Address:     int(point.Address),
+			IOType:      ioTypeFor(point.Function),
+			DataFormat:  format,
+			ReadOnly:    point.ReadOnly,
+			Scale:       point.Scale,
+			Offset:      point.Offset,
+			Units:       point.Unit,
+		}))
 	}
 	writer.Flush()
 	return buf.Bytes()
 }
 
-func csvFunction(function channel.Function) string {
+// ioTypeFor maps a channel data area to the point-table IO type value.
+func ioTypeFor(function channel.Function) string {
 	switch function {
 	case channel.InputRegister:
-		return "输入寄存器"
+		return data.PointValueModbusInputRegister
 	case channel.Coil:
-		return "线圈"
+		return data.PointValueModbusCoil
 	case channel.DiscreteInput:
-		return "离散输入"
+		return data.PointValueModbusDiscreteInput
 	default:
-		return "保持寄存器"
+		return data.PointValueModbusHoldingRegister
 	}
 }

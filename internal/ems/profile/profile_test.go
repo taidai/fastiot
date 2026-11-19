@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/csv"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
 	"fastiot/internal/ems/channel"
+	"fastiot/internal/ems/pointconfig"
 )
 
 func TestDefaultProfilesAreSelectable(t *testing.T) {
@@ -143,6 +145,41 @@ func TestProfileCSVMatchesPointTableFormat(t *testing.T) {
 	}
 	if records[1][5] != "否" {
 		t.Fatalf("first point should be writable, readOnly = %q", records[1][5])
+	}
+}
+
+// The profile export must speak the point-table vocabulary: the same header,
+// and every row importable by the point-table reader with the same values.
+func TestProfileCSVSharesThePointTableVocabulary(t *testing.T) {
+	registry := Default()
+	exported, ok := registry.Get("enjo-pcs")
+	if !ok {
+		t.Fatal("enjo-pcs profile missing")
+	}
+	records, err := csv.NewReader(bytes.NewReader(exported.CSV(42))).ReadAll()
+	if err != nil {
+		t.Fatalf("CSV parse: %v", err)
+	}
+	if !reflect.DeepEqual(records[0], pointconfig.Columns) {
+		t.Fatalf("profile header %v is not the point-table header %v", records[0], pointconfig.Columns)
+	}
+	table, err := pointconfig.NewTable(records[0])
+	if err != nil {
+		t.Fatalf("profile header rejected by the point-table importer: %v", err)
+	}
+	for i, spec := range exported.PointSpecs {
+		point, err := table.Point(records[i+1], i+2)
+		if err != nil {
+			t.Fatalf("row %d is not importable: %v", i+2, err)
+		}
+		if point.Description != spec.Name || point.Address != int(spec.Address) ||
+			point.ReadOnly != spec.ReadOnly || point.Scale != spec.Scale ||
+			point.Offset != spec.Offset || point.Units != spec.Unit {
+			t.Fatalf("row %d reads back as %+v, want spec %+v", i+2, point, spec)
+		}
+		if want := ioTypeFor(spec.Function); point.IOType != want {
+			t.Fatalf("row %d io type %q, want %q (label %q)", i+2, point.IOType, want, pointconfig.TypeLabel(want))
+		}
 	}
 }
 

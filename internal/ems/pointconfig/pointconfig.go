@@ -29,8 +29,59 @@ type Point struct {
 	Disabled    bool    `json:"disabled"`
 }
 
+// columnID names one CSV field so every consumer refers to the field instead
+// of repeating its Chinese header.
+type columnID int
+
+const (
+	colName columnID = iota
+	colServerID
+	colAddress
+	colIOType
+	colDataFormat
+	colReadOnly
+	colScale
+	colOffset
+	colUnits
+)
+
+// columnOrder is the only definition of the CSV vocabulary: header names,
+// export order and how each field is written all live here.
+var columnOrder = []struct {
+	id    columnID
+	name  string
+	value func(Point) string
+}{
+	{colName, "名称", func(p Point) string { return p.Description }},
+	{colServerID, "站号", func(p Point) string { return strconv.Itoa(p.ServerID) }},
+	{colAddress, "地址", func(p Point) string { return strconv.Itoa(p.Address) }},
+	{colIOType, "类型", func(p Point) string { return TypeLabel(p.IOType) }},
+	{colDataFormat, "数据格式", func(p Point) string { return p.DataFormat }},
+	{colReadOnly, "只读", func(p Point) string { return boolLabel(p.ReadOnly) }},
+	{colScale, "缩放", func(p Point) string { return strconv.FormatFloat(p.Scale, 'g', -1, 64) }},
+	{colOffset, "偏移", func(p Point) string { return strconv.FormatFloat(p.Offset, 'g', -1, 64) }},
+	{colUnits, "单位", func(p Point) string { return p.Units }},
+}
+
+func columnName(id columnID) string {
+	for _, definition := range columnOrder {
+		if definition.id == id {
+			return definition.name
+		}
+	}
+	return ""
+}
+
+func columnNames() []string {
+	names := make([]string, len(columnOrder))
+	for index, definition := range columnOrder {
+		names[index] = definition.name
+	}
+	return names
+}
+
 // Columns is the CSV column vocabulary. Its order is the export order.
-var Columns = []string{"名称", "站号", "地址", "类型", "数据格式", "只读", "缩放", "偏移", "单位"}
+var Columns = columnNames()
 
 // The IO type names are the only place the CSV/UI vocabulary is defined.
 var ioTypes = []struct {
@@ -185,28 +236,28 @@ func Diff(before, after Point) []string {
 	before, after = before.normalized(), after.normalized()
 	fields := []string{}
 	if before.ServerID != after.ServerID {
-		fields = append(fields, "站号")
+		fields = append(fields, columnName(colServerID))
 	}
 	if before.Address != after.Address {
-		fields = append(fields, "地址")
+		fields = append(fields, columnName(colAddress))
 	}
 	if before.IOType != after.IOType {
-		fields = append(fields, "类型")
+		fields = append(fields, columnName(colIOType))
 	}
 	if IsRegister(after.IOType) && before.DataFormat != after.DataFormat {
-		fields = append(fields, "数据格式")
+		fields = append(fields, columnName(colDataFormat))
 	}
 	if before.ReadOnly != after.ReadOnly {
-		fields = append(fields, "只读")
+		fields = append(fields, columnName(colReadOnly))
 	}
 	if before.Scale != after.Scale {
-		fields = append(fields, "缩放")
+		fields = append(fields, columnName(colScale))
 	}
 	if before.Offset != after.Offset {
-		fields = append(fields, "偏移")
+		fields = append(fields, columnName(colOffset))
 	}
 	if strings.TrimSpace(before.Units) != strings.TrimSpace(after.Units) {
-		fields = append(fields, "单位")
+		fields = append(fields, columnName(colUnits))
 	}
 	return fields
 }
@@ -214,12 +265,11 @@ func Diff(before, after Point) []string {
 // Row formats one point as a CSV record in Columns order.
 func Row(point Point) []string {
 	point = point.normalized()
-	return []string{
-		point.Description, strconv.Itoa(point.ServerID), strconv.Itoa(point.Address),
-		TypeLabel(point.IOType), point.DataFormat, boolLabel(point.ReadOnly),
-		strconv.FormatFloat(point.Scale, 'g', -1, 64), strconv.FormatFloat(point.Offset, 'g', -1, 64),
-		point.Units,
+	record := make([]string, len(columnOrder))
+	for index, definition := range columnOrder {
+		record[index] = definition.value(point)
 	}
+	return record
 }
 
 // Table is a parsed CSV header. It maps column names to indexes once so every
@@ -239,9 +289,9 @@ func NewTable(header []string) (Table, error) {
 		}
 		columns[name] = index
 	}
-	for _, required := range Columns[:4] {
-		if _, ok := columns[required]; !ok {
-			return Table{}, fmt.Errorf("missing_csv_column: %s", required)
+	for _, required := range columnOrder[:4] {
+		if _, ok := columns[required.name]; !ok {
+			return Table{}, fmt.Errorf("missing_csv_column: %s", required.name)
 		}
 	}
 	return Table{columns: columns, width: len(header)}, nil
@@ -253,21 +303,21 @@ func (t Table) Point(record []string, line int) (Point, error) {
 	if len(record) != t.width {
 		return Point{}, fmt.Errorf("第 %d 行字段数量不正确", line)
 	}
-	cell := func(name string) string {
-		index, ok := t.columns[name]
+	cell := func(id columnID) string {
+		index, ok := t.columns[columnName(id)]
 		if !ok {
 			return ""
 		}
 		return strings.TrimSpace(record[index])
 	}
-	serverID, serverErr := strconv.Atoi(cell("站号"))
-	address, addressErr := strconv.Atoi(cell("地址"))
+	serverID, serverErr := strconv.Atoi(cell(colServerID))
+	address, addressErr := strconv.Atoi(cell(colAddress))
 	if serverErr != nil || addressErr != nil {
 		return Point{}, fmt.Errorf("第 %d 行站号或地址无效", line)
 	}
-	ioType := TypeValue(cell("类型"))
+	ioType := TypeValue(cell(colIOType))
 	readOnly := IsReadOnlyType(ioType)
-	if text := cell("只读"); text != "" {
+	if text := cell(colReadOnly); text != "" {
 		value, err := ParseBool(text)
 		if err != nil {
 			return Point{}, fmt.Errorf("第 %d 行只读字段无效", line)
@@ -275,7 +325,7 @@ func (t Table) Point(record []string, line int) (Point, error) {
 		readOnly = value
 	}
 	scale := 1.0
-	if text := cell("缩放"); text != "" {
+	if text := cell(colScale); text != "" {
 		value, err := strconv.ParseFloat(text, 64)
 		if err != nil {
 			return Point{}, fmt.Errorf("第 %d 行缩放无效", line)
@@ -283,21 +333,21 @@ func (t Table) Point(record []string, line int) (Point, error) {
 		scale = value
 	}
 	offset := 0.0
-	if text := cell("偏移"); text != "" {
+	if text := cell(colOffset); text != "" {
 		value, err := strconv.ParseFloat(text, 64)
 		if err != nil {
 			return Point{}, fmt.Errorf("第 %d 行偏移无效", line)
 		}
 		offset = value
 	}
-	format := cell("数据格式")
+	format := cell(colDataFormat)
 	if format == "" {
 		format = data.PointValueUINT16
 	}
 	point := Point{
-		Description: cell("名称"), ServerID: serverID, Address: address,
+		Description: cell(colName), ServerID: serverID, Address: address,
 		IOType: ioType, DataFormat: format, ReadOnly: readOnly,
-		Scale: scale, Offset: offset, Units: cell("单位"),
+		Scale: scale, Offset: offset, Units: cell(colUnits),
 	}.normalized()
 	if err := Validate(point); err != nil {
 		return Point{}, fmt.Errorf("第 %d 行: %s", line, err)
