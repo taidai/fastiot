@@ -368,6 +368,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.deepseekGenerate(w, r, identity)
 	case path == "generated-screens/preview" && r.Method == http.MethodPost:
 		h.generatedScreenPreview(w, r, identity)
+	case len(parts) == 4 && parts[0] == "generated-screens" && parts[2] == "revision" && parts[3] == "preview" && r.Method == http.MethodPost:
+		h.generatedScreenRevisionPreview(w, r, identity, parts[1])
+	case len(parts) == 3 && parts[0] == "generated-screens" && parts[2] == "revision" && r.Method == http.MethodPost:
+		h.generatedScreenRevision(w, r, identity, parts[1])
 	case len(parts) == 3 && parts[0] == "generated-screens" && parts[2] == "read" && r.Method == http.MethodPost:
 		h.generatedScreenRead(w, r, identity, parts[1])
 	case len(parts) == 3 && parts[0] == "generated-screens" && parts[2] == "write" && r.Method == http.MethodPost:

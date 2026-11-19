@@ -62,6 +62,8 @@ var routeRequirements = []routeRequirement{
 	actionRoute(http.MethodPost, "generated-screens/*/write", Configure, "admin_required"),
 	actionRoute(http.MethodPost, "generated-screens/*/diagnostics", Configure, "admin_required"),
 	actionRoute(http.MethodPost, "generated-screens/*/confirm", Configure, "admin_required"),
+	actionRoute(http.MethodPost, "generated-screens/*/revision/preview", Configure, "admin_required"),
+	actionRoute(http.MethodPost, "generated-screens/*/revision", Configure, "admin_required"),
 	authenticatedRoute(http.MethodGet, "alarm-events"),
 	authenticatedRoute(http.MethodGet, "alarm-stats"),
 	authenticatedRoute(http.MethodGet, "device-ledger").queryTarget("site"),

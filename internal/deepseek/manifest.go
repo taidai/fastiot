@@ -19,19 +19,38 @@ type PointSummary struct {
 	Unit string `json:"unit,omitempty"`
 }
 
-// Screenshot is an uploaded annotated screenshot. Data is the local base64
-// image; it is measured and inspected but never sent to the model.
+// Screenshot is an uploaded screenshot with the regions the deliverer marked
+// on it. Data is the local base64 image; it is measured and inspected but
+// never sent to the model.
 type Screenshot struct {
-	Name       string `json:"name"`
-	MediaType  string `json:"media_type"`
-	Data       string `json:"data,omitempty"`
-	Annotation string `json:"annotation,omitempty"`
-	Reviewed   bool   `json:"reviewed"`
+	Name       string   `json:"name"`
+	MediaType  string   `json:"media_type"`
+	Data       string   `json:"data,omitempty"`
+	Annotation string   `json:"annotation,omitempty"`
+	Regions    []Region `json:"regions,omitempty"`
+	Reviewed   bool     `json:"reviewed"`
 }
+
+// Region is one user-marked area of a screenshot. X and Y are relative to the
+// image (0..1); only the coordinates and the note leave the process.
+type Region struct {
+	X    float64 `json:"x"`
+	Y    float64 `json:"y"`
+	Note string  `json:"note"`
+}
+
+const (
+	// ModeRevise modifies the screen already in the preview session instead of
+	// generating a new one. An empty mode is first generation.
+	ModeRevise = "revise"
+
+	maxRegionsPerScreenshot = 20
+)
 
 // Request is one screen-generation request before anything leaves the
 // process. Acknowledged carries finding IDs the deliverer explicitly accepted.
 type Request struct {
+	Mode         string         `json:"mode,omitempty"`
 	Instruction  string         `json:"instruction"`
 	Context      string         `json:"context,omitempty"`
 	Points       []PointSummary `json:"points,omitempty"`
@@ -51,15 +70,16 @@ type CodeSection struct {
 }
 
 type ScreenshotSummary struct {
-	Name        string `json:"name"`
-	MediaType   string `json:"media_type"`
-	Bytes       int    `json:"bytes"`
-	Width       int    `json:"width,omitempty"`
-	Height      int    `json:"height,omitempty"`
-	Annotation  string `json:"annotation,omitempty"`
-	Reviewed    bool   `json:"reviewed"`
-	SendsPixels bool   `json:"sends_pixels"`
-	Invalid     bool   `json:"invalid,omitempty"`
+	Name        string   `json:"name"`
+	MediaType   string   `json:"media_type"`
+	Bytes       int      `json:"bytes"`
+	Width       int      `json:"width,omitempty"`
+	Height      int      `json:"height,omitempty"`
+	Annotation  string   `json:"annotation,omitempty"`
+	Regions     []Region `json:"regions,omitempty"`
+	Reviewed    bool     `json:"reviewed"`
+	SendsPixels bool     `json:"sends_pixels"`
+	Invalid     bool     `json:"invalid,omitempty"`
 }
 
 type Finding struct {
@@ -78,6 +98,7 @@ type Finding struct {
 // the three content classes; findings locate suspected sensitive content.
 type Manifest struct {
 	Categories   []Category          `json:"categories"`
+	Mode         string              `json:"mode,omitempty"`
 	Code         CodeSection         `json:"code"`
 	DeviceModel  []PointSummary      `json:"device_model"`
 	Screenshots  []ScreenshotSummary `json:"screenshots"`
@@ -91,15 +112,20 @@ type Manifest struct {
 func BuildManifest(req Request) Manifest {
 	instruction := strings.TrimSpace(req.Instruction)
 	manifest := Manifest{
+		Mode:        req.Mode,
 		Code:        CodeSection{Instruction: instruction, Context: req.Context},
 		DeviceModel: append([]PointSummary{}, req.Points...),
 		Screenshots: []ScreenshotSummary{},
 		Findings:    []Finding{},
 	}
+	regionCount := 0
+	for _, screenshot := range req.Screenshots {
+		regionCount += len(screenshot.Regions)
+	}
 	manifest.Categories = []Category{
 		{Key: "code", Label: "代码与上下文", Summary: fmt.Sprintf("指令 %d 字；现有画面配置 %d 字", utf8.RuneCountInString(instruction), utf8.RuneCountInString(req.Context))},
 		{Key: "device_model", Label: "设备模型摘要", Summary: fmt.Sprintf("%d 个点位，仅名称、类型、单位与点位 id，不含实时值与寄存器地址", len(req.Points))},
-		{Key: "screenshots", Label: "截图", Summary: fmt.Sprintf("%d 张截图，仅文件名与标注文字，不发送图片像素", len(req.Screenshots))},
+		{Key: "screenshots", Label: "截图", Summary: fmt.Sprintf("%d 张截图，%d 个标注区域，仅文件名、标注文字与区域坐标，不发送图片像素", len(req.Screenshots), regionCount)},
 	}
 
 	manifest.Findings = append(manifest.Findings, ScanText("code", 0, "instruction", req.Instruction)...)
@@ -115,6 +141,7 @@ func BuildManifest(req Request) Manifest {
 
 	unreviewed := 0
 	invalid := 0
+	annotationInvalid := 0
 	for index, screenshot := range req.Screenshots {
 		summary := ScreenshotSummary{
 			Name: screenshot.Name, MediaType: screenshot.MediaType,
@@ -123,6 +150,23 @@ func BuildManifest(req Request) Manifest {
 		manifest.Findings = append(manifest.Findings, ScanText("screenshot", index, "name", screenshot.Name)...)
 		if screenshot.Annotation != "" {
 			manifest.Findings = append(manifest.Findings, ScanText("screenshot", index, "annotation", screenshot.Annotation)...)
+		}
+		if len(screenshot.Regions) > maxRegionsPerScreenshot {
+			summary.Invalid = true
+			annotationInvalid++
+		} else {
+			regions := make([]Region, 0, len(screenshot.Regions))
+			for _, region := range screenshot.Regions {
+				note := strings.TrimSpace(region.Note)
+				if region.X < 0 || region.X > 1 || region.Y < 0 || region.Y > 1 || note == "" {
+					summary.Invalid = true
+					annotationInvalid++
+					continue
+				}
+				regions = append(regions, Region{X: region.X, Y: region.Y, Note: note})
+				manifest.Findings = append(manifest.Findings, ScanText("screenshot", index, "region", note)...)
+			}
+			summary.Regions = regions
 		}
 		if screenshot.Data != "" {
 			data, err := decodeImageData(screenshot.Data)
@@ -166,6 +210,9 @@ func BuildManifest(req Request) Manifest {
 	if invalid > 0 {
 		reasons = append(reasons, "screenshot_invalid")
 	}
+	if annotationInvalid > 0 {
+		reasons = append(reasons, "screenshot_annotation_invalid")
+	}
 	if unreviewed > 0 {
 		reasons = append(reasons, "screenshot_unreviewed")
 	}
@@ -179,6 +226,8 @@ type Message struct {
 	Content string `json:"content"`
 }
 
+const reviseInstruction = "你在修改一个已经生成的画面。请只做用户要求的修改，保留未要求改动的内容，输出修改后的完整 HTML 文档，不要输出解释文字。\n"
+
 // MessagesForManifest renders the model request from the reviewed manifest.
 // Only the fields shown in the manifest are included.
 func MessagesForManifest(manifest Manifest) []Message {
@@ -190,11 +239,19 @@ func MessagesForManifest(manifest Manifest) []Message {
 		"- 画面运行在离线隔离沙箱中：不能访问网络、外部脚本/字体/图片 URL、localStorage、cookie、window.parent 或 eval；" +
 		"不要使用 onclick 等内联事件属性，交互用上述 data 属性或在 <script> 中 addEventListener。\n" +
 		"- 样式写在 <style> 或 style 属性中；图片只能用 data: URI。"
+	systemMessage := system
+	if manifest.Mode == ModeRevise {
+		systemMessage = reviseInstruction + system
+	}
 	var user strings.Builder
 	user.WriteString("用户要求：\n")
 	user.WriteString(manifest.Code.Instruction)
 	user.WriteString("\n")
-	if manifest.Code.Context != "" {
+	if manifest.Mode == ModeRevise {
+		user.WriteString("\n现有画面 HTML（在此基础上修改，输出完整文档）：\n")
+		user.WriteString(manifest.Code.Context)
+		user.WriteString("\n")
+	} else if manifest.Code.Context != "" {
 		user.WriteString("\n现有画面配置：\n")
 		user.WriteString(manifest.Code.Context)
 		user.WriteString("\n")
@@ -211,12 +268,15 @@ func MessagesForManifest(manifest Manifest) []Message {
 		}
 	}
 	if len(manifest.Screenshots) > 0 {
-		user.WriteString("\n标注截图（像素未发送，只有文件名与标注文字）：\n")
+		user.WriteString("\n标注截图（像素未发送，只有文件名、标注文字与区域坐标）：\n")
 		for _, screenshot := range manifest.Screenshots {
 			fmt.Fprintf(&user, "- %s（%dx%d）：%s\n", screenshot.Name, screenshot.Width, screenshot.Height, screenshot.Annotation)
+			for index, region := range screenshot.Regions {
+				fmt.Fprintf(&user, "  标注区域 %d（%.0f%%，%.0f%%）：%s\n", index+1, region.X*100, region.Y*100, region.Note)
+			}
 		}
 	}
-	return []Message{{Role: "system", Content: system}, {Role: "user", Content: user.String()}}
+	return []Message{{Role: "system", Content: systemMessage}, {Role: "user", Content: user.String()}}
 }
 
 func decodeImageData(encoded string) ([]byte, error) {

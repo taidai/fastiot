@@ -21,8 +21,38 @@ type Session struct {
 	Sim        *Simulator
 	Static     []Finding
 	Client     []Finding
+	Revision   int
 	Created    time.Time
 	Checked    time.Time
+}
+
+// Snapshot is the preview's source and model at one instant. Revision can
+// replace the source while a request is in flight, so callers read it through
+// here instead of touching the fields.
+type Snapshot struct {
+	Source   string
+	Points   []Point
+	Revision int
+}
+
+func (s *Session) Snapshot() Snapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return Snapshot{Source: s.Source, Points: append([]Point{}, s.Points...), Revision: s.Revision}
+}
+
+// ApplyRevision replaces the screen with the model's modified document. The
+// previous browser checks no longer describe it, so they are cleared and the
+// publish gate must be satisfied again.
+func (s *Session) ApplyRevision(source string, static []Finding) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Source = source
+	s.Static = static
+	s.Client = nil
+	s.Checked = time.Time{}
+	s.Revision++
+	return s.Revision
 }
 
 // Report merges the server checks with the latest browser checks.

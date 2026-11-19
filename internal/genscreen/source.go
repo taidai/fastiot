@@ -80,6 +80,9 @@ type Element struct {
 	Column   int
 	Start    int
 	End      int
+	// Text is the element's own text content, whitespace-collapsed. Script and
+	// style bodies are captured separately.
+	Text string
 }
 
 type chunk struct {
@@ -134,9 +137,10 @@ func Parse(source string) *Document {
 	document := &Document{Source: source, lineStart: lineStarts(source)}
 	z := html.NewTokenizer(strings.NewReader(source))
 	type frame struct {
-		tag    string
-		counts map[string]int
-		path   string
+		tag     string
+		counts  map[string]int
+		path    string
+		element int
 	}
 	var stack []frame
 	offset := 0
@@ -185,6 +189,7 @@ func Parse(source string) *Document {
 			element.Marker = "e" + strconv.Itoa(len(document.Elements))
 			document.Elements = append(document.Elements, element)
 			push := tokenType == html.StartTagToken && !voidTags[element.Tag]
+			index := len(document.Elements) - 1
 			if push {
 				counts := map[string]int{}
 				if len(stack) > 0 {
@@ -193,7 +198,7 @@ func Parse(source string) *Document {
 					}
 				}
 				counts[element.Tag]++
-				stack = append(stack, frame{tag: element.Tag, counts: counts, path: element.Selector})
+				stack = append(stack, frame{tag: element.Tag, counts: counts, path: element.Selector, element: index})
 			}
 			if element.Tag == "script" && push {
 				openScript = len(document.Elements) - 1
@@ -222,8 +227,13 @@ func Parse(source string) *Document {
 				document.Scripts = append(document.Scripts, chunk{Element: document.Elements[openScript], Text: text, Offset: start})
 			} else if openStyle >= 0 && openStyle < len(document.Elements) {
 				document.Styles = append(document.Styles, chunk{Element: document.Elements[openStyle], Text: text, Offset: start})
+			} else if len(stack) > 0 {
+				document.Elements[stack[len(stack)-1].element].Text += text
 			}
 		}
+	}
+	for index := range document.Elements {
+		document.Elements[index].Text = strings.Join(strings.Fields(document.Elements[index].Text), " ")
 	}
 	return document
 }
