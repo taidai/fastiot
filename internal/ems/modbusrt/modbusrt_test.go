@@ -166,6 +166,32 @@ func TestRealTCPFrames(t *testing.T) {
 	}
 }
 
+func TestResponseStationGuard(t *testing.T) {
+	// Encode works without a port, which is enough to build real RTU frames.
+	rtu := modbus.NewRTU(nil)
+	guard := &stationGuard{Transport: rtu}
+	request := modbus.ReadHoldingRegs(100, 2)
+	if _, err := guard.Encode(1, request); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	foreign, err := rtu.Encode(7, modbus.ReadHoldingRegs(100, 2))
+	if err != nil {
+		t.Fatalf("encode foreign: %v", err)
+	}
+	if _, _, err := guard.Decode(foreign); err == nil {
+		t.Fatal("a frame from station 7 must not decode as the answer to station 1")
+	}
+
+	own, err := rtu.Encode(1, modbus.ReadHoldingRegs(100, 2))
+	if err != nil {
+		t.Fatalf("encode own: %v", err)
+	}
+	if _, _, err := guard.Decode(own); err != nil {
+		t.Fatalf("own station frame was rejected: %v", err)
+	}
+}
+
 func TestParseSerialAddress(t *testing.T) {
 	cases := []struct {
 		address  string

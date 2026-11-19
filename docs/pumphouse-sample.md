@@ -1,7 +1,8 @@
 # 两泵一水箱泵房样板（不安装 EMS）
 
-状态：软件样板，使用**明确标注的模拟设备**。不是真机验收，也没有经过虚拟串口 RTU
-（另一张票）或真实 RS485 链路。所有结论只覆盖软件范围。
+状态：软件样板，使用**明确标注的模拟设备**。不是真机验收。虚拟串口上的 RTU 帧/CRC/站号
+已由票 #14 单独验收（见 `docs/rtu-acceptance.md`）；真实 RS485 链路与真机仍未执行。所有结论
+只覆盖软件范围。
 
 ## 这个样板证明什么
 
@@ -54,18 +55,29 @@ go build -o pumphouse.exe ./cmd/pumphouse
 | `-port` | `8080` | 应用 HTTP 端口 |
 | `-nats-port` | `4222` | 内嵌 NATS 端口 |
 | `-sim-port` | `15020` | 模拟站 Modbus TCP 端口 |
+| `-sim-rtu` | 空 | 让模拟站以 RTU 从站身份跑在这个串口上（`port@baud`），必须与 `-rtu-bus` 同时给出 |
+| `-rtu-bus` | 空 | 样板通道轮询的串口地址（`port@baud`），必须与 `-sim-rtu` 同时给出 |
 | `-control` | `127.0.0.1:15021` | 模拟站故障/就地注入口 |
 | `-password` | `pumphouse-demo-2026` | 首次初始化密码 |
 
 数据目录里会写入 `profiles/pumphouse-sim.json`（模拟设备的自定义 Profile）。重复启动同一个
 数据目录时，程序检测到泵房分组已存在就只打印入口，不会重复建设备。
 
+要在串口上运行（虚拟或物理，一端模拟站、一端主站）：
+
+```bash
+go run ./cmd/pumphouse -data ./pumphouse-data -sim-rtu /dev/pts/3@9600 -rtu-bus /dev/pts/4@9600
+```
+
+RTU 链路故障（静默、延时、坏 CRC、错站号）可通过控制口重复注入，见 `docs/rtu-acceptance.md`。
+
 ## 程序建立了哪些对象
 
 全部通过产品 HTTP API 建立，等价于交付人员手工操作：
 
 - **分组**：`泵房样板（模拟设备）`。
-- **Modbus TCP 通道**：`泵站模拟器（Modbus TCP，非真实设备）`，站号 1，轮询 1 秒。
+- **Modbus 通道**：`泵站模拟器（Modbus TCP，非真实设备）`，站号 1，轮询 1 秒。
+  给出 `-sim-rtu` / `-rtu-bus` 时通道改为 RTU（串口地址与波特率来自 `-rtu-bus`）。
 - **点位表（14 点）**：
   - 保持寄存器：水箱液位（0.1%）、出口压力（0.01 MPa）、两台泵电流（0.1 A）、
     两台泵启停命令、两台泵启动次数。
@@ -128,9 +140,11 @@ go build -o pumphouse.exe ./cmd/pumphouse
 
 ## 验证代码
 
-- `internal/sim/pumphouse`：过程模型、`channel.Bus` 适配、Modbus TCP 服务器、样板的
-  点位/命令/画面/报警定义。单元测试覆盖启动过程、反馈滞后、停止过程、故障跳闸与拒绝、
-  就地忽略、液位动态和真实 Modbus TCP 帧。
+- `internal/sim/pumphouse`：过程模型、`channel.Bus` 适配、Modbus TCP 服务器、RTU 从站
+  （`rtu.go`，含断线/超时/迟到回读/坏 CRC/错站号的故障注入）、样板的点位/命令/画面/报警定义。
+  单元测试覆盖启动过程、反馈滞后、停止过程、故障跳闸与拒绝、就地忽略、液位动态和真实
+  Modbus TCP 帧；`rtu_linux_test.go` 在 Linux pty 虚拟串口上做 RTU 端到端验收
+  （见 `docs/rtu-acceptance.md`）。
 - `internal/appapi/pumphouse_integration_test.go`：用真实实例、真实运行时、真实 HTTP API
   建立样板，断言启动的中间态与反馈延迟、停止延迟、故障拒绝并报警、就地超时为未知。
 
@@ -146,7 +160,6 @@ docker run --rm --network none -v "${PWD}:/src:ro" -v fastems-gomod:/go/pkg/mod 
 
 ## 不覆盖的范围
 
-- 虚拟串口上的 RTU 帧/CRC/站号端到端验收（另一张票）。
-- 真实串口、RS485 和目标泵站真机。
+- 真实串口、RS485 和目标泵站真机（虚拟串口 RTU 已由 `docs/rtu-acceptance.md` 覆盖）。
 - 自动液位控制规则；本样板只做监控与受控启停。
 - 独立用户按文档交付的可用性试用。

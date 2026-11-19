@@ -1,0 +1,91 @@
+# 票 #14 虚拟串口 RTU 验收证据
+
+日期：2026-11-20
+环境：Windows 11 主机；测试与运行都在 `golang:1.27.3` 容器内（Linux），`--network none`，
+CGO 关闭。虚拟串口是容器内的 Linux pty 对。
+
+## 1. 先失败（TDD 红）
+
+新测试第一次运行无法编译，说明测试确实依赖尚不存在的 RTU 从站：
+
+```
+# fastiot/internal/sim/pumphouse [fastiot/internal/sim/pumphouse.test]
+internal/sim/pumphouse/rtu_linux_test.go:36:11: undefined: RTUServer
+internal/sim/pumphouse/rtu_linux_test.go:77:18: plant.ServeRTU undefined (type *Plant has no field or method ServeRTU)
+internal/sim/pumphouse/rtu_linux_test.go:262:21: undefined: RTUFaults
+...
+FAIL	fastiot/internal/sim/pumphouse [build failed]
+```
+
+## 2. 后通过（虚拟串口，Linux pty）
+
+命令：
+
+```
+docker run --rm --network none -v "$PWD:/src:ro" -v fastems-gomod:/go/pkg/mod \
+  -v fastiot-go-build:/root/.cache/go-build -w /src -e CGO_ENABLED=0 golang:1.27.3 \
+  go test -count=1 -v -timeout 180s -run "TestRTUVirtualSerial|TestResponseStationGuard" \
+  ./internal/sim/pumphouse/ ./internal/ems/modbusrt/
+```
+
+输出：
+
+```
+=== RUN   TestRTUVirtualSerialFramesCRCAndStation
+    rtu_linux_test.go:230: holding-register request  01 03 00 64 00 02 85 d4
+    rtu_linux_test.go:231: holding-register response 01 03 04 02 26 00 08 1b 86
+--- PASS: TestRTUVirtualSerialFramesCRCAndStation (0.38s)
+=== RUN   TestRTUVirtualSerialTimeoutAndRecovery
+--- PASS: TestRTUVirtualSerialTimeoutAndRecovery (0.77s)
+=== RUN   TestRTUVirtualSerialLateReadback
+--- PASS: TestRTUVirtualSerialLateReadback (0.79s)
+=== RUN   TestRTUVirtualSerialDisconnectAndRecover
+--- PASS: TestRTUVirtualSerialDisconnectAndRecover (0.34s)
+=== RUN   TestRTUVirtualSerialResponseStationGuard
+--- PASS: TestRTUVirtualSerialResponseStationGuard (0.50s)
+=== RUN   TestRTUVirtualSerialCRCRejection
+--- PASS: TestRTUVirtualSerialCRCRejection (0.93s)
+PASS
+ok  	fastiot/internal/sim/pumphouse	3.828s
+=== RUN   TestResponseStationGuard
+--- PASS: TestResponseStationGuard (0.00s)
+PASS
+ok  	fastiot/internal/ems/modbusrt	0.073s
+```
+
+同一组测试连续跑 3 次（`-count=3`）仍全绿，没有偶发失败。
+
+## 3. 样板进程经虚拟串口运行（CLI 级，仍是虚拟串口）
+
+一台 `cmd/pumphouse` 进程，模拟站与主站各占用一对 pty 的一端，两端由一段纯字节桥连接
+（相当于 socat 建立的成对 pty）。样板以 RTU 从站身份运行，通道地址是另一端的 pty 路径：
+
+```
+station=/dev/pts/0 bus=/dev/pts/1
+...
+2026/11/19 16:30:02 sample project ready (simulated device, NOT real hardware)
+2026/11/19 16:30:02   level=54.7% pressure=0.08 MPa pump1=0 pump2=0
+```
+
+说明应用运行时确实从串口字节流取到了液位/压力/运行反馈，而不是进程内赋值。
+
+链路计数（`GET /link`）：
+
+```
+运行 30 s 后      {"Requests":84,"Responses":84,...}
+静默 6 s 后       {"Requests":87,"Responses":84,...}     <- 3 个请求被收下但不应答
+解除静默 8 s 后   {"Requests":111,"Responses":108,...}   <- 24 个请求全部恢复应答
+```
+
+`Mute` 期间主站超时、调用方得到无效数据；清除后无需重启即恢复采集。
+
+## 4. 证据分级
+
+| 等级 | 本文件是否覆盖 |
+| --- | --- |
+| 虚拟串口 | 是（第 2、3 节，Linux pty） |
+| 真实串口 | **否**（未连接任何物理串口） |
+| 真机 | **否**（未连接任何真实控制器） |
+
+虚拟串口没有电气层，也不覆盖多站总线冲突、波特率误差和现场固件差异。第 2、3 节的通过
+不能写成真实串口或真机的通过。

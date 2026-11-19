@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"github.com/simpleiot/simpleiot/data"
 
 	"fastiot/internal/app"
+	"fastiot/internal/ems/modbusrt"
 	"fastiot/internal/sim/pumphouse"
 )
 
@@ -32,12 +34,17 @@ func main() {
 	httpPort := flag.String("port", "8080", "HTTP port of the sample instance")
 	natsPort := flag.Int("nats-port", 4222, "embedded NATS port")
 	simPort := flag.Int("sim-port", 15020, "Modbus TCP port of the simulated station")
+	simRTU := flag.String("sim-rtu", "", "serve the simulated station as a Modbus RTU slave on this port (port@baud); requires -rtu-bus")
+	rtuBus := flag.String("rtu-bus", "", "serial address (port@baud) the sample channel polls; requires -sim-rtu")
 	controlAddr := flag.String("control", "127.0.0.1:15021", "simulator control address for fault/local injection")
 	password := flag.String("password", envOr("FASTEMS_ADMIN_PASSWORD", "pumphouse-demo-2026"), "admin password (at least 12 characters)")
 	flag.Parse()
 
 	if len(*password) < 12 {
 		log.Fatal("the admin password must contain at least 12 characters")
+	}
+	if (*simRTU == "") != (*rtuBus == "") {
+		log.Fatal("-sim-rtu and -rtu-bus must be given together: one end of a serial pair is the station, the other is the bus")
 	}
 	if err := prepareProfile(*dataDir); err != nil {
 		log.Fatal(err)
@@ -49,7 +56,24 @@ func main() {
 		log.Fatalf("start simulated station: %v", err)
 	}
 	defer station.Close()
-	control := serveControl(plant, *controlAddr)
+	channelProtocol := "TCP"
+	channelAddress := fmt.Sprintf("127.0.0.1:%d", *simPort)
+	var rtuStation *pumphouse.RTUServer
+	if *simRTU != "" {
+		cfg, err := modbusrt.ParseSerialAddress(*simRTU)
+		if err != nil {
+			log.Fatalf("-sim-rtu: %v", err)
+		}
+		port, err := modbusrt.OpenSerialPort(cfg)
+		if err != nil {
+			log.Fatalf("open simulated station serial port %s: %v", cfg.Port, err)
+		}
+		rtuStation = plant.ServeRTU(port, 0)
+		defer rtuStation.Close()
+		channelProtocol = "RTU"
+		channelAddress = *rtuBus
+	}
+	control := serveControl(plant, rtuStation, *controlAddr)
 	defer control.Close()
 
 	// Bootstrap reads this env var on first start; keep the flag authoritative.
@@ -58,6 +82,9 @@ func main() {
 	defer stop()
 
 	log.Printf("simulated station (NOT real hardware) listening on Modbus TCP %s", station.Addr())
+	if rtuStation != nil {
+		log.Printf("simulated station (NOT real hardware) also serving Modbus RTU on %s; the sample channel polls %s", *simRTU, channelAddress)
+	}
 	application, err := app.Start(ctx, app.Config{
 		DataDir: *dataDir, HTTPPort: *httpPort, NATSPort: *natsPort, Version: "pumphouse-sample",
 	})
@@ -73,11 +100,14 @@ func main() {
 			"If %s already holds another project, point -data at an empty directory or pass its admin password.", err, *dataDir)
 	}
 	api := &apiClient{base: base, token: token, http: &http.Client{Timeout: 10 * time.Second}}
-	sample, err := seedSample(api, *simPort)
+	sample, err := seedSample(api, channelProtocol, channelAddress)
 	if err != nil {
 		log.Fatalf("build the pump house sample: %v", err)
 	}
 	printSummary(api, sample, *httpPort)
+	if rtuStation != nil {
+		log.Printf("  RTU link faults: curl -X POST http://%s/link -d '{\"mute\":true}' (also delay_ms, corrupt_response_crc, corrupt_request_crc; GET for faults and counters)", *controlAddr)
+	}
 
 	select {
 	case <-ctx.Done():
@@ -186,7 +216,7 @@ type sampleIDs struct {
 	PointIDs map[string]string
 }
 
-func seedSample(api *apiClient, simPort int) (sampleIDs, error) {
+func seedSample(api *apiClient, protocol, address string) (sampleIDs, error) {
 	var snapshot struct {
 		Roots []string        `json:"roots"`
 		Nodes []data.NodeEdge `json:"nodes"`
@@ -216,11 +246,27 @@ func seedSample(api *apiClient, simPort int) (sampleIDs, error) {
 	var channel struct {
 		ID string `json:"id"`
 	}
-	if err := api.json(http.MethodPost, "/modbus", map[string]any{
-		"parent": group.ID, "description": "泵站模拟器（Modbus TCP，非真实设备）",
-		"protocol": "TCP", "uri": fmt.Sprintf("127.0.0.1:%d", simPort),
+	transport := "Modbus TCP"
+	connection := map[string]any{
+		"parent": group.ID, "protocol": protocol,
 		"poll_period": 1000, "timeout": 1000,
-	}, &channel); err != nil {
+	}
+	if protocol == "RTU" {
+		serial, err := modbusrt.ParseSerialAddress(address)
+		if err != nil {
+			return sampleIDs{}, err
+		}
+		transport = "Modbus RTU"
+		connection["port"] = serial.Port
+		connection["baud"] = strconv.Itoa(serial.Baud)
+		connection["data_bits"] = serial.DataBits
+		connection["parity"] = serial.Parity
+		connection["stop_bits"] = serial.StopBits
+	} else {
+		connection["uri"] = address
+	}
+	connection["description"] = "泵站模拟器（" + transport + "，非真实设备）"
+	if err := api.json(http.MethodPost, "/modbus", connection, &channel); err != nil {
 		return sampleIDs{}, err
 	}
 
@@ -370,7 +416,7 @@ func stateReadings(api *apiClient) map[string]string {
 
 // serveControl exposes the simulator-only fault and local/remote switches so a
 // person can demonstrate refusal without touching the project configuration.
-func serveControl(plant *pumphouse.Plant, addr string) *http.Server {
+func serveControl(plant *pumphouse.Plant, rtu *pumphouse.RTUServer, addr string) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/state", func(w http.ResponseWriter, r *http.Request) {
 		writeControl(w, plant.Snapshot())
@@ -379,6 +425,9 @@ func serveControl(plant *pumphouse.Plant, addr string) *http.Server {
 	mux.HandleFunc("/pump/2/fault", faultHandler(plant, 2))
 	mux.HandleFunc("/pump/1/local", localHandler(plant, 1))
 	mux.HandleFunc("/pump/2/local", localHandler(plant, 2))
+	if rtu != nil {
+		mux.HandleFunc("/link", linkHandler(rtu))
+	}
 	server := &http.Server{Addr: addr, Handler: mux}
 	go func() {
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -386,6 +435,50 @@ func serveControl(plant *pumphouse.Plant, addr string) *http.Server {
 		}
 	}()
 	return server
+}
+
+// linkChange changes only the fields present in the body, so a caller can set
+// one fault without clearing the others.
+type linkChange struct {
+	Mute               *bool `json:"mute"`
+	DelayMS            *int  `json:"delay_ms"`
+	CorruptResponseCRC *bool `json:"corrupt_response_crc"`
+	CorruptRequestCRC  *bool `json:"corrupt_request_crc"`
+}
+
+// linkHandler repeats the serial link faults the RTU acceptance covers, so a
+// person can watch the same behaviour on a real or virtual serial line.
+func linkHandler(rtu *pumphouse.RTUServer) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			writeControl(w, map[string]any{"faults": rtu.Faults(), "stats": rtu.Stats()})
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "GET or POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		var change linkChange
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&change); err != nil {
+			http.Error(w, "invalid body", http.StatusBadRequest)
+			return
+		}
+		faults := rtu.Faults()
+		if change.Mute != nil {
+			faults.Mute = *change.Mute
+		}
+		if change.DelayMS != nil {
+			faults.ResponseDelay = time.Duration(*change.DelayMS) * time.Millisecond
+		}
+		if change.CorruptResponseCRC != nil {
+			faults.CorruptResponseCRC = *change.CorruptResponseCRC
+		}
+		if change.CorruptRequestCRC != nil {
+			faults.CorruptRequestCRC = *change.CorruptRequestCRC
+		}
+		rtu.SetFaults(faults)
+		writeControl(w, map[string]any{"faults": rtu.Faults(), "stats": rtu.Stats()})
+	}
 }
 
 func faultHandler(plant *pumphouse.Plant, pump int) http.HandlerFunc {
