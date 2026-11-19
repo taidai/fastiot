@@ -46,6 +46,7 @@ var (
 		{kindPhone, regexp.MustCompile(`\b(?:1[3-9][0-9]{9}|0[0-9]{2,3}-[0-9]{7,8})\b`)},
 		{kindAccount, regexp.MustCompile(`\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b`)},
 		{kindCredential, regexp.MustCompile(`(?i)\b(?:password|passwd|pwd|secret|token|api[\s_-]?key|access[\s_-]?key|client[\s_-]?secret|bearer)\b\s*[:=：]\s*\S+`)},
+		{kindCredential, regexp.MustCompile(`(?i)\bauthorization\b\s*[:=]\s*\S+`)},
 		{kindCredential, regexp.MustCompile(`(?:密码|口令|密钥|令牌|凭据|账号|账户)\s*[:=：]\s*\S+`)},
 		{kindCredential, regexp.MustCompile(`(?i)\bsk-[a-z0-9]{16,}\b`)},
 		{kindSerial, regexp.MustCompile(`(?i)\b(?:s/n|sn|serial(?:\s*(?:no\.?|number))?)\b\s*[:#：]?\s*[a-z0-9][a-z0-9-]{5,}`)},
@@ -74,11 +75,37 @@ func ScanText(category string, item int, field, text string) []Finding {
 			}
 		}
 	}
+	hits = append(hits, patternHits(text, simplePatterns)...)
+	return findingsFromHits(category, item, field, text, hits)
+}
+
+// ScanCredentials reports credential-shaped content only. A project artifact
+// is scanned for secrets, not for the addresses, phone numbers and accounts
+// that decide what may leave for the model.
+func ScanCredentials(category, field, text string) []Finding {
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	patterns := make([]simplePattern, 0, len(simplePatterns))
 	for _, pattern := range simplePatterns {
+		if pattern.kind == kindCredential {
+			patterns = append(patterns, pattern)
+		}
+	}
+	return findingsFromHits(category, 0, field, text, patternHits(text, patterns))
+}
+
+func patternHits(text string, patterns []simplePattern) []textHit {
+	hits := []textHit{}
+	for _, pattern := range patterns {
 		for _, location := range pattern.re.FindAllStringIndex(text, -1) {
 			hits = append(hits, textHit{location[0], location[1], pattern.kind})
 		}
 	}
+	return hits
+}
+
+func findingsFromHits(category string, item int, field, text string, hits []textHit) []Finding {
 	if len(hits) == 0 {
 		return nil
 	}
