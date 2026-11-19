@@ -43,8 +43,8 @@ func cleanRequest() Request {
 		Instruction: "生成一个泵房画面，显示液位和压力，单位为 m 和 kPa。",
 		Context:     `{"title":"泵房画面","columns":3,"point_ids":["a","b"]}`,
 		Points: []PointSummary{
-			{Name: "水箱液位", Type: "number", Unit: "m"},
-			{Name: "出口压力", Type: "number", Unit: "kPa"},
+			{ID: "level-id", Name: "水箱液位", Type: "number", Unit: "m"},
+			{ID: "pressure-id", Name: "出口压力", Type: "number", Unit: "kPa"},
 		},
 	}
 }
@@ -97,7 +97,7 @@ func TestManifestListsThreeOutboundCategories(t *testing.T) {
 	if strings.Join(keys, ",") != "code,device_model,screenshots" {
 		t.Fatalf("categories = %v", keys)
 	}
-	if len(manifest.DeviceModel) != 2 || manifest.DeviceModel[0].Name != "水箱液位" {
+	if len(manifest.DeviceModel) != 2 || manifest.DeviceModel[0].Name != "水箱液位" || manifest.DeviceModel[0].ID != "level-id" {
 		t.Fatalf("device model = %+v", manifest.DeviceModel)
 	}
 	if len(manifest.Screenshots) != 1 || manifest.Screenshots[0].SendsPixels {
@@ -223,6 +223,9 @@ func TestMessagesExcludeLiveValuesAndPixels(t *testing.T) {
 	text := string(raw)
 	if !strings.Contains(text, "水箱液位") || !strings.Contains(text, "kPa") {
 		t.Fatalf("device model structure missing: %s", text)
+	}
+	if !strings.Contains(text, "id=level-id") || !strings.Contains(text, "id=pressure-id") {
+		t.Fatalf("point ids missing, so the model cannot bind anything: %s", text)
 	}
 	if !strings.Contains(text, "把压力卡片放大") {
 		t.Fatalf("screenshot annotation missing: %s", text)

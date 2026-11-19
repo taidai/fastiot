@@ -26,6 +26,7 @@ import (
 	"fastiot/internal/deepseek"
 	"fastiot/internal/ems/command"
 	"fastiot/internal/emsapi"
+	"fastiot/internal/genscreen"
 	"fastiot/internal/industry"
 )
 
@@ -44,6 +45,7 @@ type Handler struct {
 	localCommands      *command.Manager
 	opcua              *OpcuaManager
 	deepseek           *deepseek.Service
+	generatedScreens   *genscreen.Store
 	packages           atomic.Pointer[industry.Registry]
 
 	siteGoalMu    sync.Mutex
@@ -73,6 +75,7 @@ func New(nc *nats.Conn, users api.UserAuthority, ready *atomic.Bool) *Handler {
 		sessionTimeout:     30 * time.Minute,
 		maxSessions:        5,
 		localCommands:      command.New(nil, nil, nil, 0, 0),
+		generatedScreens:   genscreen.NewStore(32, 2*time.Hour),
 	}
 }
 
@@ -284,6 +287,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.login(w, r)
 		return
 	}
+	if frameParts := strings.Split(path, "/"); len(frameParts) == 3 && frameParts[0] == "generated-screens" && frameParts[2] == "frame" {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method_not_allowed")
+			return
+		}
+		h.generatedScreenFrame(w, r, frameParts[1])
+		return
+	}
 	identity, ok := h.authenticate(w, r)
 	if !ok {
 		return
@@ -355,6 +366,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.deepseekPreview(w, r, identity)
 	case path == "deepseek/generate" && r.Method == http.MethodPost:
 		h.deepseekGenerate(w, r, identity)
+	case path == "generated-screens/preview" && r.Method == http.MethodPost:
+		h.generatedScreenPreview(w, r, identity)
+	case len(parts) == 3 && parts[0] == "generated-screens" && parts[2] == "read" && r.Method == http.MethodPost:
+		h.generatedScreenRead(w, r, identity, parts[1])
+	case len(parts) == 3 && parts[0] == "generated-screens" && parts[2] == "write" && r.Method == http.MethodPost:
+		h.generatedScreenWrite(w, r, identity, parts[1])
+	case len(parts) == 3 && parts[0] == "generated-screens" && parts[2] == "diagnostics" && r.Method == http.MethodPost:
+		h.generatedScreenDiagnostics(w, r, identity, parts[1])
+	case len(parts) == 3 && parts[0] == "generated-screens" && parts[2] == "confirm" && r.Method == http.MethodPost:
+		h.generatedScreenConfirm(w, r, identity, parts[1])
 	case path == "alarm-events" && r.Method == http.MethodGet:
 		h.alarmOccurrenceEvents(w, r, identity)
 	case path == "alarm-stats" && r.Method == http.MethodGet:

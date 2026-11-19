@@ -237,6 +237,7 @@ export default function ScreenView({ token, snapshot, points, groups, alarms, is
 
     {aiOpen && <AiScreenPanel
       token={token}
+      nodeID={nodeID}
       pointIDs={(draft || config)?.point_ids || []}
       context={draft || config ? JSON.stringify(draft || config) : ""}
       onClose={() => setAiOpen(false)}

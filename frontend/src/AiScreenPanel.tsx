@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import { EmsButton, EmsOverlay, InlineNotice } from "./components/ems"
 import { request } from "./api"
+import GeneratedScreenPreview from "./GeneratedScreenPreview"
 
 type Status = { configured: boolean; model: string }
 type Finding = {
@@ -17,7 +18,7 @@ type Finding = {
 type Manifest = {
   categories: { key: string; label: string; summary: string }[]
   code: { instruction: string; context?: string }
-  device_model: { name: string; type: string; unit?: string }[]
+  device_model: { id?: string; name: string; type: string; unit?: string }[]
   screenshots: { name: string; media_type: string; bytes: number; width?: number; height?: number; annotation?: string; reviewed: boolean; sends_pixels: boolean; invalid?: boolean }[]
   findings: Finding[]
   block_reasons?: string[]
@@ -58,8 +59,9 @@ function readFile(file: File): Promise<string> {
   })
 }
 
-export default function AiScreenPanel({ token, pointIDs, context, onClose }: {
+export default function AiScreenPanel({ token, nodeID, pointIDs, context, onClose }: {
   token: string
+  nodeID: string
   pointIDs: string[]
   context: string
   onClose: () => void
@@ -73,6 +75,7 @@ export default function AiScreenPanel({ token, pointIDs, context, onClose }: {
   const [content, setContent] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
+  const [previewing, setPreviewing] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -152,10 +155,17 @@ export default function AiScreenPanel({ token, pointIDs, context, onClose }: {
   return <EmsOverlay open title="AI 生成画面" variant="drawer" busy={busy} onClose={onClose}
     actions={<>
       <EmsButton variant="secondary" disabled={busy} onClick={onClose}>关闭</EmsButton>
-      <EmsButton variant="secondary" disabled={busy || !instruction.trim()} onClick={() => void runPreview()}>预览将发送的内容</EmsButton>
-      <EmsButton disabled={!canGenerate} busy={busy} busyLabel="生成中…" onClick={() => void generate()}>确认并生成</EmsButton>
+      {previewing
+        ? <EmsButton variant="secondary" onClick={() => setPreviewing(false)}>返回生成</EmsButton>
+        : <>
+          <EmsButton variant="secondary" disabled={busy || !instruction.trim()} onClick={() => void runPreview()}>预览将发送的内容</EmsButton>
+          <EmsButton disabled={!canGenerate} busy={busy} busyLabel="生成中…" onClick={() => void generate()}>确认并生成</EmsButton>
+          <EmsButton disabled={!content} onClick={() => setPreviewing(true)}>打开隔离预览</EmsButton>
+        </>}
     </>}>
-    <div className="flex flex-col gap-4">
+    {previewing && content
+      ? <GeneratedScreenPreview token={token} nodeID={nodeID} pointIDs={pointIDs} source={content} />
+      : <div className="flex flex-col gap-4">
       {status && (status.configured
         ? <InlineNotice tone="info">使用自备 DeepSeek 凭据（模型 {status.model || "deepseek-chat"}），调用费用由你的凭据承担；平台不内置、不代付。</InlineNotice>
         : <InlineNotice tone="danger">尚未配置 DeepSeek 凭据。请在该实例的环境变量中设置 <code>DEEPSEEK_API_KEY</code>（可选 <code>DEEPSEEK_MODEL</code>、<code>DEEPSEEK_BASE_URL</code>）后重启。凭据不写入页面、日志或项目包。</InlineNotice>)}
@@ -202,7 +212,7 @@ export default function AiScreenPanel({ token, pointIDs, context, onClose }: {
           </div>}
           {category.key === "device_model" && <ul className="m-0 mt-2 flex flex-col gap-1 p-0">
             {preview.device_model.length === 0 && <li className="text-ems-muted">没有选择点位</li>}
-            {preview.device_model.map((point, index) => <li key={index}>{point.name} · {point.type}{point.unit ? ` · ${point.unit}` : ""}</li>)}
+            {preview.device_model.map((point, index) => <li key={index}>{point.name} · {point.type}{point.unit ? ` · ${point.unit}` : ""}{point.id ? <span className="text-xs text-ems-muted"> · id {point.id}</span> : null}</li>)}
           </ul>}
           {category.key === "screenshots" && <ul className="m-0 mt-2 flex flex-col gap-1 p-0">
             {preview.screenshots.length === 0 && <li className="text-ems-muted">未附加截图</li>}
@@ -235,6 +245,6 @@ export default function AiScreenPanel({ token, pointIDs, context, onClose }: {
         <strong>模型返回</strong>
         <pre className="m-0 mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs">{content}</pre>
       </section>}
-    </div>
+    </div>}
   </EmsOverlay>
 }

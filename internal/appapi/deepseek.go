@@ -138,6 +138,7 @@ func (h *Handler) deepseekPoints(w http.ResponseWriter, identity Identity, ids [
 		}
 		unit, _ := node.Points.Text(data.PointTypeUnits, "")
 		summaries = append(summaries, deepseek.PointSummary{
+			ID:   id,
 			Name: name,
 			Type: deepseekPointType(node),
 			Unit: unit,

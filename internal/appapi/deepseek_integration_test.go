@@ -131,6 +131,9 @@ func TestDeepSeekOutboundPreviewAndGenerate(t *testing.T) {
 	if len(manifest.Categories) != 3 || len(manifest.DeviceModel) != 1 || manifest.DeviceModel[0].Name != "水箱液位" {
 		t.Fatalf("manifest wrong: %s", raw)
 	}
+	if manifest.DeviceModel[0].ID != pointID {
+		t.Fatalf("manifest point id = %q, want %q", manifest.DeviceModel[0].ID, pointID)
+	}
 	if manifest.DeviceModel[0].Type != "number" {
 		t.Fatalf("point type = %q", manifest.DeviceModel[0].Type)
 	}
@@ -201,7 +204,7 @@ func TestDeepSeekOutboundPreviewAndGenerate(t *testing.T) {
 	if *stub.lastAuth != "Bearer test-key" {
 		t.Fatalf("authorization = %q", *stub.lastAuth)
 	}
-	for _, want := range []string{instruction, "水箱液位", "把卡片放大"} {
+	for _, want := range []string{instruction, "水箱液位", "把卡片放大", "id=" + pointID} {
 		if !strings.Contains(*stub.lastBody, want) {
 			t.Fatalf("outbound body missing %q: %s", want, *stub.lastBody)
 		}
