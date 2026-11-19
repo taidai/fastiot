@@ -19,6 +19,7 @@ import (
 	"fastiot/internal/ems/bridge"
 	"fastiot/internal/ems/channel"
 	"fastiot/internal/ems/framelog"
+	"fastiot/internal/ems/historyquery"
 	"fastiot/internal/ems/modbusrt"
 	"fastiot/internal/ems/observation"
 	"fastiot/internal/ems/profile"
@@ -104,6 +105,17 @@ type Handler struct {
 	BeginAlarmConfiguration func() func()
 	// RestartChannel reopens one channel transport.
 	RestartChannel func(string) error
+	// Authorize resolves the product authorization declaration for a request.
+	// Tests replace it to prove undeclared routes are refused.
+	Authorize func(*http.Request) (authz.Requirement, bool)
+}
+
+// authorize resolves the route declaration, defaulting to the product table.
+func (h *Handler) authorize(r *http.Request) (authz.Requirement, bool) {
+	if h.Authorize != nil {
+		return h.Authorize(r)
+	}
+	return authz.Required(r)
 }
 
 // ChannelConfigurator persists channel configuration as product nodes.
@@ -142,26 +154,31 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, access Acces
 		writeError(w, http.StatusNotFound, "not_found")
 		return
 	}
-	if route, ok := authz.Required(r); ok {
-		if !route.Allowed(access.Admin, access.action) {
-			writeError(w, http.StatusForbidden, route.Reason)
-			return
-		}
-		if route.UnknownTarget != nil && access.AllowNode != nil && !access.Admin {
-			writeError(w, route.UnknownTarget.Status, route.UnknownTarget.Reason)
-			return
-		}
-		for _, target := range route.Targets {
-			if target.Alarm {
-				if !h.alarmTarget(w, access, target.ID) {
-					return
-				}
-				continue
-			}
-			if !access.allows(target.ID) {
-				writeError(w, target.Status, target.Reason)
+	route, declared := h.authorize(r)
+	if !declared {
+		// Fail closed: a route this handler serves but the product
+		// authorization has not declared is never dispatched.
+		writeError(w, http.StatusNotFound, "not_found")
+		return
+	}
+	if !route.Allowed(access.Admin, access.action) {
+		writeError(w, http.StatusForbidden, route.Reason)
+		return
+	}
+	if route.UnknownTarget != nil && access.AllowNode != nil && !access.Admin {
+		writeError(w, route.UnknownTarget.Status, route.UnknownTarget.Reason)
+		return
+	}
+	for _, target := range route.Targets {
+		if target.Alarm {
+			if !h.alarmTarget(w, access, target.ID) {
 				return
 			}
+			continue
+		}
+		if !access.allows(target.ID) {
+			writeError(w, target.Status, target.Reason)
+			return
 		}
 	}
 	if h.BeginAlarmConfiguration != nil && ((path == "ems/channels" && r.Method == http.MethodPost) || (strings.HasPrefix(path, "ems/channels/") && r.Method == http.MethodDelete)) {
@@ -978,6 +995,12 @@ func (h *Handler) closeAlarm(w http.ResponseWriter, access Access, id string) {
 	writeJSON(w, alarm)
 }
 
+const (
+	historyDefaultLimit = 500
+	historyQueryLimit   = historyquery.PageLimit
+	historyExportLimit  = historyquery.ExportLimit
+)
+
 func (h *Handler) history(w http.ResponseWriter, r *http.Request, access Access, export bool) {
 	deviceID := r.URL.Query().Get("device_id")
 	pointID := r.URL.Query().Get("point_id")
@@ -995,16 +1018,23 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request, access Access,
 		writeError(w, http.StatusBadRequest, "invalid_end")
 		return
 	}
-	limit := 500
+	limit := historyDefaultLimit
 	if text := r.URL.Query().Get("limit"); text != "" {
 		limit, err = strconv.Atoi(text)
-		if err != nil || limit < 1 || limit > 5000 {
+		if err != nil || limit < 1 || limit > historyQueryLimit {
 			writeError(w, http.StatusBadRequest, "invalid_limit")
 			return
 		}
 	}
-	samples := h.Service.History.Query(deviceID, pointID, start, end, limit)
 	if export {
+		// The export always covers the whole window; a partial file is never a
+		// valid export, so an over-limit window is refused before any CSV is
+		// written.
+		samples := h.Service.History.Query(deviceID, pointID, start, end, historyExportLimit+1)
+		if len(samples) > historyExportLimit {
+			writeError(w, http.StatusBadRequest, historyquery.ErrExportLimitExceeded.Error())
+			return
+		}
 		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 		w.Header().Set("Content-Disposition", `attachment; filename="history.csv"`)
 		writer := csv.NewWriter(w)
@@ -1018,6 +1048,11 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request, access Access,
 		writer.Flush()
 		return
 	}
+	samples := h.Service.History.Query(deviceID, pointID, start, end, limit+1)
+	truncated := len(samples) > limit
+	if truncated {
+		samples = samples[len(samples)-limit:]
+	}
 	type entry struct {
 		Value      valueDTO  `json:"value"`
 		Quality    string    `json:"quality"`
@@ -1029,7 +1064,9 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request, access Access,
 			Value: toDTO(sample.Value), Quality: sample.Quality.String(), SourceTime: sample.SourceTime,
 		})
 	}
-	writeJSON(w, map[string]any{"device_id": deviceID, "point_id": pointID, "samples": entries})
+	writeJSON(w, map[string]any{
+		"device_id": deviceID, "point_id": pointID, "samples": entries, "truncated": truncated,
+	})
 }
 
 func parseTime(text string) (time.Time, error) {

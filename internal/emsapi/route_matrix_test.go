@@ -3,6 +3,7 @@ package emsapi
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -76,5 +77,60 @@ func TestChannelCreateLargeBodyKeepsScopedAdminJSONError(t *testing.T) {
 				t.Errorf("large body parent %s = %d %s", parent, response.Code, response.Body.String())
 			}
 		})
+	}
+}
+
+// TestEMSUndeclaredRouteIsRejected pins the fail-closed dispatch rule: a route
+// the product authorization has not declared is never served, and admin does
+// not bypass the declaration.
+func TestEMSUndeclaredRouteIsRejected(t *testing.T) {
+	service := runtime.NewService(nil, time.Minute, time.Second, 10)
+	t.Cleanup(service.Close)
+	handler := New(service, time.Minute)
+	handler.Authorize = func(*http.Request) (authz.Requirement, bool) { return authz.Requirement{}, false }
+
+	response := call(t, handler, Access{Admin: true}, http.MethodGet, "/api/ems/state", "")
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("undeclared route = %d %s", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), `"values"`) {
+		t.Fatalf("undeclared route reached its handler: %s", response.Body.String())
+	}
+}
+
+// TestEMSServedRoutesAreDeclared keeps the dispatch switch and the
+// authorization table in sync: every route this handler serves, including the
+// login-only reads, is explicitly declared.
+func TestEMSServedRoutesAreDeclared(t *testing.T) {
+	served := []struct{ method, path string }{
+		{http.MethodGet, "/api/ems/quality"},
+		{http.MethodGet, "/api/ems/frames"},
+		{http.MethodDelete, "/api/ems/frames"},
+		{http.MethodGet, "/api/ems/state"},
+		{http.MethodGet, "/api/ems/channels"},
+		{http.MethodPost, "/api/ems/channels"},
+		{http.MethodDelete, "/api/ems/channels/c1"},
+		{http.MethodPost, "/api/ems/channels/c1/restart"},
+		{http.MethodGet, "/api/ems/alarms"},
+		{http.MethodPost, "/api/ems/alarms/a1/ack"},
+		{http.MethodPost, "/api/ems/alarms/a1/close"},
+		{http.MethodPost, "/api/ems/alarms/a1/maintenance"},
+		{http.MethodDelete, "/api/ems/alarms/a1/maintenance"},
+		{http.MethodGet, "/api/ems/history?device_id=d1&point_id=p1"},
+		{http.MethodGet, "/api/ems/history/export?device_id=d1&point_id=p1"},
+		{http.MethodGet, "/api/ems/runtime"},
+		{http.MethodPost, "/api/ems/scan"},
+		{http.MethodPost, "/api/ems/identify"},
+		{http.MethodGet, "/api/ems/profiles"},
+		{http.MethodGet, "/api/ems/profiles/modbus-generic/points.csv"},
+		{http.MethodPost, "/api/ems/allocation/preview"},
+		{http.MethodPost, "/api/ems/acceptance/run"},
+		{http.MethodGet, "/api/ems/acceptance/latest"},
+	}
+	for _, route := range served {
+		request := httptest.NewRequest(route.method, route.path, nil)
+		if _, ok := authz.Required(request); !ok {
+			t.Errorf("%s %s is served but not declared by authz", route.method, route.path)
+		}
 	}
 }
