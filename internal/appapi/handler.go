@@ -23,6 +23,7 @@ import (
 	"fastiot/internal/authz"
 	"fastiot/internal/calculation"
 	"fastiot/internal/decision"
+	"fastiot/internal/deepseek"
 	"fastiot/internal/ems/command"
 	"fastiot/internal/emsapi"
 )
@@ -41,6 +42,7 @@ type Handler struct {
 	ems                *emsapi.Handler
 	localCommands      *command.Manager
 	opcua              *OpcuaManager
+	deepseek           *deepseek.Service
 
 	siteGoalMu    sync.Mutex
 	siteGoalCache map[string]siteGoalEntry
@@ -326,6 +328,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.historySettings(w, r, identity)
 	case path == "profile-verifications" && r.Method == http.MethodGet:
 		h.profileVerifications(w, r, identity)
+	case path == "deepseek/status" && r.Method == http.MethodGet:
+		h.deepseekStatus(w)
+	case path == "deepseek/preview" && r.Method == http.MethodPost:
+		h.deepseekPreview(w, r, identity)
+	case path == "deepseek/generate" && r.Method == http.MethodPost:
+		h.deepseekGenerate(w, r, identity)
 	case path == "alarm-events" && r.Method == http.MethodGet:
 		h.alarmOccurrenceEvents(w, r, identity)
 	case path == "alarm-stats" && r.Method == http.MethodGet:

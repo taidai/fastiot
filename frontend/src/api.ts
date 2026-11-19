@@ -183,6 +183,11 @@ const errorTexts: Record<string, string> = {
   unknown_profile: "Profile 不存在，请重新选择",
   slots_must_be_96: "计划必须是 96 个时段",
   slot_out_of_range: "计划值超出允许范围",
+  deepseek_not_configured: "尚未配置 DeepSeek 凭据；本次未发送任何内容",
+  outbound_blocked: "出站内容含疑似敏感的现场信息，已阻止发送",
+  confirmation_required: "请先核对出站清单并确认后再生成",
+  model_unavailable: "模型调用失败，请检查凭据与网关后重试",
+  invalid_request: "请求内容不合法，或截图超过大小上限",
 }
 
 export function errorMessage(code: string, status: number): string {

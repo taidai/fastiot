@@ -30,6 +30,7 @@ import (
 	"fastiot/internal/appapi"
 	"fastiot/internal/audit"
 	"fastiot/internal/decision"
+	"fastiot/internal/deepseek"
 	"fastiot/internal/ems/alarmwatch"
 	"fastiot/internal/ems/bridge"
 	"fastiot/internal/ems/channel"
@@ -142,6 +143,7 @@ func Start(ctx context.Context, cfg Config) (*App, error) {
 			handler.SetAudit(audit.New(filepath.Join(cfg.DataDir, "audit.jsonl")))
 			handler.SetDataDir(cfg.DataDir)
 			handler.SetSessionPolicy(envMinutes("FASTEMS_SESSION_TIMEOUT_MINUTES", 30), envCount("FASTEMS_MAX_SESSIONS", 5))
+			handler.SetDeepSeek(deepseek.NewService(deepseek.FromEnv(os.Getenv)))
 			emsHandler.PersistMaintenance = handler.PersistAlarmMaintenance
 			handler.SetEMS(emsHandler)
 			calculationHandler.Store(handler)
