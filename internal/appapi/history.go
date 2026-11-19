@@ -33,11 +33,18 @@ func parseHistoryTime(text string) (time.Time, error) {
 
 // historyResolver resolves the product node a history request names. Node
 // lookup stays in the HTTP layer because it is a product-store concern.
-type historyResolver struct{ h *Handler }
+type historyResolver struct {
+	nodes func(nodeID string) ([]data.NodeEdge, error)
+}
 
 func (r historyResolver) Resolve(id string) (historyquery.Node, error) {
-	nodes, err := client.GetNodes(r.h.nc, "all", id, "", false)
-	if err != nil || len(nodes) == 0 {
+	nodes, err := r.nodes(id)
+	if err != nil {
+		// A backend failure is not a permission decision: report it as
+		// unavailable so the HTTP layer answers 503 and the caller retries.
+		return historyquery.Node{}, historyquery.ErrUnavailable
+	}
+	if len(nodes) == 0 {
 		return historyquery.Node{}, historyquery.ErrForbidden
 	}
 	node := nodes[0]
@@ -52,7 +59,9 @@ func (r historyResolver) Resolve(id string) (historyquery.Node, error) {
 // historyQuery wires the shared query to the product history and runtime
 // adapters available to this handler.
 func (h *Handler) historyQuery() *historyquery.Query {
-	query := &historyquery.Query{Nodes: historyResolver{h: h}}
+	query := &historyquery.Query{Nodes: historyResolver{nodes: func(id string) ([]data.NodeEdge, error) {
+		return client.GetNodes(h.nc, "all", id, "", false)
+	}}}
 	if reader, ok := h.users.(historyquery.SIOT); ok {
 		query.SIOT = reader
 	}
@@ -120,6 +129,8 @@ func historyAggregation(value string) (time.Duration, error) {
 
 func writeHistoryError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, historyquery.ErrUnavailable):
+		writeError(w, http.StatusServiceUnavailable, err.Error())
 	case errors.Is(err, historyquery.ErrForbidden),
 		errors.Is(err, historyquery.ErrNotSupported),
 		errors.Is(err, historyquery.ErrTimeCursorSaturated),
@@ -183,7 +194,7 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request, identity Ident
 		w.Header().Set("X-History-Limit", strconv.Itoa(historyExportLimit))
 		w.Header().Set("Content-Disposition", `attachment; filename="history.csv"`)
 		writer := csv.NewWriter(w)
-		if err := writer.Write([]string{"点位ID", "设备ID", "观测时间", "接收时间", "桶结束", "质量", "数值", "文本", "来源", "单位", "聚合", "样本数", "种类", "原因"}); err != nil {
+		if err := writer.Write([]string{"点位ID", "设备ID", "观测时间", "接收时间", "桶结束", "质量", "数值", "文本", "来源", "来源标识", "单位", "聚合", "样本数", "种类", "原因"}); err != nil {
 			return
 		}
 		for _, result := range results {
@@ -202,7 +213,7 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request, identity Ident
 				if !record.BucketEnd.IsZero() {
 					bucketEnd = record.BucketEnd.Format(time.RFC3339Nano)
 				}
-				_ = writer.Write([]string{record.PointID, record.DeviceID, at, received, bucketEnd, record.Quality, value, text, record.Source, record.Unit, record.Aggregate, strconv.Itoa(record.SampleCount), record.Kind, record.Reason})
+				_ = writer.Write([]string{record.PointID, record.DeviceID, at, received, bucketEnd, record.Quality, value, text, record.Source, record.Origin, record.Unit, record.Aggregate, strconv.Itoa(record.SampleCount), record.Kind, record.Reason})
 			}
 		}
 		writer.Flush()
@@ -212,6 +223,8 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request, identity Ident
 	for _, result := range results {
 		legacy = append(legacy, result.Points...)
 	}
+	// total_matched is the number of records matching the request before the
+	// pagination cursor; /history and /history/export report the same total.
 	response := map[string]any{"results": results, "start": start, "end": end, "aggregate": r.URL.Query().Get("aggregate"), "total_matched": matched}
 	if len(ids) == 1 {
 		response["node_id"] = ids[0]
