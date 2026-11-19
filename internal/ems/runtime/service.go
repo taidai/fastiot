@@ -1,3 +1,5 @@
+// Package runtime wires the semantic core to channels: periodic polling,
+// latest-value state, command writes and readback confirmation.
 package runtime
 
 import (

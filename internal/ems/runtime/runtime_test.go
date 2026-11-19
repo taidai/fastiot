@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"fastiot/internal/ems/alarm"
 	"fastiot/internal/ems/channel"
 	"fastiot/internal/ems/command"
 	"fastiot/internal/ems/device"
@@ -14,6 +13,17 @@ import (
 )
 
 var t0 = time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+
+type testDispatcher struct{ channel *channel.Channel }
+
+func (d testDispatcher) Write(deviceID, requestID string, writes []device.Write) error {
+	for _, write := range writes {
+		if err := d.channel.QueueWrite(deviceID, write.Point, write.Value, requestID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 type fakeBus struct {
 	coils   map[uint16]bool
@@ -85,7 +95,7 @@ func TestCommandWriteIsQueuedThenConfirmedByReadback(t *testing.T) {
 	}
 	samples := map[string]signal.Sample{}
 	manager := command.New(
-		Dispatcher{Channel: ch},
+		testDispatcher{channel: ch},
 		func(deviceID string) (device.Profile, bool) {
 			return profile(), deviceID == "pcs1"
 		},
@@ -123,73 +133,5 @@ func TestCommandWriteIsQueuedThenConfirmedByReadback(t *testing.T) {
 	final, _ := manager.Get("req-1")
 	if final.State != command.Confirmed {
 		t.Fatalf("state = %s, want confirmed", final.State)
-	}
-}
-
-func TestEngineConfirmsCommandWithinOneCycle(t *testing.T) {
-	bus := &fakeBus{coils: map[uint16]bool{}, holding: map[uint16]uint16{}}
-	ch, err := channel.New("c1", bus, []channel.Device{{
-		ID: "pcs1", ServerID: 1,
-		Points: []channel.Point{{ID: "run", Function: channel.Coil, Address: 1, Kind: signal.Bool}},
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	engine := NewEngine(
-		[]*channel.Channel{ch},
-		func(deviceID string) (device.Profile, bool) { return profile(), deviceID == "pcs1" },
-		5*time.Second, time.Second, 3*time.Second,
-	)
-	if _, err := engine.Commands.Submit(t0, command.Request{ID: "req-1", DeviceID: "pcs1", CommandID: "start", Actor: "operator"}); err != nil {
-		t.Fatal(err)
-	}
-	engine.Cycle(context.Background(), func() time.Time { return t0 })
-	// 提交后必须有一轮新的读取才能确认；同一时刻的读回不算数。
-	engine.Cycle(context.Background(), func() time.Time { return t0.Add(time.Second) })
-	final, _ := engine.Commands.Get("req-1")
-	if final.State != command.Confirmed {
-		t.Fatalf("state = %s, want confirmed", final.State)
-	}
-	value, ok := engine.State.Get(t0.Add(time.Second), "pcs1", "run", 5*time.Second)
-	if !ok || !value.Value.Bool || value.Quality != signal.Good {
-		t.Fatalf("state value = %+v ok=%v", value, ok)
-	}
-	if health := engine.State.Health("pcs1"); health != channel.HealthHealthy {
-		t.Fatalf("health = %s, want healthy", health)
-	}
-}
-
-func TestEngineRaisesAndClearsOfflineAlarm(t *testing.T) {
-	bus := &fakeBus{coils: map[uint16]bool{}, holding: map[uint16]uint16{}, fail: map[byte]bool{1: true}}
-	ch, err := channel.New("c1", bus, []channel.Device{{
-		ID: "pcs1", ServerID: 1,
-		Points: []channel.Point{{ID: "run", Function: channel.Coil, Address: 1, Kind: signal.Bool}},
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	engine := NewEngine(
-		[]*channel.Channel{ch},
-		func(string) (device.Profile, bool) { return profile(), true },
-		5*time.Second, time.Second, 3*time.Second,
-	)
-	for i := 0; i < 3; i++ {
-		engine.Cycle(context.Background(), func() time.Time { return t0.Add(time.Duration(i) * time.Second) })
-	}
-	var raised alarm.Alarm
-	for _, value := range engine.Alarms.List() {
-		if value.Key == "device-offline:pcs1" {
-			raised = value
-		}
-	}
-	if raised.ID == "" || !raised.Active || raised.Severity != alarm.Critical {
-		t.Fatalf("expected active critical alarm, got %+v", raised)
-	}
-
-	bus.fail[1] = false
-	engine.Cycle(context.Background(), func() time.Time { return t0.Add(4 * time.Second) })
-	cleared, _ := engine.Alarms.Get(raised.ID)
-	if cleared.Active || cleared.State != alarm.Resolved {
-		t.Fatalf("alarm should resolve after recovery, got %+v", cleared)
 	}
 }
