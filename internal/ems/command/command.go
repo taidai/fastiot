@@ -223,22 +223,36 @@ func (m *Manager) submitLocked(now time.Time, request Request) (Outcome, error) 
 
 	outcome := Outcome{
 		RequestID: request.ID, DeviceID: request.DeviceID, CommandID: request.CommandID,
-		Actor: request.Actor, State: Executing, StartedAt: now, UpdatedAt: now,
+		Actor: request.Actor, State: Accepted, StartedAt: now, UpdatedAt: now,
 		Writes: writes, Readback: readback,
 		DispatchID: request.DispatchID, Source: request.Source, Stage: request.Stage,
 		FallbackOf: request.FallbackOf, Fingerprint: fingerprint, SafeFallback: request.SafeFallback,
 	}
 	if m.Guard != nil {
-		verdict := m.Guard(GuardRequest{DeviceID: request.DeviceID, Point: request.Point, Writes: writes, Automatic: request.Source != "manual"})
-		if verdict.Decision == "refused" {
-			outcome.State = Failed
-			outcome.Reason = verdict.Reason
-			m.store(outcome)
-			return outcome, nil
+		for i := range writes {
+			original := writes[i].Value
+			verdict := m.Guard(GuardRequest{
+				DeviceID: request.DeviceID, Point: writes[i].Point, Writes: []device.Write{writes[i]},
+				Automatic: request.Source != "" && request.Source != "manual",
+			})
+			if verdict.Decision == "refused" {
+				outcome.State = Failed
+				outcome.Reason = verdict.Reason
+				m.store(outcome)
+				return outcome, nil
+			}
+			if verdict.Decision != "clamped" {
+				continue
+			}
+			writes[i].Value = signal.Num(verdict.Value)
+			for j := range readback {
+				if readback[j].Point == writes[i].Point && readback[j].Op == "eq" && readback[j].Value == original {
+					readback[j].Value = writes[i].Value
+				}
+			}
 		}
-		if verdict.Decision == "clamped" && len(writes) > 0 {
-			writes[0].Value = signal.Num(verdict.Value)
-		}
+		outcome.Writes = writes
+		outcome.Readback = readback
 	}
 	if m.Writer == nil {
 		outcome.State = Failed
@@ -387,7 +401,7 @@ func (m *Manager) Tick(now time.Time) {
 	fallbacks := []pendingFallback{}
 	for _, id := range m.order {
 		outcome := m.orders[id]
-		if outcome.State != Executing {
+		if outcome.State != Accepted && outcome.State != Executing {
 			continue
 		}
 		timeout := m.Default

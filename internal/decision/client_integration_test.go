@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"fastiot/internal/ems/safety"
 	"github.com/nats-io/nats.go"
 	siotclient "github.com/simpleiot/simpleiot/client"
 	"github.com/simpleiot/simpleiot/data"
@@ -251,6 +252,50 @@ func waitForValue(t *testing.T, nc *nats.Conn, nodeID string, want float64) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("%s valueSet = %v, want %v", nodeID, pointValue(t, nc, nodeID, data.PointTypeValueSet), want)
+}
+
+func TestDecisionSafetyConditionBlocksAutomaticWrite(t *testing.T) {
+	opts := server.TestServerOptions
+	opts.ID = "easyems-decision-safety-test"
+	opts.DataDir = filepath.Join(t.TempDir(), "data")
+	opts.NatsPort = 19710
+	opts.NatsServer = "nats://127.0.0.1:19710"
+	opts.HTTPPort = "9702"
+	opts.NatsMonitorPort = 19712
+	opts.NatsWSPort = 19713
+	opts.NatsMQTTPort = 0
+	nc, root, stopServer, err := server.TestServerOpts(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopServer()
+	_, stopManager := runManager(t, nc)
+	defer stopManager()
+	safetyConfig := marshal(t, safety.Config{Conditions: []safety.ConditionConfig{{PointID: "occupied", Operator: "eq", Value: 0, Kind: "bool"}}})
+	fan := data.NodeEdge{ID: "fan", Type: data.NodeTypeVariable, Parent: root.ID, Points: data.Points{
+		data.NewPointFloat(data.PointTypeValue, "", 0),
+		data.NewPointString("easyemsSafety", "", safetyConfig),
+	}}
+	if err := siotclient.SendNode(nc, fan, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := siotclient.SendNode(nc, data.NodeEdge{ID: "occupied", Type: data.NodeTypeVariable, Parent: root.ID}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	row := Row{ID: "occupied", Conditions: []Condition{{PointID: "occupied", Operator: "eq", Value: 1}}, Actions: []Action{{ActionID: "start", Value: 1}}}
+	document := Document{Table: Table{Rows: []Row{row}}, Bindings: BindingSet{
+		Points:  map[string]Target{"occupied": {NodeID: "occupied", PointType: data.PointTypeValue}},
+		Actions: map[string]Target{"start": {NodeID: "fan", PointType: data.PointTypeValueSet}},
+	}}
+	encoded := marshal(t, document)
+	sendFloat(t, nc, "occupied", data.PointTypeValue, 1)
+	if err := siotclient.SendNodeType(nc, DecisionTable{ID: "safety-policy", Parent: root.ID, Applied: encoded, Enabled: true}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if got := pointValue(t, nc, "fan", data.PointTypeValueSet); got != -1 {
+		t.Fatalf("unsafe automatic output was written: %v", got)
+	}
 }
 
 func marshal(t *testing.T, value any) string {

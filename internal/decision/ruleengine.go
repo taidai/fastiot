@@ -95,6 +95,12 @@ func pointSignal(point data.Point) (signal.Value, error) {
 	return signal.Num(value), nil
 }
 
+// commandSafety is the shared verdict used by automatic actions before any
+// protocol or SIOT write. Manual takeover blocks automatic output only.
+func commandSafety(now time.Time, spec *safety.Output, value float64, samples map[string]signal.Sample) safety.Verdict {
+	return safety.Evaluate(safety.Request{Requested: signal.Num(value), Spec: spec, Samples: samples, Automatic: true}, now)
+}
+
 // targetLimiter enforces product safety and manual takeover before an action
 // leaves the engine.
 type targetLimiter struct {
@@ -126,12 +132,14 @@ func (l targetLimiter) Limit(now time.Time, output string, requested signal.Valu
 		if l.values != nil {
 			samples = *l.values
 		}
-		limiter := safety.Limiter{
-			MaxAge:  15 * time.Second,
-			Outputs: map[string]safety.Output{output: spec},
-			Samples: samples,
+		verdict := commandSafety(now, &spec, requested.Num, samples)
+		if verdict.Decision == "refused" {
+			return rule.LimitResult{Blocked: true, Reason: verdict.Reason}
 		}
-		return limiter.Limit(now, output, requested)
+		if verdict.Decision == "clamped" {
+			return rule.LimitResult{Value: signal.Num(verdict.Value), Reason: verdict.Reason}
+		}
+		return rule.LimitResult{Value: requested}
 	}
 	return rule.LimitResult{Value: requested}
 }

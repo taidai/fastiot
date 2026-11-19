@@ -18,6 +18,7 @@ type Request struct {
 	Disabled  bool
 	ReadOnly  bool
 	Samples   map[string]signal.Sample
+	MaxAge    time.Duration
 }
 
 type Verdict struct {
@@ -41,12 +42,19 @@ func Evaluate(request Request, now time.Time) Verdict {
 		return Verdict{Decision: "allowed", Value: value}
 	}
 	spec := request.Spec
+	if spec.Kind != request.Requested.Kind {
+		return Verdict{Decision: "refused", Value: value, Reason: fmt.Sprintf("output %s expects %s but got %s", request.Output, spec.Kind, request.Requested.Kind)}
+	}
+	maxAge := request.MaxAge
+	if maxAge <= 0 {
+		maxAge = 15 * time.Second
+	}
 	for _, input := range spec.Requires {
 		sample, found := request.Samples[input]
 		if !found {
 			return Verdict{Decision: "refused", Value: value, Reason: "required input " + input + " is missing"}
 		}
-		if usable, why := sample.Usable(now, 15*time.Second); !usable {
+		if usable, why := sample.Usable(now, maxAge); !usable {
 			return Verdict{Decision: "refused", Value: value, Reason: "required input " + input + " is not usable: " + why}
 		}
 	}
@@ -55,7 +63,7 @@ func Evaluate(request Request, now time.Time) Verdict {
 		if !found {
 			return Verdict{Decision: "refused", Value: value, Reason: "safety input " + condition.Input + " is missing"}
 		}
-		if usable, why := sample.Usable(now, 15*time.Second); !usable {
+		if usable, why := sample.Usable(now, maxAge); !usable {
 			return Verdict{Decision: "refused", Value: value, Reason: "safety input " + condition.Input + " is not usable: " + why}
 		}
 		coerced, err := signal.Coerce(sample.Value, condition.Value.Kind)

@@ -5,9 +5,32 @@ import (
 	"time"
 
 	"fastiot/internal/ems/channel"
+	"fastiot/internal/ems/command"
+	"fastiot/internal/ems/safety"
 	"fastiot/internal/ems/signal"
 	"fastiot/internal/ems/state"
 )
+
+func TestCommandRefusalReasonRaisesExistingAlarm(t *testing.T) {
+	service := NewService(nil, time.Minute, time.Second, 100)
+	defer service.Close()
+	service.Commands().Guard = func(command.GuardRequest) safety.Verdict {
+		return safety.Verdict{Decision: "refused", Reason: "manual_takeover"}
+	}
+	now := time.Now()
+	outcome, err := service.Commands().Submit(now, command.Request{ID: "blocked", DeviceID: "bus/1", Point: "power", Value: signal.Num(10)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.State != command.Failed {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	service.updateCommandAlarms(now)
+	alarms := service.Alarms.List()
+	if len(alarms) != 1 || alarms[0].Key != "command-failed:blocked" || alarms[0].Detail != "manual_takeover" {
+		t.Fatalf("alarms = %+v", alarms)
+	}
+}
 
 func waitFor(t *testing.T, condition func() bool) {
 	t.Helper()

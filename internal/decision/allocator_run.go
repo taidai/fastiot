@@ -11,6 +11,8 @@ import (
 	"github.com/simpleiot/simpleiot/data"
 
 	"fastiot/internal/ems/alloc"
+	"fastiot/internal/ems/safety"
+	"fastiot/internal/ems/signal"
 )
 
 // allocationRun is one output's current dispatch. Steps are deliberately
@@ -237,6 +239,20 @@ func (r *allocationRun) step(nc *nats.Conn, now time.Time) {
 				r.fail("failed", step, err.Error())
 				return
 			}
+			spec, samples, err := allocationSafety(nc, target)
+			if err != nil {
+				r.fail("failed", step, "invalid safety config")
+				return
+			}
+			verdict := commandSafety(now, spec, step.share.Setpoint, samples)
+			if verdict.Decision == "refused" {
+				r.fail("failed", step, verdict.Reason)
+				return
+			}
+			if verdict.Decision == "clamped" {
+				step.share.Setpoint = verdict.Value
+				r.updateShare(*step)
+			}
 			point := data.NewPointFloat(target.PointType, target.Key, step.share.Setpoint)
 			point.Origin = "easyems-allocator"
 			if err := siotclient.SendNodePoint(nc, target.NodeID, point, true); err != nil {
@@ -292,6 +308,40 @@ func (r *allocationRun) updateShare(step allocationStep) {
 	}
 	r.result.Delivered = delivered
 	r.result.Shortfall = r.result.Requested - delivered
+}
+
+func allocationSafety(nc *nats.Conn, target Target) (*safety.Output, map[string]signal.Sample, error) {
+	config, present, err := LoadOutputSafety(nc, target.NodeID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !present {
+		return nil, map[string]signal.Sample{}, nil
+	}
+	spec, err := config.Output()
+	if err != nil {
+		return nil, nil, err
+	}
+	samples := map[string]signal.Sample{}
+	for _, condition := range config.Conditions {
+		nodes, err := siotclient.GetNodes(nc, "all", condition.PointID, "", false)
+		if err != nil || len(nodes) == 0 {
+			continue
+		}
+		point, found := nodes[0].Points.Find(data.PointTypeValue, "")
+		if !found || point.Tombstone%2 != 0 {
+			continue
+		}
+		value, err := pointSignal(point)
+		if err != nil {
+			continue
+		}
+		samples[condition.PointID] = signal.Sample{
+			Input: condition.PointID, Value: value, Quality: signal.Good,
+			SourceTime: point.Time, ReceivedTime: point.Time,
+		}
+	}
+	return &spec, samples, nil
 }
 
 // quantizeSetpoint keeps integer-register writes representable. Truncation

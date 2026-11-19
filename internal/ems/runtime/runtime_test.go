@@ -97,8 +97,8 @@ func TestCommandWriteIsQueuedThenConfirmedByReadback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome.State != command.Executing {
-		t.Fatalf("state = %s, want executing", outcome.State)
+	if outcome.State != command.Accepted {
+		t.Fatalf("state = %s, want accepted", outcome.State)
 	}
 	if bus.coils[1] {
 		t.Fatal("write must wait for the channel run, not happen inside Submit")

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"fastiot/internal/ems/safety"
 	"github.com/nats-io/nats.go"
 	siotclient "github.com/simpleiot/simpleiot/client"
 	"github.com/simpleiot/simpleiot/data"
@@ -221,6 +222,47 @@ func TestAllocationMemberRejectsUnknownHealth(t *testing.T) {
 	}
 	if !member.Online {
 		t.Fatal("degraded health must remain eligible")
+	}
+}
+
+func TestAllocatorRefusesMissingSafetyInput(t *testing.T) {
+	opts := server.TestServerOptions
+	opts.ID = "easyems-allocation-safety-test"
+	opts.DataDir = filepath.Join(t.TempDir(), "data")
+	opts.NatsPort = 19720
+	opts.NatsServer = "nats://127.0.0.1:19720"
+	opts.HTTPPort = "9704"
+	opts.NatsMonitorPort = 19721
+	opts.NatsWSPort = 19722
+	opts.NatsMQTTPort = 0
+	nc, root, stopServer, err := server.TestServerOpts(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopServer()
+	config := safety.Config{Conditions: []safety.ConditionConfig{{PointID: "interlock", Operator: "eq", Value: 1, Kind: "bool"}}}
+	encoded, _ := json.Marshal(config)
+	points := data.Points{
+		data.NewPointFloat(data.PointTypeValue, "", 0),
+		data.NewPointString("easyemsSafety", "", string(encoded)),
+	}
+	if err := siotclient.SendNode(nc, data.NodeEdge{ID: "pcs-safety", Type: data.NodeTypeVariable, Parent: root.ID, Points: points}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := siotclient.SendNode(nc, data.NodeEdge{ID: "interlock", Type: data.NodeTypeVariable, Parent: root.ID}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	run := newAllocationRun(root.ID, AllocatorConfig{Members: []AllocatorMember{{ID: "pcs", Target: Target{NodeID: "pcs-safety"}, MaxDischarge: 100}}})
+	now := time.Now()
+	if err := run.start(nc, 80, now); err != nil {
+		t.Fatal(err)
+	}
+	run.step(nc, now)
+	if run.status != "failed" || !strings.Contains(run.reason, "safety input interlock is missing") {
+		t.Fatalf("allocator safety = %s %s", run.status, run.reason)
+	}
+	if got := pointValue(t, nc, "pcs-safety", data.PointTypeValueSet); got != -1 {
+		t.Fatalf("unsafe allocator write = %v", got)
 	}
 }
 

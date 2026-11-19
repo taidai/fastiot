@@ -65,8 +65,8 @@ func TestSubmitWritesAndReadbackConfirms(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome.State != Executing || writer.calls != 1 {
-		t.Fatalf("expected executing after one write, got %+v calls=%d", outcome, writer.calls)
+	if outcome.State != Accepted || writer.calls != 1 {
+		t.Fatalf("expected accepted after one write, got %+v calls=%d", outcome, writer.calls)
 	}
 	samples["run"] = signal.Sample{Input: "run", Value: signal.Flag(true), Quality: signal.Good, SourceTime: t0.Add(500 * time.Millisecond), ReceivedTime: t0.Add(500 * time.Millisecond)}
 	m.Tick(t0.Add(time.Second))
@@ -109,7 +109,7 @@ func TestTimeoutBecomesUnknown(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.Tick(t0.Add(4 * time.Second))
-	if got, _ := m.Get("r1"); got.State != Executing {
+	if got, _ := m.Get("r1"); got.State != Accepted {
 		t.Fatalf("should still be executing before timeout, got %+v", got)
 	}
 	m.Tick(t0.Add(6 * time.Second))
@@ -250,14 +250,44 @@ func TestSubmitGuardClampsBeforeWriting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome.State != Executing || len(writer.last) != 1 || writer.last[0].Value.Num != 60 {
+	if outcome.State != Accepted || len(writer.last) != 1 || writer.last[0].Value.Num != 60 {
 		t.Fatalf("clamped command = %+v writes=%+v", outcome, writer.last)
+	}
+	samples["power"] = signal.Sample{Input: "power", Value: signal.Num(60), Quality: signal.Good, SourceTime: t0.Add(time.Second), ReceivedTime: t0.Add(time.Second)}
+	m.Tick(t0.Add(time.Second))
+	confirmed, _ := m.Get("clamped")
+	if confirmed.State != Confirmed {
+		t.Fatalf("clamped readback did not confirm: %+v", confirmed)
 	}
 	if _, err := m.Submit(t0.Add(time.Second), pointRequest("clamped", 90)); err != nil {
 		t.Fatal(err)
 	}
 	if writer.calls != 1 {
 		t.Fatalf("duplicate submit wrote %d times", writer.calls)
+	}
+}
+
+func TestSubmitGuardEvaluatesEveryNamedWrite(t *testing.T) {
+	writer := &fakeWriter{}
+	samples := map[string]signal.Sample{}
+	m := manager(writer, &samples)
+	profile := pcsProfile()
+	profile.Commands[0].Writes = []device.Write{
+		{Point: "run", Value: signal.Flag(true)},
+		{Point: "power", Value: signal.Num(90)},
+	}
+	m.Profiles = func(string) (device.Profile, bool) { return profile, true }
+	m.Guard = func(request GuardRequest) safety.Verdict {
+		if request.Point == "power" {
+			return safety.Verdict{Decision: "clamped", Value: 60, Reason: "power limit"}
+		}
+		return safety.Verdict{Decision: "allowed"}
+	}
+	if _, err := m.Submit(t0, request("multi")); err != nil {
+		t.Fatal(err)
+	}
+	if len(writer.last) != 2 || writer.last[1].Value.Num != 60 {
+		t.Fatalf("named writes bypassed guard: %+v", writer.last)
 	}
 }
 
@@ -286,7 +316,7 @@ func TestPointWriteRequiresFreshReadback(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.Tick(t0.Add(time.Second))
-	if got, _ := m.Get("pw1"); got.State != Executing {
+	if got, _ := m.Get("pw1"); got.State != Accepted {
 		t.Fatalf("old matching sample must not confirm, got %+v", got)
 	}
 	samples["power"] = signal.Sample{Input: "power", Value: signal.Num(40), Quality: signal.Good, SourceTime: t0.Add(2 * time.Second), ReceivedTime: t0.Add(2 * time.Second)}
@@ -331,7 +361,7 @@ func TestPointWriteTimeoutFallsBackOnce(t *testing.T) {
 		t.Fatalf("expected unknown after timeout, got %+v", original)
 	}
 	fallback, ok := m.Get("pw1-fallback")
-	if !ok || fallback.FallbackOf != "pw1" || fallback.State != Executing {
+	if !ok || fallback.FallbackOf != "pw1" || fallback.State != Accepted {
 		t.Fatalf("expected one fallback request, got %+v ok=%v", fallback, ok)
 	}
 	if writer.calls != 2 || writer.last[0].Value.Num != 0 {

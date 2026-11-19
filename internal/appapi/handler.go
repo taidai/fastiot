@@ -83,6 +83,7 @@ func (h *Handler) SetEMS(handler *emsapi.Handler) {
 	h.ems = handler
 	if handler != nil && handler.Service != nil {
 		handler.Service.Commands().SetProfiles(h.commandProfile)
+		handler.Service.Commands().Guard = h.commandGuard
 		handler.Service.Alarms.OnChange = h.recordAlarmChange
 		handler.AlarmEvidenceError = h.alarmEvidenceError
 	}

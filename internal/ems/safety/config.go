@@ -19,10 +19,10 @@ type ConditionConfig struct {
 
 // Config is the per-output safety envelope stored on the target node.
 type Config struct {
-	Min          *float64 `json:"min,omitempty"`
-	Max          *float64 `json:"max,omitempty"`
-	MaxDischarge *float64 `json:"max_discharge,omitempty"`
-	MaxCharge    *float64 `json:"max_charge,omitempty"`
+	Min          *float64          `json:"min,omitempty"`
+	Max          *float64          `json:"max,omitempty"`
+	MaxDischarge *float64          `json:"max_discharge,omitempty"`
+	MaxCharge    *float64          `json:"max_charge,omitempty"`
 	// RampPerSecond limits how fast a numeric setpoint moves. Zero/absent
 	// means the target is written directly.
 	RampPerSecond *float64          `json:"ramp_per_second,omitempty"`

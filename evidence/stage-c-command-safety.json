@@ -1,0 +1,38 @@
+{
+  "stage": "C",
+  "slice": "command-write-safety",
+  "status": "complete",
+  "commits": ["85f8c3a", "1133228"],
+  "implemented": {
+    "verdict": "safety.Evaluate returns allowed/clamped/refused with reason for range, capability, required inputs, conditions, target state and automatic manual takeover",
+    "manager": "Every normalized write is guarded before dispatch; refusal never writes; clamped writes and readback use the same value; accepted/confirmed/failed/unknown and no-readback submitted retain their meanings",
+    "production": "appapi resolves persisted target state, easyemsManual, safety envelope and current runtime samples for every command write",
+    "automatic": "Decision limiter and allocator use the same verdict; allocator reads each member's safety config and condition samples before SIOT output",
+    "alarm": "Failed command reasons enter the existing command-failed alarm"
+  },
+  "review": {
+    "independent": true,
+    "fixed": [
+      "Production guard no-op and write-less command panic path",
+      "Allocator nil-spec dead guard",
+      "Clamp/readback mismatch and first-write-only clamping",
+      "Automatic refusal test now fires the rule and refuses on a different safety condition"
+    ],
+    "deferred_minor": "safety.Request.Current remains unused; ramp ownership stays in the existing decision runtime"
+  },
+  "verification": {
+    "production_tests": [
+      "Declared 0..60 range clamps 90 to 60 and real runtime readback 60 confirms",
+      "Read-only target refuses without dispatcher write",
+      "easyemsManual refuses automatic schedule but permits authorized manual command",
+      "Named command second write is independently clamped",
+      "Duplicate request ID writes once and no-readback remains submitted",
+      "Allocator missing interlock fails without SIOT valueSet write",
+      "Command refusal reason appears in command-failed alarm"
+    ],
+    "go": "go test -p 1 -count=1 ./... passed all listed packages",
+    "frontend": "build, navigation, consistency, observations, acceptance and capabilities passed",
+    "vet": "safety, command, runtime and decision passed before the final alarm evidence test"
+  },
+  "not_in_scope": ["Stage F deletion", "real device connection or physical write"]
+}
