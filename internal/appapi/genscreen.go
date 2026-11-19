@@ -235,12 +235,9 @@ func (h *Handler) generatedScreenConfirm(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	checkedAt := session.CheckedAt()
-	snapshot := session.Snapshot()
-	draft, err := json.Marshal(map[string]any{
-		"source": snapshot.Source, "points": snapshot.Points, "report": report,
-		"checked_at": checkedAt, "simulator": "preview", "node_id": session.NodeID,
-		"revision": snapshot.Revision,
-	})
+	body := generatedScreenDraftBody(session, report, checkedAt)
+	body["revision"] = session.Revision
+	draft, err := json.Marshal(body)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "encode_failed")
 		return
@@ -252,6 +249,20 @@ func (h *Handler) generatedScreenConfirm(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	writeJSON(w, map[string]any{"confirmed": true, "node_id": session.NodeID})
+}
+
+// generatedScreenDraftBody is the confirmed artifact. A screen that uses the
+// bundled 3D runtime records the exact version and bytes it was checked
+// against, so the artifact stays reproducible when restored elsewhere.
+func generatedScreenDraftBody(session *genscreen.Session, report genscreen.Report, checkedAt time.Time) map[string]any {
+	body := map[string]any{
+		"source": session.Source, "points": session.Points, "report": report,
+		"checked_at": checkedAt, "simulator": "preview", "node_id": session.NodeID,
+	}
+	if genscreen.Parse(session.Source).UsesThree() {
+		body["three"] = map[string]string{"version": genscreen.ThreeVersion, "sha256": genscreen.ThreeSHA256}
+	}
+	return body
 }
 
 // generatedScreenFrame serves the sandboxed document. It is authenticated by

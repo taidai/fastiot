@@ -2,6 +2,7 @@ package genscreen
 
 import (
 	_ "embed"
+	"fmt"
 	"regexp"
 	"sort"
 	"strings"
@@ -13,26 +14,23 @@ import (
 //go:embed runtime.js
 var RuntimeScript string
 
-const runtimeTag = `<script data-fastiot-runtime="1" nonce="`
+const (
+	runtimeTag = `<script data-fastiot-runtime="1" nonce="`
+	threeTag   = `<script data-fastiot-three="` + ThreeVersion + `" nonce="`
+)
 
 var validNonce = regexp.MustCompile(`^[A-Za-z0-9]+$`)
+
+// contentSecurityPolicy is the single source of truth for the frame policy;
+// only the per-response nonce varies. The bundled Three.js needs no exception
+// because it is inlined under that same nonce.
+const contentSecurityPolicy = "default-src 'none'; script-src 'nonce-%s'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; connect-src 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'"
 
 // ContentSecurityPolicy is the policy served with the frame. The generated
 // document may run its own code with the response nonce, but it cannot reach
 // the network, the host page, forms, frames or evaluation.
 func ContentSecurityPolicy(nonce string) string {
-	return "default-src 'none'; " +
-		"script-src 'nonce-" + safeNonce(nonce) + "'; " +
-		"style-src 'unsafe-inline'; " +
-		"img-src data:; " +
-		"font-src data:; " +
-		"media-src data:; " +
-		"connect-src 'none'; " +
-		"object-src 'none'; " +
-		"frame-src 'none'; " +
-		"form-action 'none'; " +
-		"base-uri 'none'; " +
-		"frame-ancestors 'self'"
+	return fmt.Sprintf(contentSecurityPolicy, safeNonce(nonce))
 }
 
 func safeNonce(nonce string) string {
@@ -98,6 +96,16 @@ func (d *Document) Render(nonce string) string {
 		at: runtimeAt, order: 2,
 		text: runtimeTag + nonce + `">` + compactScript(RuntimeScript) + `</script>`,
 	})
+	if d.UsesThree() {
+		// The bridge is installed first, then the dependency, then the
+		// generated document, so a 3D screen finds THREE and error reporting
+		// already in place. The bundle stays inline and under the response
+		// nonce: the frame needs no network and the policy is unchanged.
+		insertions = append(insertions, insertion{
+			at: runtimeAt, order: 3,
+			text: threeTag + nonce + `">` + ThreeInline + `</script>`,
+		})
+	}
 
 	sort.SliceStable(insertions, func(i, j int) bool {
 		if insertions[i].at != insertions[j].at {

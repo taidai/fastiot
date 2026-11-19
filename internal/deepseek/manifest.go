@@ -238,6 +238,10 @@ func MessagesForManifest(manifest Manifest) []Message {
 		"- 写入点位：只在 <button> 上写 data-fastiot-write=\"<点位 ID>\" 和 data-fastiot-value=\"<数值>\"。\n" +
 		"- 画面运行在离线隔离沙箱中：不能访问网络、外部脚本/字体/图片 URL、localStorage、cookie、window.parent 或 eval；" +
 		"不要使用 onclick 等内联事件属性，交互用上述 data 属性或在 <script> 中 addEventListener。\n" +
+		"- 三维画面：平台内置 Three.js（全局 THREE，随平台离线打包）可直接使用；" +
+		"用 <canvas> 与 THREE.WebGLRenderer 表达设备空间位置、管路连接和状态（连接关系用 THREE.Line/LineSegments，状态用颜色或发光）。" +
+		"不要引用任何外部模型、贴图、字体或 CDN；贴图只能用 data: URI 或由 canvas 程序化生成。" +
+		"三维代码读取实时值监听 document 的 'fastiot:values' 事件（event.detail.values['<点位 ID>'].value）。\n" +
 		"- 样式写在 <style> 或 style 属性中；图片只能用 data: URI。"
 	systemMessage := system
 	if manifest.Mode == ModeRevise {
