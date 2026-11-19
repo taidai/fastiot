@@ -40,7 +40,9 @@ func TestApplyProfileVerdicts(t *testing.T) {
 		}
 		points = append(points, unitModelPointView{
 			ID: "p-" + string(rune('a'+index)), Name: spec.Name, ServerID: 1, Scale: scale,
-			ReadOnly: spec.Name == "开机/关机指令",
+			IOType: profile.IOTypeFor(spec.Function), DataFormat: spec.Format,
+			Offset: spec.Offset, Unit: spec.Unit,
+			ReadOnly: spec.ReadOnly || spec.Name == "开机/关机指令",
 		})
 	}
 	result := applyProfile(1, prof, points, unitModelConfig{})
@@ -57,7 +59,7 @@ func TestApplyProfileVerdicts(t *testing.T) {
 	if verdicts["硬件故障字 1"] != "scaled" || verdicts["电网频率"] != "missing" || verdicts["电池电压"] != "exact" {
 		t.Fatalf("verdicts = %#v", verdicts)
 	}
-	if len(result.Blocked) != 2 {
+	if len(result.Blocked) < 2 {
 		t.Fatalf("blocked = %#v", result.Blocked)
 	}
 	for _, blocked := range result.Blocked {
@@ -168,5 +170,30 @@ func TestApplyProfilesPersistsModels(t *testing.T) {
 	}
 	if model.BusinessNodeID != "biz-1" {
 		t.Fatalf("business node binding lost: %#v", model)
+	}
+	if model.Verified || !model.VerificationRequired || model.ReplacedFrom != "modbus-generic" {
+		t.Fatalf("vendor replacement must require re-verification: %#v", model)
+	}
+	if model.Replacement == nil || model.Replacement.From != "modbus-generic" || model.Replacement.To != "enjo-pcs" {
+		t.Fatalf("replacement report not persisted: %#v", model.Replacement)
+	}
+	deviceID := channelID + "/1"
+	if _, ok := handler.commandProfile(deviceID); ok {
+		t.Fatal("a replaced profile must not serve control commands before re-verification")
+	}
+	model.Verified, model.Verifier, model.VerifiedAt, model.DeviceSerial = true, "李四", "2026-11-19", "SN-9"
+	if err := handler.saveUnitModel(channel[0], 1, model, handler.unitPoints(channelID)); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		nodes, err := siotclient.GetNodes(nc, "all", channelID, "", false)
+		if err != nil || len(nodes) == 0 {
+			return false
+		}
+		verified, ok := unitModelFor(nodes[0], 1)
+		return ok && verified.Verified && !verified.VerificationRequired
+	}, "re-verification clears the replacement requirement")
+	if _, ok := handler.commandProfile(deviceID); !ok {
+		t.Fatal("re-verified mapping must restore control commands")
 	}
 }

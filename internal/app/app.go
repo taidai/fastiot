@@ -37,6 +37,7 @@ import (
 	"fastiot/internal/ems/profile"
 	"fastiot/internal/ems/runtime"
 	"fastiot/internal/emsapi"
+	"fastiot/internal/industry"
 	"fastiot/internal/web"
 )
 
@@ -110,6 +111,10 @@ func Start(ctx context.Context, cfg Config) (*App, error) {
 	closeApp := func() { closeOnce.Do(runCancel) }
 
 	ready := new(atomic.Bool)
+	packages, err := industry.Open(cfg.DataDir)
+	if err != nil {
+		return nil, err
+	}
 	historyLimit := appapi.ReadHistoryLimit(cfg.DataDir)
 	emsService := runtime.NewService(nil, 15*time.Second, 5*time.Second, historyLimit)
 	appapi.LoadAlarmMaintenance(cfg.DataDir, emsService.Alarms)
@@ -139,6 +144,7 @@ func Start(ctx context.Context, cfg Config) (*App, error) {
 		NatsLoopback: true,
 		AppHandlerFactory: func(nc *nats.Conn, users api.UserAuthority) http.Handler {
 			handler := appapi.New(nc, users, ready)
+			handler.SetPackages(packages)
 			handler.SetAudit(audit.New(filepath.Join(cfg.DataDir, "audit.jsonl")))
 			handler.SetDataDir(cfg.DataDir)
 			handler.SetSessionPolicy(envMinutes("FASTEMS_SESSION_TIMEOUT_MINUTES", 30), envCount("FASTEMS_MAX_SESSIONS", 5))

@@ -708,3 +708,17 @@ export type PhaseVerdict = { available: boolean; reason?: string; net_kw?: numbe
 export async function fetchPhaseVerdict(token: string, plantId: string) {
   return request<PhaseVerdict>(token, `/plants/${plantId}/phase-verdict`)
 }
+
+// 行业包激活状态：底座始终可用；行业包未安装时其路由返回 409。
+export type IndustryPackage = {
+  id: string
+  version: string
+  label: string
+  provides?: string[]
+  installed: boolean
+  installed_at?: string
+}
+
+export async function fetchIndustryPackages(token: string, signal?: AbortSignal) {
+  return request<{ packages: IndustryPackage[] }>(token, "/industry/packages", "GET", undefined, signal)
+}

@@ -177,7 +177,7 @@ func TestProfileCSVSharesThePointTableVocabulary(t *testing.T) {
 			point.Offset != spec.Offset || point.Units != spec.Unit {
 			t.Fatalf("row %d reads back as %+v, want spec %+v", i+2, point, spec)
 		}
-		if want := ioTypeFor(spec.Function); point.IOType != want {
+		if want := IOTypeFor(spec.Function); point.IOType != want {
 			t.Fatalf("row %d io type %q, want %q (label %q)", i+2, point.IOType, want, pointconfig.TypeLabel(want))
 		}
 	}

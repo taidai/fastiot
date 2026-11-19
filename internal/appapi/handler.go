@@ -25,6 +25,7 @@ import (
 	"fastiot/internal/decision"
 	"fastiot/internal/ems/command"
 	"fastiot/internal/emsapi"
+	"fastiot/internal/industry"
 )
 
 type Handler struct {
@@ -41,6 +42,7 @@ type Handler struct {
 	ems                *emsapi.Handler
 	localCommands      *command.Manager
 	opcua              *OpcuaManager
+	packages           atomic.Pointer[industry.Registry]
 
 	siteGoalMu    sync.Mutex
 	siteGoalCache map[string]siteGoalEntry
@@ -73,6 +75,11 @@ func New(nc *nats.Conn, users api.UserAuthority, ready *atomic.Bool) *Handler {
 }
 
 // SetEMS mounts the EMS runtime API under /api/ems/.
+// SetPackages wires the site's industry package state. Without it every
+// bundled package stays active, which is what direct handler embeddings and
+// tests expect.
+func (h *Handler) SetPackages(registry *industry.Registry) { h.packages.Store(registry) }
+
 // SetAudit wires the local audit store. A nil store disables audit.
 func (h *Handler) SetAudit(store *audit.Store) { h.audit = store }
 
@@ -222,6 +229,10 @@ func (h *Handler) authorizeRoute(w http.ResponseWriter, r *http.Request, identit
 		writeError(w, http.StatusForbidden, authz.ReasonRouteNotDeclared)
 		return false
 	}
+	if !h.packageInstalled(route.Package) {
+		writeError(w, http.StatusConflict, ReasonPackageNotInstalled)
+		return false
+	}
 	allowed := route.Allowed(identity.Policy.Admin, func(action string) bool {
 		return canAction(identity, action)
 	})
@@ -279,6 +290,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if actor == "" {
 		actor = identity.UserID
 	}
+	if route, declared := authz.Required(r); declared && !h.packageInstalled(route.Package) {
+		writeError(w, http.StatusConflict, ReasonPackageNotInstalled)
+		return
+	}
 	delegateEMS := h.ems != nil && strings.HasPrefix(path, "ems/") &&
 		!strings.HasPrefix(path, "ems/screen/") &&
 		!strings.HasPrefix(path, "ems/acceptance/") &&
@@ -318,6 +333,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.snapshot(w, identity)
 	case path == "audit-settings" && (r.Method == http.MethodGet || r.Method == http.MethodPut):
 		h.auditSettings(w, r, identity)
+	case path == "industry/packages" && r.Method == http.MethodGet:
+		h.industryPackages(w)
+	case path == "industry/packages" && r.Method == http.MethodPost:
+		h.installIndustryPackage(w, r)
+	case len(parts) == 3 && parts[0] == "industry" && parts[1] == "packages" && r.Method == http.MethodDelete:
+		h.uninstallIndustryPackage(w, r, identity, parts[2])
 	case path == "audit" && r.Method == http.MethodGet:
 		h.auditList(w, r, identity)
 	case path == "audit/export" && r.Method == http.MethodGet:

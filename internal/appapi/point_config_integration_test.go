@@ -259,9 +259,15 @@ type pointConfigFixture struct {
 	bridge      *bridge.Bridge
 	runtime     *runtime.Service
 	bus         *pointConfigBus
+	handler     *Handler
+	dir         string
 }
 
 func newPointConfigFixture(t *testing.T) *pointConfigFixture {
+	return newPointConfigFixtureAt(t, filepath.Join(t.TempDir(), "data"))
+}
+
+func newPointConfigFixtureAt(t *testing.T, dataDir string) *pointConfigFixture {
 	t.Helper()
 	password := data.NewID()
 	t.Setenv("FASTEMS_ADMIN_PASSWORD", password)
@@ -281,13 +287,16 @@ func newPointConfigFixture(t *testing.T) *pointConfigFixture {
 	}
 	natsPort, _ := strconv.Atoi(ports[1])
 	ready := new(atomic.Bool)
-	dataDir := filepath.Join(t.TempDir(), "data")
+	var handler *Handler
 	siot, nc, err := server.NewServer(server.Options{
 		ID: "point-configuration-test", DataDir: dataDir, HTTPPort: ports[0],
 		NatsPort: natsPort, NatsServer: "nats://127.0.0.1:" + ports[1], AuthToken: data.NewID(),
 		DeviceAuth: server.DeviceAuthRequired, CustomUIFS: fstest.MapFS{"index.html": {Data: []byte("test")}},
 		AppOnly: true, NatsLoopback: true, ProvisioningDisable: true,
-		AppHandlerFactory: func(nc *nats.Conn, users api.UserAuthority) http.Handler { return New(nc, users, ready) },
+		AppHandlerFactory: func(nc *nats.Conn, users api.UserAuthority) http.Handler {
+			handler = New(nc, users, ready)
+			return handler
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -316,7 +325,7 @@ func newPointConfigFixture(t *testing.T) *pointConfigFixture {
 	service := runtime.NewService(nil, time.Minute, time.Second, 100)
 	t.Cleanup(service.Close)
 	bus := &pointConfigBus{}
-	f := &pointConfigFixture{base: base, token: loginAPI(t, base, "admin", password), runtime: service, bus: bus}
+	f := &pointConfigFixture{base: base, token: loginAPI(t, base, "admin", password), runtime: service, bus: bus, handler: handler, dir: dataDir}
 	f.bridge = bridge.New(service, bridge.NewNodeSource(nc), func(string, string, time.Duration) (channel.Bus, error) { return bus, nil })
 	return f
 }

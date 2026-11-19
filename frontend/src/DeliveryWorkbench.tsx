@@ -24,8 +24,10 @@ type DemandWindow = { available: boolean; demand_kw: number; valid_bins: number;
 type PlantDemand = { plant_id: string; plant_name: string; meter_point_id?: string; upper_limit_kw?: number; window: DemandWindow; reason?: string }
 type DemandResponse = { site: string; plants: PlantDemand[] }
 type ProfileSummary = { id: string; vendor: string; model: string; points: number; commands: number; verified?: boolean }
-type ApplyPoint = { name: string; point_id?: string; verdict: string; reason?: string }
-type ApplyResult = { server: number; profile_id: string; mapped: number; exact: number; scaled: number; missing: string[]; blocked: string[]; points: ApplyPoint[] }
+type ApplyDifference = { point: string; field: string; profile: string; existing: string }
+type ApplyPoint = { name: string; point_id?: string; verdict: string; reason?: string; differences?: ApplyDifference[] }
+type ApplyReplacement = { from: string; to: string; equivalent: boolean; differences?: ApplyDifference[]; missing?: string[] }
+type ApplyResult = { server: number; profile_id: string; mapped: number; exact: number; scaled: number; mismatched?: number; missing: string[]; blocked: string[]; points: ApplyPoint[]; replacement?: ApplyReplacement }
 type ApplyResponse = { profile_id: string; dry_run: boolean; results: ApplyResult[]; applied: number }
 type ReuseItem = { id: string; type: string; name: string; reason?: string }
 type ReusePreview = { source: string; reuse: ReuseItem[]; change: ReuseItem[]; confirm: ReuseItem[]; counts: Record<string, number> }
@@ -52,11 +54,12 @@ const clock = (value?: string) => {
   return Number.isFinite(time.getTime()) ? time.toLocaleString("zh-CN", { hour12: false }) : "—"
 }
 
-export default function DeliveryWorkbench({ token, nodes, siteID, canConfigure, goPage, onError }: {
+export default function DeliveryWorkbench({ token, nodes, siteID, canConfigure, emsInstalled = true, goPage, onError }: {
   token: string
   nodes: Node[]
   siteID: string
   canConfigure: boolean
+  emsInstalled?: boolean
   goPage: (page: Page) => void
   onError: (message: string) => void
 }) {
@@ -249,7 +252,7 @@ export default function DeliveryWorkbench({ token, nodes, siteID, canConfigure, 
   }, [token, currentSite, loadVersions, onError])
 
   useEffect(() => {
-    if (step !== "rules" || !currentSite) return
+    if (!emsInstalled || step !== "rules" || !currentSite) return
     const site = currentSite
     void (async () => {
       try {
@@ -267,7 +270,7 @@ export default function DeliveryWorkbench({ token, nodes, siteID, canConfigure, 
         if (site === currentSiteRef.current) setDemand(null)
       }
     })()
-  }, [step, currentSite, token])
+  }, [step, currentSite, token, emsInstalled])
 
   useEffect(() => {
     if (step !== "points") return
@@ -396,7 +399,7 @@ export default function DeliveryWorkbench({ token, nodes, siteID, canConfigure, 
     return { done, warn, current }
   }, [counts, gateStatus, latest, currentSite])
 
-  const current = steps.find((item) => item.key === step) || steps[0]
+  const current = (emsInstalled ? steps : steps.filter((item) => item.key !== "model" && item.key !== "rules")).find((item) => item.key === step) || steps[0]
 
   const summary = () => {
     switch (step) {
@@ -427,7 +430,7 @@ export default function DeliveryWorkbench({ token, nodes, siteID, canConfigure, 
   return <section className="workbench-page grid gap-3">
     <div className="grid items-start gap-4 lg:grid-cols-[232px_1fr]">
       <div className="workbench-steps flex gap-1 overflow-x-auto rounded-xl border border-ems-line bg-white/60 p-2 lg:grid lg:gap-1 lg:overflow-visible">
-        {steps.map((item, index) => {
+        {(emsInstalled ? steps : steps.filter((item) => item.key !== "model" && item.key !== "rules")).map((item, index) => {
           const done = stepState.done[item.key]
           const warn = stepState.warn[item.key]
           const isCurrent = stepState.current === item.key
@@ -486,7 +489,7 @@ export default function DeliveryWorkbench({ token, nodes, siteID, canConfigure, 
         {step === "points" && <EmsCard>
           <div className="grid gap-3">
             <EmsSectionHeader kicker="换厂商" title="按 Profile 批量重映射"
-              description="按逻辑点名称自动匹配物理点位；缩放不一致标为 scaled，缺失点位列入待确认并阻断相关控制，不会用默认点冒充。" />
+              description="按逻辑点名称自动匹配物理点位；类型、数据格式、单位、缩放、偏移或读写方向不一致逐项列出并阻断相关控制，缺失点位列入待确认，不会用默认点冒充。换厂商后需人工重新验证，验证前控制命令不可用。" />
             <div className="grid gap-2 md:grid-cols-[1fr_1fr_170px_auto_auto] md:items-end">
               <label className="grid gap-1 text-xs text-ems-muted">通道
                 <select className="ems-input" aria-label="Profile 通道" value={applyChannel} onChange={(event) => { setApplyChannel(event.target.value); setApplyResult(null) }}>
@@ -511,8 +514,14 @@ export default function DeliveryWorkbench({ token, nodes, siteID, canConfigure, 
                 {applyResult.results.map((result) => <div key={result.server} className="rounded-lg border border-ems-line px-3 py-2">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <strong>站号 {result.server}</strong>
-                    <span className="text-ems-muted">映射 {result.mapped} · 精确 {result.exact} · 缩放 {result.scaled} · 缺失 {result.missing.length}</span>
+                    <span className="text-ems-muted">映射 {result.mapped} · 精确 {result.exact} · 缩放 {result.scaled} · 不等价 {result.mismatched || 0} · 缺失 {result.missing.length}</span>
                   </div>
+                  {result.replacement && <div className="text-ems-amber">
+                    换厂商 {result.replacement.from} → {result.replacement.to}：{result.replacement.equivalent ? "映射等价" : `${result.replacement.differences?.length || 0} 处不等价`}；人工重新验证前控制命令不可用。
+                  </div>}
+                  {result.replacement?.differences?.map((difference, index) => <div key={`${difference.point}-${difference.field}-${index}`} className="text-ems-amber">
+                    {difference.point}：{difference.field}（Profile {difference.profile}，点位 {difference.existing}）
+                  </div>)}
                   {result.missing.length > 0 && <div className="text-ems-amber">缺失：{result.missing.join("、")}</div>}
                   {result.blocked.length > 0 && <ul className="m-0 mt-1 list-disc pl-4 text-ems-amber">{result.blocked.map((item) => <li key={item}>{item}</li>)}</ul>}
                 </div>)}
@@ -522,7 +531,7 @@ export default function DeliveryWorkbench({ token, nodes, siteID, canConfigure, 
           </div>
         </EmsCard>}
 
-        {step === "rules" && <EmsCard>
+        {step === "rules" && emsInstalled && <EmsCard>
           <div className="grid gap-3">
             <EmsSectionHeader kicker="策略与试算" title="96 点计划与 15 分钟需量"
               description="每个 15 分钟时段一个目标（正=放电，负=充电）；留空表示该时段无计划，不回落到 0。需量按 (t-15min, t] 的 15 个一分钟 bin 计算，缺 bin 时不做预测性削峰。" />

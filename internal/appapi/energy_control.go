@@ -180,6 +180,10 @@ func (h *Handler) submitCabinetCommand(w http.ResponseWriter, identity Identity,
 	}
 	profile, ok := h.commandProfile(runtimeID)
 	if !ok {
+		if h.deviceVerificationPending(runtimeID) {
+			writeError(w, http.StatusConflict, "verification_required")
+			return
+		}
 		writeError(w, http.StatusBadRequest, "device_profile_missing")
 		return
 	}

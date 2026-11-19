@@ -68,6 +68,25 @@ for (const def of visiblePagesFor("customer", all)) {
   assert.ok(!["channels", "points", "energyUnits", "rules", "deploy"].includes(def.key), `客户工作台混入了配置页 ${def.key}`)
 }
 
+// 行业包未安装：行业页面不可达，底座页面与分组保持完整；能源设备分组整体消失。
+const packageAbsent = (id) => id !== "ems"
+assert.deepEqual(
+  keys(visiblePagesFor("delivery", implementer, packageAbsent)),
+  ["deploy", "ledger", "channels", "points", "aggregate", "opcua", "rules"],
+  "未安装行业包时交付工作台只留底座页面",
+)
+assert.deepEqual(
+  navGroupsFor("delivery", implementer, packageAbsent).map((group) => group.key),
+  ["access", "strategy", "acceptance"],
+  "未安装行业包时能源设备分组应消失",
+)
+assert.deepEqual(
+  keys(navGroupsFor("delivery", implementer, packageAbsent).find((group) => group.key === "strategy").pages),
+  ["rules"],
+  "未安装行业包时策略只剩底座决策表",
+)
+assert.deepEqual(keys(visiblePagesFor("customer", none, packageAbsent)), customerPages, "未安装行业包不影响客户工作台")
+
 console.log("navigation-check passed:", {
   pages: allKeys.length,
   customerGroups: navGroupsFor("customer", all).length,
