@@ -216,7 +216,8 @@ func canAction(identity Identity, action string) bool {
 func (h *Handler) authorizeRoute(w http.ResponseWriter, r *http.Request, identity Identity) bool {
 	route, ok := authz.Required(r)
 	if !ok {
-		return true
+		writeError(w, http.StatusForbidden, authz.ReasonRouteNotDeclared)
+		return false
 	}
 	allowed := route.Allowed(identity.Policy.Admin, func(action string) bool {
 		return canAction(identity, action)
