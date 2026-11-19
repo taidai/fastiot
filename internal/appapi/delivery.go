@@ -125,7 +125,7 @@ func (h *Handler) deliveryCheck(w http.ResponseWriter, identity Identity) {
 	add("commands", "命令结果", commandFailures, nil, "未发现失败或结果未知的命令")
 	add("modbus", "Modbus 连接", busFailures, busWarnings, "Modbus 连接与轮询未发现异常")
 	items = append(items,
-		DeliveryItem{ID: "backup", Title: "备份与恢复", Status: "warning", Detail: "按文档执行离线完整备份并定期做恢复演练；应用不虚构最近备份时间"},
+		h.recoveryItem(),
 		DeliveryItem{ID: "acceptance", Title: "现场验收", Status: "warning", Detail: "真实设备、真实品牌 A/B、独立用户与公网部署仍需现场验收"},
 	)
 	overall := "pass"

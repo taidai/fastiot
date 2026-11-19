@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ApiError, nameOf, point, request, type Node } from "./api"
+import { ApiError, downloadProjectPackage, importProjectPackage, nameOf, point, recoveryStatus, request, type Node, type RecoveryStatus } from "./api"
 import { EmsButton, EmsCard, EmsSectionHeader, InlineNotice, SegmentedTabs, StatusBadge, type EmsTone } from "./components/ems"
 import DeployView from "./DeployView"
 import acceptance from "./data/acceptance-status.json"
@@ -82,6 +82,11 @@ export default function DeliveryWorkbench({ token, nodes, siteID, canConfigure, 
   const [publishNote, setPublishNote] = useState("")
   const [versionBusy, setVersionBusy] = useState(false)
   const [versionMessage, setVersionMessage] = useState("")
+  const [recovery, setRecovery] = useState<RecoveryStatus | null>(null)
+  const [packageBusy, setPackageBusy] = useState(false)
+  const [packageMessage, setPackageMessage] = useState("")
+  const [packageTone, setPackageTone] = useState<"info" | "warning" | "danger">("info")
+  const packageInput = useRef<HTMLInputElement>(null)
   const [planSlots, setPlanSlots] = useState<(number | null)[]>(() => Array(96).fill(null))
   const [planLoaded, setPlanLoaded] = useState(false)
   const [planBusy, setPlanBusy] = useState(false)
@@ -114,6 +119,7 @@ export default function DeliveryWorkbench({ token, nodes, siteID, canConfigure, 
     setPublishBlocked(false)
     setVersionMessage("")
     setConfirmRollback("")
+    setPackageMessage("")
     setReusePreview(null)
     setReuseResult(null)
     setApplyResult(null)
@@ -215,6 +221,64 @@ export default function DeliveryWorkbench({ token, nodes, siteID, canConfigure, 
   useEffect(() => {
     void loadVersions()
   }, [loadVersions])
+
+  const loadRecovery = useCallback(async () => {
+    if (!canConfigure) {
+      setRecovery(null)
+      return
+    }
+    try {
+      setRecovery(await recoveryStatus(token))
+    } catch {
+      setRecovery(null)
+    }
+  }, [token, canConfigure])
+
+  useEffect(() => {
+    void loadRecovery()
+  }, [loadRecovery])
+
+  const exportPackage = useCallback(async () => {
+    if (!currentSite) return
+    setPackageBusy(true)
+    setPackageTone("info")
+    try {
+      const site = nodes.find((node) => node.id === currentSite)
+      await downloadProjectPackage(token, currentSite, `${site ? nameOf(site) : "project"}.package.json`)
+      setPackageMessage("已导出当前站点项目包；包内不含地址、凭据、控制启动与运行状态")
+    } catch (cause) {
+      setPackageTone("danger")
+      setPackageMessage(cause instanceof Error ? cause.message : "导出失败")
+    } finally {
+      setPackageBusy(false)
+    }
+  }, [token, currentSite, nodes])
+
+  const importPackageFile = useCallback(async (file: File) => {
+    setPackageBusy(true)
+    setPackageTone("info")
+    try {
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(await file.text())
+      } catch {
+        throw new ApiError("文件不是有效的项目包 JSON", 400)
+      }
+      const result = await importProjectPackage(token, parsed)
+      const notes = [`已导入「${result.name}」：${result.created} 个节点、${result.channels} 条通道、${result.rules} 条规则`]
+      if (result.version_id) notes.push(`已冻结可回退版本 ${result.version_id}`)
+      notes.push("地址与凭据需重新绑定后才能连接现场设备；控制不会随导入自动启动")
+      if (result.warnings?.length) notes.push(`警告：${result.warnings.join("；")}`)
+      setPackageTone(result.warnings?.length ? "warning" : "info")
+      setPackageMessage(notes.join("。"))
+      await loadRecovery()
+    } catch (cause) {
+      setPackageTone("danger")
+      setPackageMessage(cause instanceof Error ? cause.message : "导入失败")
+    } finally {
+      setPackageBusy(false)
+    }
+  }, [token, loadRecovery])
 
   const publishProject = useCallback(async (confirm: boolean) => {
     if (!currentSite) return
@@ -666,7 +730,47 @@ export default function DeliveryWorkbench({ token, nodes, siteID, canConfigure, 
                     }}>{confirmRollback === version.id ? "确认回退（历史保留）" : "回退到此版本"}</EmsButton>
                 </div>)}
               </div>}
-            <p className="m-0 text-xs text-ems-muted">冻结版本只保存当前工程配置，不改变运行中的设备；回退前会自动再冻结一次当前配置。历史（审计、报警、命令）不回滚。</p>
+            <p className="m-0 text-xs text-ems-muted">冻结版本只保存当前工程配置，不改变运行中的设备；回退前会自动再冻结一次当前配置。历史（审计、报警、命令）不回滚。整目录恢复是下面的另一个操作，不能互相替代。</p>
+          </div>
+        </EmsCard>}
+
+        {tab === "versions" && canConfigure && <EmsCard>
+          <div className="grid gap-3">
+            <EmsSectionHeader kicker="可移植工程资产" title="项目包：干净实例离线部署"
+              description="导出当前站点为一个文件；在干净实例导入后重新绑定地址与凭据即可运行。项目包不含凭据、现场地址、控制启动与运行历史。" />
+            <div className="flex flex-wrap items-center gap-2">
+              <EmsButton busy={packageBusy} disabled={!currentSite || !canConfigure} onClick={() => void exportPackage()}>导出当前站点</EmsButton>
+              <EmsButton variant="secondary" busy={packageBusy} disabled={!canConfigure} onClick={() => packageInput.current?.click()}>导入项目包…</EmsButton>
+              <input ref={packageInput} type="file" accept="application/json,.json" className="hidden" aria-label="项目包文件"
+                onChange={(event) => {
+                  const file = event.target.files?.[0]
+                  event.target.value = ""
+                  if (file) void importPackageFile(file)
+                }} />
+            </div>
+            {packageMessage && <InlineNotice tone={packageTone}>{packageMessage}</InlineNotice>}
+            <p className="m-0 text-xs text-ems-muted">导入完成后仍须核对点位映射与设备通信；导入、发布与恢复各自留痕，互不代替。</p>
+          </div>
+        </EmsCard>}
+
+        {tab === "versions" && canConfigure && <EmsCard>
+          <div className="grid gap-3">
+            <EmsSectionHeader kicker="与版本回退不同" title="离线灾难恢复"
+              description={recovery?.version_rollback || "版本回退只重放工程配置，报警、历史与审计保留；离线灾难恢复用备份整体替换数据目录，快照之后产生的数据不在其中。"} />
+            {recovery?.restored && recovery.recovery
+              ? <div className="grid gap-2 rounded-lg border border-ems-line px-3 py-2 text-xs">
+                <div className="flex flex-wrap items-center gap-2">
+                  <StatusBadge tone="warning">已恢复</StatusBadge>
+                  <span>快照 {clock(recovery.recovery.snapshot_at)} → 恢复 {clock(recovery.recovery.restored_at)}</span>
+                </div>
+                <p className="m-0 text-ems-muted">数据损失窗口：{clock(recovery.recovery.data_loss.after)} 至 {clock(recovery.recovery.data_loss.before)}。{recovery.recovery.data_loss.detail}</p>
+                {recovery.recovery.snapshot_inventory && <span className="text-ems-muted">快照内：审计 {recovery.recovery.snapshot_inventory.audit_records} 条 · 报警 {recovery.recovery.snapshot_inventory.alarm_events} 条 · 项目版本 {recovery.recovery.snapshot_inventory.project_versions} 个</span>}
+                {recovery.recovery.replaced_data_dir && <span className="text-ems-muted">原数据目录保留于 {recovery.recovery.replaced_data_dir}</span>}
+              </div>
+              : recovery?.backup
+                ? <p className="m-0 text-sm">最近一次离线备份：{clock(recovery.backup.created_at)}（{recovery.backup.files} 个文件）。恢复会整体替换数据目录，快照之后的运行数据不在其中。</p>
+                : <p className="m-0 text-sm text-ems-muted">{recovery?.note || "还没有本机的备份或恢复记录。"}</p>}
+            <p className="m-0 text-xs text-ems-muted">备份与恢复都必须停机执行：<code>fastiot backup -data &lt;数据目录&gt; -out &lt;备份.tar.gz&gt;</code>；恢复用 <code>fastiot restore -from &lt;备份.tar.gz&gt; -data &lt;数据目录&gt;</code>。恢复记录写入数据目录的 recovery.json 并记入审计，无法伪造“已无损恢复”。</p>
           </div>
         </EmsCard>}
 

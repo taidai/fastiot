@@ -11,6 +11,7 @@ easyems keeps integration changes in this pinned tree:
 - Product-only mode disables the internal WebSocket listener and binds the NATS client listener to loopback.
 - The Modbus client publishes `lastGoodPoll` after a complete successful polling cycle so easyems can reject stale automatic-control inputs.
 - Point history uses an ordered ephemeral JetStream consumer; creating named consumers per concurrent history query caused 503s when several points loaded at once.
+- Streams loaded at startup are registered for history reads. Previously only a write registered a stream, so a restarted instance answered history queries from an empty set until its first new write, which made restored history look lost.
 - `DisableHTTP` skips the built-in HTTP listener while still constructing the application handler, so Encore can be the only listener.
 
 These changes avoid a second HTTP service, a second business process and product-user bypass of the application boundary. The upstream API router test covers the restricted routes.

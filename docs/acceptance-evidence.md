@@ -1,6 +1,6 @@
 # 验收证据映射（A 行）
 
-日期：2026-11-11
+日期：2026-11-20
 基线：`docs/acceptance-map.html` 的 A01–A23。**A 行编号是本仓库唯一的验收编号**；旧 Txx / OBJ-xx 编号只作历史对照（见文末）。
 性质：自动化证据只能证明软件行为；`H` 类仍需真机，模拟器通过不等于现场可用。
 
@@ -8,13 +8,12 @@
 
 | 结论 | 行 |
 |---|---|
-| 已实现，可自动取证 | A01、A02、A03、A04、A05、A08、A09、A11、A12、A15 |
-| 部分实现（有自动化，但验收要求的一半没有代码） | A06、A07、A10、A13、A14、A16、A19、A20、A22 |
-| 未实现（无代码、无测试，不得签收） | A17、A18、A21、A23 |
+| 已实现，可自动取证 | A01、A02、A03、A04、A05、A08、A09、A11、A12、A15、A17、A22 |
+| 部分实现（有自动化，但验收要求的一半没有代码） | A06、A07、A10、A13、A14、A16、A19、A20 |
+| 未实现（无代码、无测试，不得签收） | A18、A21、A23 |
 
 当前仍明确未实现或只兑现一半的部分：
 
-- **A17 项目包导出/导入**：版本快照只落在本机 `data/projects/`，没有跨机 manifest 与引用重写。
 - **A18 应用资产生成**：页面仍是手写 React，配置不能生成页面，换站需要发版。
 - **A19 发布前的预检阻断与迁移**：版本发布是原子快照，但尚未用预检失败来阻断发布。
 - **A21 / A23**：MQTT 设备凭据、ACL、下行与 STS 三态仍未建模。
@@ -38,12 +37,12 @@
 | A14 | 部分 | `internal/appapi/handler_integration_test.go` · TestProductAPIVerticalSlice<br/>`internal/appapi/energy_device_create_integration_test.go` · TestUserBuiltUnitControlsDevice<br/>`internal/appapi/energy_control_integration_test.go` · TestEnergyControlEvents<br/>`internal/ems/alarm/alarm_test.go` · TestAcknowledgeAndCloseRules<br/>`frontend/browser-smoke.mjs`、`frontend/m5-site-acceptance.mjs`（容器/浏览器） | 建单元到控设备、启停与人工、报警确认、页面冒烟 | 交接清单、S/H 证据标签、角色×动作矩阵、客户账号无配置入口，均无实现；`/ems/acceptance/run` 无集成测试 |
 | A15 | 已实现 | `internal/appapi/profile_apply_test.go` · TestApplyProfileVerdicts、TestApplyProfilesPersistsModels | 逐点判定 exact/scaled/missing；缩放不一致标注；缺失或只读点位阻断相关控制；业务绑定保持 | 簇数或管理边界变化按新单元重建，不属于换点流程 |
 | A16 | 部分 | `internal/decision/energy_allocator_test.go` · TestAllocateEnergyDirectionalCapabilityAndStatus<br/>`internal/decision/distribute_test.go` · TestDistributeProportionalSplit、TestDistributePriorityFillsHigherFirst、TestDistributeWeightCappedAtCapacity<br/>`internal/decision/allocator_integration_test.go` · TestAllocatorRejectsSharedOwnership<br/>`internal/ems/alloc/alloc_test.go` · TestProportionalSplit、TestSaturatesAtCapacityAndReportsShortfall | 功率按 kW 与实时能力分配、比例水填充、越权归属拒绝、缺口上报 | **多簇管理器的内部簇没有建模**（全仓库无 cluster 概念），内部簇遥测与“恰好 1 次调度”无法验证；522/261 fixture 未建；能量计划未实现 |
-| A17 | 未实现 | 无 | — | 项目包导出/导入、manifest 哈希、引用重写、离线安装全部没有代码 |
+| A17 | 已实现 | `internal/appapi/project_package_test.go` · TestProjectPackageRoundTrip、TestProjectImportRefusesUnmetDependenciesBeforeCreatingNodes<br/>`internal/app/recovery_integration_test.go` · TestCleanInstanceImportsProjectPackageAndRuns | 导出/导入、包内 ref 重写、依赖版本锁定；干净实例离线导入、重新绑定地址后轮询到真实寄存器值 | 包内尚无画面构建产物与仿真场景（见 A18）；地址与凭据必须人工重新绑定 |
 | A18 | 未实现 | 无 | — | 画面/报警/历史/角色动作是手写 React，无配置生成路径 |
 | A19 | 部分 | `internal/appapi/project_version_test.go` · TestProjectVersionPublishAndRollback | 一键冻结当前配置为版本、原子写文件、写审计；失败不产生半个版本 | 发布前预检阻断、迁移与失败注入未实现；无跨机部署语义 |
 | A20 | 部分 | `internal/appapi/commandlog_test.go` · TestCommandHistorySurvivesRestart<br/>`internal/ems/rule/engine_test.go` · TestPrimeSuppressesReplayAfterRestart<br/>`internal/ems/command/command_test.go` · TestSubmitIsIdempotent、TestPointWriteDuplicateConflictAndIdempotency<br/>`internal/ems/history/history_test.go` · TestCapDropsOldest、TestSetLimitTrimsExistingSamples | 重启后命令历史、重启不重放、幂等键恰好一次、内存上限 | 关系库与 Outbox 未实现；断库恢复场景不适用；当前只按 JSONL 口径签收 |
 | A21 | 未实现 | 无 | — | MQTT 仅上行订阅（`third_party/simpleiot/client/mqtt*.go`）；无设备级凭据、无 Topic ACL、无下行命令、无 retained 判据 |
-| A22 | 部分 | `frontend/restore-check.mjs`（离线整目录恢复，校验登录/节点/输出）<br/>`internal/audit/audit_test.go` · TestAppendQueryAndCSV | 停机复制数据目录后恢复可登录、节点与输出存在 | 脚本针对上游演示节点，未校验 EMS 的 4 单元/100 历史点/214 审计；需按 A22 在真站数据上补一次 |
+| A22 | 已实现 | `internal/backup/backup_test.go` · TestRestoreToCleanDirectoryRecordsSnapshotAndDataLoss、TestRestoreMovesThePreviousDataDirectoryAside、TestRestoreRefusesWhileAnInstanceHoldsTheTarget<br/>`internal/app/recovery_integration_test.go` · TestOfflineRestoreKeepsHistoryAlarmsAndAudit<br/>`internal/app/history_restart_test.go` · TestPointHistorySurvivesRestart | 离线备份/恢复拒绝运行中的实例；原目录改名保留；报告快照时间、恢复时间与数据损失窗口；恢复后历史/报警/审计可查；与版本回退分开记录 | 不提供在线热备份（设计取舍）；恢复后重新读取设备状态仍需现场复验 |
 
 ## 复现命令
 

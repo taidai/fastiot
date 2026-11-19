@@ -356,6 +356,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.auditList(w, r, identity)
 	case path == "audit/export" && r.Method == http.MethodGet:
 		h.auditExport(w, r, identity)
+	case path == "recovery" && r.Method == http.MethodGet:
+		h.recoveryStatus(w, identity)
 	case path == "history-settings" && (r.Method == http.MethodGet || r.Method == http.MethodPut):
 		h.historySettings(w, r, identity)
 	case path == "profile-verifications" && r.Method == http.MethodGet:
