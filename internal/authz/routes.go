@@ -246,9 +246,15 @@ func (r Requirement) Allowed(admin bool, can func(string) bool) bool {
 	return r.Action == "" || can(r.Action)
 }
 
-// Required resolves the route declaration. Unknown routes and operations
-// retain the owning handler's 404 behavior. An unresolved impact body fails
-// closed for non-admin identities instead of bypassing its dynamic action.
+// ReasonRouteNotDeclared is the denial reason for a request that matches no
+// route declaration. Callers must treat an unresolved route as forbidden: a
+// missing table entry is a defect, never a reason to serve the request.
+const ReasonRouteNotDeclared = "route_not_declared"
+
+// Required resolves the route declaration. The bool reports whether the route
+// is declared; callers must deny the request when it is false. An unresolved
+// impact body fails closed for non-admin identities instead of bypassing its
+// dynamic action.
 func Required(r *http.Request) (Requirement, bool) {
 	path := strings.TrimPrefix(strings.Trim(r.URL.Path, "/"), "api/")
 	for _, route := range routeRequirements {
