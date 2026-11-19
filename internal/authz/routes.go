@@ -79,6 +79,8 @@ var routeRequirements = []routeRequirement{
 	actionRoute(http.MethodPost, "projects/publish", Configure, "admin_required").bodyTargetError("site", 400, "source_forbidden"),
 	actionRoute(http.MethodGet, "projects/versions", Configure, "admin_required").queryTarget("site"),
 	actionRoute(http.MethodPost, "projects/rollback", Configure, "admin_required").bodyTarget("site"),
+	actionRoute(http.MethodPost, "projects/upgrade/preview", Configure, "admin_required").bodyTargetError("site", 400, "source_forbidden"),
+	actionRoute(http.MethodPost, "projects/upgrade", Configure, "admin_required").bodyTargetError("site", 400, "source_forbidden"),
 	actionRoute(http.MethodGet, "projects/export", Export, "export_required").queryTargetError("site", 400, "source_forbidden"),
 	actionRoute(http.MethodPost, "projects/import", Configure, "admin_required").bodyTarget("parent"),
 	authenticatedRoute(http.MethodGet, "demand").queryTarget("site").inPackage(industry.EMSPackageID),
