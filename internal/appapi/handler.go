@@ -426,6 +426,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.rollbackHandler(w, identity, req.Site, req.Version)
+	case path == "projects/upgrade/preview" && r.Method == http.MethodPost:
+		h.upgradePreviewHandler(w, r, identity)
+	case path == "projects/upgrade" && r.Method == http.MethodPost:
+		h.upgradeApplyHandler(w, r, identity)
 	case path == "demand" && r.Method == http.MethodGet:
 		h.demandHandler(w, identity, r.URL.Query().Get("site"))
 	case path == "projects/plan96" && r.Method == http.MethodGet:

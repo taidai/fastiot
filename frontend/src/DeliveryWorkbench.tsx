@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ApiError, downloadProjectPackage, importProjectPackage, nameOf, point, recoveryStatus, request, type Node, type RecoveryStatus } from "./api"
+import { ApiError, applyProjectUpgrade, downloadProjectPackage, importProjectPackage, nameOf, point, previewProjectUpgrade, recoveryStatus, request, type Node, type RecoveryStatus, type UpgradePreview } from "./api"
 import { EmsButton, EmsCard, EmsSectionHeader, InlineNotice, SegmentedTabs, StatusBadge, type EmsTone } from "./components/ems"
 import DeployView from "./DeployView"
 import acceptance from "./data/acceptance-status.json"
@@ -37,6 +37,39 @@ const gateTones: Record<string, EmsTone> = { pass: "success", warn: "warning", f
 const gateNames: Record<string, string> = { pass: "通过", warn: "注意", fail: "阻断" }
 const acceptanceTones: Record<string, EmsTone> = { implemented: "success", partial: "warning", unimplemented: "neutral" }
 const acceptanceNames: Record<string, string> = { implemented: "已实现", partial: "部分", unimplemented: "未实现" }
+
+// 升级对照的显示文案：每一项差异都说明升级会怎么处理，冲突只等人员选择，不做自动合并。
+const upgradePointNames: Record<string, string> = {
+  template_change: "采用新版",
+  template_add: "新增（新版）",
+  site_change: "保留现场",
+  site_only: "现场自有",
+  site_removed: "现场已删除",
+  template_removed: "新版已移除 · 保留现场",
+  conflict: "冲突 · 待裁决",
+}
+const upgradePointTones: Record<string, EmsTone> = {
+  template_change: "info",
+  template_add: "warning",
+  site_change: "neutral",
+  site_only: "neutral",
+  site_removed: "neutral",
+  template_removed: "neutral",
+  conflict: "danger",
+}
+const upgradeNodeNames: Record<string, string> = {
+  matched: "对照",
+  added_by_template: "新版新增",
+  site_only: "现场自有",
+  removed_by_template: "新版已移除 · 保留现场",
+  deleted_locally: "现场已删除 · 待裁决",
+}
+const upgradeReasons: Record<string, string> = {
+  both_changed: "旧基线之后双方都改过这一项",
+  both_added: "双方各自新增了这一项",
+  deleted_locally: "现场删除了这个对象，新模板仍有它",
+  removed_locally_template_changed: "现场删除了这一项，新模板又改了它",
+}
 
 const steps: { key: StepKey; label: string; page?: Page }[] = [
   { key: "site", label: "站点" },
@@ -87,6 +120,15 @@ export default function DeliveryWorkbench({ token, nodes, siteID, canConfigure, 
   const [packageMessage, setPackageMessage] = useState("")
   const [packageTone, setPackageTone] = useState<"info" | "warning" | "danger">("info")
   const packageInput = useRef<HTMLInputElement>(null)
+  const [upgradeBase, setUpgradeBase] = useState("")
+  const [upgradeTemplate, setUpgradeTemplate] = useState<unknown | null>(null)
+  const [upgradeTemplateName, setUpgradeTemplateName] = useState("")
+  const [upgradePreview, setUpgradePreview] = useState<UpgradePreview | null>(null)
+  const [upgradeChoices, setUpgradeChoices] = useState<Record<string, "local" | "template">>({})
+  const [upgradeBusy, setUpgradeBusy] = useState(false)
+  const [upgradeMessage, setUpgradeMessage] = useState("")
+  const [upgradeTone, setUpgradeTone] = useState<EmsTone>("info")
+  const upgradeInput = useRef<HTMLInputElement>(null)
   const [planSlots, setPlanSlots] = useState<(number | null)[]>(() => Array(96).fill(null))
   const [planLoaded, setPlanLoaded] = useState(false)
   const [planBusy, setPlanBusy] = useState(false)
@@ -124,6 +166,12 @@ export default function DeliveryWorkbench({ token, nodes, siteID, canConfigure, 
     setReuseResult(null)
     setApplyResult(null)
     setApplyMessage("")
+    setUpgradeBase("")
+    setUpgradeTemplate(null)
+    setUpgradeTemplateName("")
+    setUpgradePreview(null)
+    setUpgradeChoices({})
+    setUpgradeMessage("")
   }, [currentSite])
 
   useEffect(() => {
@@ -314,6 +362,72 @@ export default function DeliveryWorkbench({ token, nodes, siteID, canConfigure, 
       setVersionBusy(false)
     }
   }, [token, currentSite, loadVersions, onError])
+
+  const upgradeBaseline = upgradeBase || versions[0]?.id || ""
+  const upgradeUnresolved = (upgradePreview?.conflicts || []).filter((conflict) => !upgradeChoices[conflict.id]).length
+  const upgradeCanApply = !!upgradePreview && upgradePreview.incompatible.length === 0 && upgradeUnresolved === 0
+
+  const runUpgradePreview = useCallback(async (site: string, base: string, pkg: unknown) => {
+    setUpgradeBusy(true)
+    try {
+      const preview = await previewProjectUpgrade(token, site, base, pkg)
+      if (site !== currentSiteRef.current) return
+      setUpgradePreview(preview)
+      setUpgradeChoices({})
+      setUpgradeTone(preview.incompatible.length ? "danger" : preview.conflicts.length ? "warning" : "info")
+      setUpgradeMessage(preview.blocked
+        ? `对照完成：${preview.conflicts.length} 处冲突、${preview.incompatible.length} 项不兼容；未处理前不会写入现场`
+        : "对照完成：没有冲突或阻塞项，确认后写入")
+    } catch (cause) {
+      setUpgradePreview(null)
+      setUpgradeTone("danger")
+      setUpgradeMessage(cause instanceof Error ? cause.message : "升级对照失败")
+    } finally {
+      setUpgradeBusy(false)
+    }
+  }, [token])
+
+  const chooseUpgradeTemplate = useCallback(async (file: File) => {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(await file.text())
+    } catch {
+      setUpgradeTemplate(null)
+      setUpgradeTone("danger")
+      setUpgradeMessage("文件不是有效的项目包 JSON")
+      return
+    }
+    if (!currentSite || !upgradeBaseline) {
+      setUpgradeTone("danger")
+      setUpgradeMessage("升级需要先冻结一个旧基线版本")
+      return
+    }
+    setUpgradeTemplate(parsed)
+    setUpgradeTemplateName(file.name)
+    await runUpgradePreview(currentSite, upgradeBaseline, parsed)
+  }, [currentSite, upgradeBaseline, runUpgradePreview])
+
+  const applyUpgrade = useCallback(async () => {
+    if (!currentSite || !upgradePreview || !upgradeTemplate) return
+    setUpgradeBusy(true)
+    try {
+      const result = await applyProjectUpgrade(token, currentSite, upgradePreview.baseline.version, upgradeTemplate, upgradeChoices)
+      const notes = [`已升级到「${upgradePreview.template.name}」：更新 ${result.updated}、新建 ${result.created}、保留现场 ${result.kept}`]
+      if (result.conflicts_resolved) notes.push(`人员裁决 ${result.conflicts_resolved} 处冲突`)
+      notes.push(`升级前版本 ${result.before_version} 可回退；回退只重放工程配置，升级期间新增的报警、命令与审计保留`)
+      if (result.warnings?.length) notes.push(`警告：${result.warnings.join("；")}`)
+      setUpgradeTone(result.warnings?.length ? "warning" : "info")
+      setUpgradeMessage(notes.join("。"))
+      setUpgradePreview(null)
+      setUpgradeChoices({})
+      await loadVersions()
+    } catch (cause) {
+      setUpgradeTone("danger")
+      setUpgradeMessage(cause instanceof Error ? cause.message : "升级失败")
+    } finally {
+      setUpgradeBusy(false)
+    }
+  }, [token, currentSite, upgradePreview, upgradeTemplate, upgradeChoices, loadVersions])
 
   useEffect(() => {
     if (!emsInstalled || step !== "rules" || !currentSite) return
@@ -731,6 +845,92 @@ export default function DeliveryWorkbench({ token, nodes, siteID, canConfigure, 
                 </div>)}
               </div>}
             <p className="m-0 text-xs text-ems-muted">冻结版本只保存当前工程配置，不改变运行中的设备；回退前会自动再冻结一次当前配置。历史（审计、报警、命令）不回滚。整目录恢复是下面的另一个操作，不能互相替代。</p>
+          </div>
+        </EmsCard>}
+
+        {tab === "versions" && canConfigure && <EmsCard>
+          <div className="grid gap-3">
+            <EmsSectionHeader kicker="版本升级" title="旧基线、现场定制与新模板三方对照"
+              description="逐项列出旧基线、现场当前值与新模板的差异：只有现场没动过、新模板改过的项才直接写入；双方都改过的冲突必须由人员逐项选择，未裁决前不升级。运行参数（96 点计划、目标、分时策略）不随升级改写；新模板无法解释现场在用的运行参数时阻止升级。" />
+            <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+              <label className="grid gap-1 text-xs text-ems-muted">旧基线
+                <select aria-label="升级旧基线" value={upgradeBaseline} disabled={versions.length === 0}
+                  onChange={(event) => {
+                    setUpgradeBase(event.target.value)
+                    if (upgradeTemplate) void runUpgradePreview(currentSite, event.target.value, upgradeTemplate)
+                  }}>
+                  {versions.length === 0 ? <option value="">还没有可对照的版本</option> : versions.map((version) => (
+                    <option key={version.id} value={version.id}>{clock(version.created_at)} · {version.id}{version.note ? ` · ${version.note}` : ""}</option>
+                  ))}
+                </select>
+              </label>
+              <EmsButton variant="secondary" busy={upgradeBusy} disabled={!currentSite || versions.length === 0} onClick={() => upgradeInput.current?.click()}>选择新模板…</EmsButton>
+              <input ref={upgradeInput} type="file" accept="application/json,.json" className="hidden" aria-label="新模板文件"
+                onChange={(event) => {
+                  const file = event.target.files?.[0]
+                  event.target.value = ""
+                  if (file) void chooseUpgradeTemplate(file)
+                }} />
+            </div>
+            {upgradeMessage && <InlineNotice tone={upgradeTone}>{upgradeMessage}</InlineNotice>}
+            {upgradePreview && <div className="grid gap-3">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <StatusBadge tone="neutral">模板 {upgradePreview.template.name}</StatusBadge>
+                <StatusBadge tone="info">写入 {upgradePreview.summary.changed}</StatusBadge>
+                <StatusBadge tone="warning">新增 {upgradePreview.summary.added}</StatusBadge>
+                <StatusBadge tone="neutral">现场保留 {upgradePreview.summary.site_only}</StatusBadge>
+                <StatusBadge tone={upgradePreview.summary.conflicts ? "danger" : "success"}>冲突 {upgradePreview.summary.conflicts}</StatusBadge>
+                {upgradePreview.summary.incompatible > 0 && <StatusBadge tone="danger">不兼容 {upgradePreview.summary.incompatible}</StatusBadge>}
+              </div>
+              {upgradeTemplateName && <p className="m-0 text-xs text-ems-muted">模板文件 {upgradeTemplateName} · 基线 {upgradePreview.baseline.version} · 新模板声明 {upgradePreview.template.dependencies?.length || 0} 个依赖</p>}
+              {upgradePreview.warnings?.length ? <p className="m-0 text-xs text-ems-muted">注意：{upgradePreview.warnings.join("；")}</p> : null}
+              {upgradePreview.incompatible.length > 0 && <div className="grid gap-1 rounded-lg border border-ems-line px-3 py-2 text-xs">
+                {upgradePreview.incompatible.map((item) => <div key={item.kind + (item.object || "") + item.detail} className="flex gap-2">
+                  <StatusBadge tone="danger">{item.kind === "runtime_parameter" ? "运行参数" : "依赖"}</StatusBadge>
+                  <span>{item.detail}</span>
+                </div>)}
+              </div>}
+              {upgradePreview.conflicts.length > 0 && <div className="grid gap-2">
+                {upgradePreview.conflicts.map((conflict) => <div key={conflict.id} className="grid gap-2 rounded-lg border border-ems-line px-3 py-2 text-xs">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <StatusBadge tone="danger">冲突</StatusBadge>
+                    <strong>{conflict.node}{conflict.point ? ` · ${conflict.point}` : ""}</strong>
+                    <span className="text-ems-muted">{upgradeReasons[conflict.reason] || conflict.reason}</span>
+                  </div>
+                  <div className="grid gap-1 md:grid-cols-3">
+                    <span className="text-ems-muted">旧基线：{conflict.base || "—"}</span>
+                    <span className="text-ems-muted">现场：{conflict.local || "—"}</span>
+                    <span className="text-ems-muted">新模板：{conflict.template || "—"}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <EmsButton variant={upgradeChoices[conflict.id] === "local" ? "primary" : "secondary"}
+                      onClick={() => setUpgradeChoices((prev) => ({ ...prev, [conflict.id]: "local" }))}>保留现场</EmsButton>
+                    <EmsButton variant={upgradeChoices[conflict.id] === "template" ? "primary" : "secondary"}
+                      onClick={() => setUpgradeChoices((prev) => ({ ...prev, [conflict.id]: "template" }))}>采用新版</EmsButton>
+                  </div>
+                </div>)}
+              </div>}
+              {upgradePreview.nodes.some((node) => node.points.length > 0) && <div className="overflow-x-auto">
+                <table className="ems-table w-full text-sm">
+                  <thead><tr><th>对象</th><th>点位</th><th>旧基线</th><th>现场</th><th>新模板</th><th>处理</th></tr></thead>
+                  <tbody>{upgradePreview.nodes.filter((node) => node.points.length > 0).map((node) => node.points.map((item, index) => (
+                    <tr key={`${node.key}-${item.point}-${item.key || ""}-${index}`}>
+                      {index === 0 && <td rowSpan={node.points.length} className="align-top"><strong>{node.name}</strong><small className="block text-ems-muted">{node.type} · {upgradeNodeNames[node.status] || node.status}</small></td>}
+                      <td className="whitespace-nowrap">{item.point}{item.key ? `[${item.key}]` : ""}</td>
+                      <td className="text-xs text-ems-muted">{item.base || "—"}</td>
+                      <td>{item.local || "—"}</td>
+                      <td>{item.template || "—"}</td>
+                      <td><StatusBadge tone={upgradePointTones[item.status] || "neutral"}>{upgradePointNames[item.status] || item.status}</StatusBadge></td>
+                    </tr>
+                  )))}</tbody>
+                </table>
+              </div>}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs text-ems-muted">{upgradeUnresolved ? `还有 ${upgradeUnresolved} 处冲突未裁决` : upgradePreview.incompatible.length ? "存在不兼容项，升级被拒绝" : "无冲突；确认后先冻结当前配置再写入"}</span>
+                <EmsButton busy={upgradeBusy} disabled={!upgradeCanApply} onClick={() => void applyUpgrade()}>确认升级</EmsButton>
+              </div>
+            </div>}
+            <p className="m-0 text-xs text-ems-muted">升级是版本级操作：只重放工程配置，升级期间新增的报警、命令与审计保留；整目录灾难恢复是下面的另一个操作。</p>
           </div>
         </EmsCard>}
 

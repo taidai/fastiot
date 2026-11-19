@@ -151,14 +151,17 @@
     {
       "id": "A13",
       "title": "升级与版本回退",
-      "status": "partial",
-      "summary": "项目级发布、版本快照与回退已实现；三方冲突的角色确认未实现",
+      "status": "implemented",
+      "summary": "项目发布与版本回退；升级对照旧基线、现场定制与新模板，冲突由人员逐项裁决，未裁决冲突与不兼容运行参数阻止升级；回退保留升级期间新增的报警、命令与审计",
       "evidence": [
         "TestProjectVersionPublishAndRollback",
-        "TestReplayVersionAtTime"
+        "TestProjectUpgradeShowsBaselineSiteAndTemplateValues",
+        "TestProjectUpgradeRefusesUnresolvedConflictUntilSomeoneChooses",
+        "TestProjectUpgradeBlocksIncompatibleRuntimeParameter",
+        "TestProjectUpgradeConflictBlocksThenRollbackKeepsUpgradeHistory"
       ],
-      "gap": "升级冲突的人工确认与 installer 视图限制",
-      "updated_at": "2026-11-11"
+      "gap": "维护窗口与受控重启（US 49）不在本用例；升级不支持计算链与虚拟输入对象（与回退一致）",
+      "updated_at": "2026-11-20"
     },
     {
       "id": "A14",

@@ -143,6 +143,16 @@ const errorTexts: Record<string, string> = {
   input_persistence_unconfirmed: "保存结果尚未确认，请先重新读取，不要盲目重复提交",
   invalid_input_document: "输入存储内容不可用，请联系工程人员核查",
   virtual_input_rollback_unsupported: "项目含虚拟输入，暂不支持项目版本回退；未执行写入",
+  baseline_required: "升级需要先冻结一个旧基线版本，才能对照现场定制与新模板",
+  baseline_not_found: "找不到所选基线版本；请刷新版本列表后重新对照",
+  upgrade_blocked: "还有未裁决的冲突：请逐项选择保留现场或采用新版后再升级",
+  runtime_parameter_incompatible: "新版模板无法解释现场正在使用的运行参数，升级已拒绝；请改用包含 EMS 的模板或先清除该参数",
+  dependency_incompatible: "新版模板声明的依赖在本机无法满足，已拒绝升级；未写入现场",
+  invalid_resolution: "冲突裁决值无效，请重新选择",
+  invalid_package: "文件不是有效的项目包",
+  template_site_unmatched: "新模板属于另一个站点，不能用于本项目的升级",
+  calculation_upgrade_unsupported: "项目含计算链对象，暂不支持升级",
+  virtual_input_upgrade_unsupported: "项目含虚拟输入对象，暂不支持升级",
   history_export_limit_exceeded: "完整导出超过 10000 条上限，请缩小点位或时间范围后重试",
   export_required: "当前账号没有导出权限",
   read_only: "该点位只读，不能写入",
@@ -290,6 +300,75 @@ export type ProjectImportResult = {
 
 export function importProjectPackage(token: string, pkg: unknown, name?: string) {
   return request<ProjectImportResult>(token, "/projects/import", "POST", { package: pkg, name })
+}
+
+// 升级三方对照：旧基线（冻结版本）、现场定制（当前配置）与新模板（项目包）。
+export type UpgradePointDiff = {
+  point: string
+  key?: string
+  status: string
+  base?: string
+  local?: string
+  template?: string
+  conflict?: string
+}
+
+export type UpgradeNodeDiff = {
+  key: string
+  name: string
+  type: string
+  status: string
+  points: UpgradePointDiff[]
+  conflict?: string
+}
+
+export type UpgradeConflict = {
+  id: string
+  node: string
+  point?: string
+  reason: string
+  base?: string
+  local?: string
+  template?: string
+}
+
+export type UpgradeIncompatible = { kind: string; object?: string; detail: string }
+
+export type UpgradePreview = {
+  site: string
+  site_name: string
+  baseline: { version: string; created_at: string; operator: string; note?: string }
+  template: { id: string; name: string; version: number; created_at: string; operator: string; dependencies?: { kind: string; id: string; version: string }[] }
+  summary: { changed: number; added: number; site_only: number; conflicts: number; incompatible: number }
+  nodes: UpgradeNodeDiff[]
+  conflicts: UpgradeConflict[]
+  incompatible: UpgradeIncompatible[]
+  blocked: boolean
+  blockers: string[]
+  warnings?: string[]
+  note: string
+}
+
+export type UpgradeResult = {
+  site: string
+  base: string
+  template: string
+  updated: number
+  created: number
+  kept: number
+  conflicts_resolved: number
+  before_version: string
+  version: string
+  preflight_status?: string
+  warnings?: string[]
+}
+
+export function previewProjectUpgrade(token: string, site: string, base: string, pkg: unknown) {
+  return request<UpgradePreview>(token, "/projects/upgrade/preview", "POST", { site, base, package: pkg })
+}
+
+export function applyProjectUpgrade(token: string, site: string, base: string, pkg: unknown, resolutions: Record<string, "local" | "template">) {
+  return request<UpgradeResult>(token, "/projects/upgrade", "POST", { site, base, package: pkg, resolutions })
 }
 
 export function point(node: Node, type: string) {
