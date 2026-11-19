@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { EmsButton, InlineNotice } from "./components/ems"
 import { request } from "./api"
+import ScreenRevision from "./ScreenRevision"
 
 type Point = { id: string; name: string; kind: string; unit?: string; writable: boolean }
 type Finding = {
@@ -67,6 +68,7 @@ export default function GeneratedScreenPreview({ token, nodeID, pointIDs, source
   const [error, setError] = useState("")
   const [notice, setNotice] = useState("")
   const [confirming, setConfirming] = useState(false)
+  const [revision, setRevision] = useState(0)
   const pointKey = pointIDs.join(",")
 
   useEffect(() => {
@@ -80,6 +82,7 @@ export default function GeneratedScreenPreview({ token, nodeID, pointIDs, source
         firstValues.current = true
         setWrites([])
         setChecksRan(false)
+        setRevision(0)
         setSession(result)
         setReport(result.report)
       })
@@ -91,6 +94,21 @@ export default function GeneratedScreenPreview({ token, nodeID, pointIDs, source
 
   const post = useCallback((message: Record<string, unknown>) => {
     frame.current?.contentWindow?.postMessage({ ...message, token: loadToken.current }, "*")
+  }, [])
+
+  // A revision replaces the preview source in place. The frame URL gains the
+  // revision so the sandbox reloads, and the browser checks must run again
+  // before the publish gate accepts the modified document.
+  const applyRevision = useCallback((applied: { revision: number; frame_url: string; report: Report; changes: unknown[] }) => {
+    findings.current = []
+    firstValues.current = true
+    setWrites([])
+    setChecksRan(false)
+    setSession((current) => current ? { ...current, frame_url: applied.frame_url, report: applied.report } : current)
+    setReport(applied.report)
+    setRevision(applied.revision)
+    setNotice(`已应用修改（${applied.changes?.length || 0} 处变化）；需要在预览中重新检查后才能发布`)
+    setError("")
   }, [])
 
   const submitFindings = useCallback((delay = 0) => {
@@ -269,5 +287,13 @@ export default function GeneratedScreenPreview({ token, nodeID, pointIDs, source
         </li>)}
       </ul>
     </section>}
+
+    {session && <ScreenRevision
+      token={token}
+      sessionID={session.id}
+      revision={revision}
+      onApplied={applyRevision}
+      onLocate={(element) => post({ type: "fastiot:locate", element })}
+    />}
   </div>
 }

@@ -207,7 +207,7 @@ func (h *Handler) generatedScreenDiagnostics(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusNotFound, "not_found")
 		return
 	}
-	document := genscreen.Parse(session.Source)
+	document := genscreen.Parse(session.Snapshot().Source)
 	findings = document.AttachLocations(findings)
 	writeJSON(w, map[string]any{"report": session.SetClient(findings, time.Now())})
 }
@@ -235,9 +235,11 @@ func (h *Handler) generatedScreenConfirm(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	checkedAt := session.CheckedAt()
+	snapshot := session.Snapshot()
 	draft, err := json.Marshal(map[string]any{
-		"source": session.Source, "points": session.Points, "report": report,
+		"source": snapshot.Source, "points": snapshot.Points, "report": report,
 		"checked_at": checkedAt, "simulator": "preview", "node_id": session.NodeID,
+		"revision": snapshot.Revision,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "encode_failed")
@@ -262,7 +264,7 @@ func (h *Handler) generatedScreenFrame(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 	nonce := generatedScreenNonce()
-	document := genscreen.Parse(session.Source)
+	document := genscreen.Parse(session.Snapshot().Source)
 
 	header := w.Header()
 	header.Set("Content-Type", "text/html; charset=utf-8")
