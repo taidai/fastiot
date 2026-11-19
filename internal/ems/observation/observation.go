@@ -15,6 +15,11 @@ const (
 	Unknown = "unknown"
 )
 
+// DefaultMaxAge is the freshness tolerance a consumer applies when it has no
+// configured maximum age. Evaluate does not apply it implicitly: a zero MaxAge
+// still means the expiry is unconfigured.
+const DefaultMaxAge = 15 * time.Second
+
 type Input struct {
 	Value         signal.Value
 	Quality       signal.Quality

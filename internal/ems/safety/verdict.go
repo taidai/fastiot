@@ -5,6 +5,7 @@ import (
 	"math"
 	"time"
 
+	"fastiot/internal/ems/observation"
 	"fastiot/internal/ems/signal"
 )
 
@@ -47,7 +48,7 @@ func Evaluate(request Request, now time.Time) Verdict {
 	}
 	maxAge := request.MaxAge
 	if maxAge <= 0 {
-		maxAge = 15 * time.Second
+		maxAge = observation.DefaultMaxAge
 	}
 	for _, input := range spec.Requires {
 		sample, found := request.Samples[input]
