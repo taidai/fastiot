@@ -120,10 +120,7 @@ func (s *Service) Observe(now time.Time, results []channel.Result) {
 		return
 	}
 	s.observationMu.Lock()
-	accepted, events := s.State.ApplyDetailed(now, results)
-	s.clearStale(accepted)
-	s.History.Record(toHistory(now, accepted))
-	s.History.RecordEvents(toHistoryEvents(now, events))
+	accepted := s.ingest(now, results)
 	if s.OnObservations != nil {
 		s.OnObservations(s.State.Capture(func() time.Time { return now }, s.MaxAge))
 	}
@@ -240,10 +237,7 @@ func (s *Service) runChannel(ctx context.Context, ch *channel.Channel, period ti
 				return
 			}
 			received := time.Now()
-			accepted, events := s.State.ApplyDetailed(received, results)
-			s.clearStale(accepted)
-			s.History.Record(toHistory(received, accepted))
-			s.History.RecordEvents(toHistoryEvents(received, events))
+			accepted := s.ingest(received, results)
 			for _, entry := range ch.Devices {
 				s.State.SetHealth(entry.ID, ch.Health(entry.ID, now, s.MaxAge), now)
 			}
@@ -293,6 +287,16 @@ func (s *Service) updateCommandAlarms(now time.Time) {
 			_, _ = s.Alarms.Clear(now, "command-unknown:"+outcome.RequestID)
 		}
 	}
+}
+
+// ingest is the single write path for runtime observations, shared by channel
+// cycles and direct protocol observations.
+func (s *Service) ingest(received time.Time, results []channel.Result) []channel.Result {
+	accepted, events := s.State.ApplyDetailed(received, results)
+	s.clearStale(accepted)
+	s.History.Record(toHistory(received, accepted))
+	s.History.RecordEvents(toHistoryEvents(received, events))
+	return accepted
 }
 
 func toHistory(received time.Time, results []channel.Result) []history.Sample {

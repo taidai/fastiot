@@ -11,6 +11,7 @@ import (
 	"fastiot/internal/ems/bridge"
 	"fastiot/internal/ems/channel"
 	emshistory "fastiot/internal/ems/history"
+	"fastiot/internal/ems/historyquery"
 	"fastiot/internal/ems/runtime"
 	"fastiot/internal/ems/signal"
 	"fastiot/internal/emsapi"
@@ -42,20 +43,17 @@ func TestHistoryCursorAndAggregateStayConsistent(t *testing.T) {
 	if got := len(service.History.Query(device.ID, point, at, at.Add(599*time.Second), 1000)); got != 600 {
 		t.Fatalf("history fixture lost samples: %d", got)
 	}
-	node, err := historyNode(h, point)
+	hq := h.historyQuery()
+	raw, _, err := hq.Execute(historyquery.Request{NodeIDs: []string{point}, Type: "value", Start: at, End: at.Add(599 * time.Second), Limit: 2000})
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err := h.readHistoryPoint(node, "value", "", at, at.Add(599*time.Second), 0)
+	t.Logf("raw first=%+v raw last=%+v", raw[0].Records[0], raw[0].Records[len(raw[0].Records)-1])
+	read, _, err := hq.Execute(historyquery.Request{NodeIDs: []string{point}, Type: "value", Start: at, End: at.Add(599 * time.Second), Aggregate: 5 * time.Minute, Limit: 2000})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("raw first=%+v raw last=%+v", raw.records[0], raw.records[len(raw.records)-1])
-	read, err := h.readHistoryPoint(node, "value", "", at, at.Add(599*time.Second), 5*time.Minute)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("aggregate records=%+v", read.records)
+	t.Logf("aggregate records=%+v", read[0].Records)
 	query := url.Values{"node_id": []string{point}, "start": []string{at.Format(time.RFC3339)}, "end": []string{at.Add(599 * time.Second).Format(time.RFC3339)}, "aggregate": []string{"5m"}, "limit": []string{"1"}}
 	var page struct {
 		Results []struct {
@@ -430,7 +428,7 @@ func TestSIOTHistoryRejectsSaturatedTimeCursor(t *testing.T) {
 		points[i] = data.NewPointFloat(data.PointTypeValue, "", float64(i))
 		points[i].Time = at
 	}
-	_, err := historySIOT(saturatedHistoryReader{points: points}, "point", data.PointTypeValue, "", time.Time{}, time.Time{})
+	_, err := historyquery.SIOTPoints(saturatedHistoryReader{points: points}, "point", data.PointTypeValue, "", time.Time{}, time.Time{})
 	if err == nil || err.Error() != "history_time_cursor_saturated" {
 		t.Fatalf("saturated SIOT cursor error = %v", err)
 	}

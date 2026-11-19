@@ -91,3 +91,36 @@ func TestSetLimitTrimsExistingSamples(t *testing.T) {
 		t.Fatalf("samples = %+v", samples)
 	}
 }
+
+func TestTimelineMergesObservationsAndEventsWithExplicitKind(t *testing.T) {
+	store := New(10)
+	store.Record([]Sample{
+		{DeviceID: "d1", PointID: "temp", Value: signal.Num(1), Quality: signal.Good, SourceTime: t0},
+		{DeviceID: "d1", PointID: "temp", Value: signal.Num(3), Quality: signal.Good, SourceTime: t0.Add(2 * time.Second)},
+	})
+	store.RecordEvents([]Sample{{DeviceID: "d1", PointID: "temp", Kind: KindQualityEvent, Quality: signal.Invalid, Reason: "timeout", SourceTime: t0.Add(time.Second)}})
+
+	timeline := store.Timeline("d1", "temp", time.Time{}, time.Time{}, 0)
+	if len(timeline) != 3 {
+		t.Fatalf("timeline = %+v", timeline)
+	}
+	for i, want := range []struct {
+		value float64
+		kind  string
+	}{{1, KindObservation}, {0, KindQualityEvent}, {3, KindObservation}} {
+		if timeline[i].Kind != want.kind {
+			t.Fatalf("entry %d kind = %q, want %q", i, timeline[i].Kind, want.kind)
+		}
+		if want.kind == KindObservation && timeline[i].Value.Num != want.value {
+			t.Fatalf("entry %d value = %v, want %v", i, timeline[i].Value.Num, want.value)
+		}
+	}
+	if timeline[1].Reason != "timeout" {
+		t.Fatalf("quality event reason = %q", timeline[1].Reason)
+	}
+
+	limited := store.Timeline("d1", "temp", time.Time{}, time.Time{}, 2)
+	if len(limited) != 2 || limited[1].Kind != KindObservation || limited[1].Value.Num != 3 {
+		t.Fatalf("timeline limit = %+v", limited)
+	}
+}
