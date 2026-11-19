@@ -15,6 +15,8 @@ import (
 	"fastiot/internal/audit"
 	"fastiot/internal/calculation"
 	"fastiot/internal/decision"
+	"fastiot/internal/deepseek"
+	"fastiot/internal/genscreen"
 	"fastiot/internal/industry"
 	"fastiot/internal/virtualinput"
 )
@@ -62,6 +64,18 @@ type packageStrip struct {
 	Reason string `json:"reason"`
 }
 
+// packageScreen is a confirmed generated screen as the project carries it: the
+// model's source with every bound point replaced by a stable token, the
+// token → ref map that restores identity on import, and the fingerprint of the
+// frame this source builds together with the pins that frame depends on.
+type packageScreen struct {
+	Node     string            `json:"node"`
+	Source   string            `json:"source"`
+	Bindings map[string]string `json:"bindings"`
+	Artifact string            `json:"artifact"`
+	Build    genscreen.Build   `json:"build"`
+}
+
 type projectPackage struct {
 	Format        string              `json:"format"`
 	FormatVersion int                 `json:"format_version"`
@@ -73,6 +87,7 @@ type projectPackage struct {
 	Operator      string              `json:"operator"`
 	Dependencies  []packageDependency `json:"dependencies"`
 	Nodes         []packageNode       `json:"nodes"`
+	Screens       []packageScreen     `json:"screens"`
 	Stripped      []packageStrip      `json:"stripped"`
 	Warnings      []string            `json:"warnings"`
 }
@@ -167,6 +182,30 @@ func (pkg projectPackage) validate() error {
 	}
 	if sites != 1 {
 		return fmt.Errorf("invalid_package_structure:site_root")
+	}
+	screened := map[string]bool{}
+	for _, screen := range pkg.Screens {
+		if screen.Node == "" || !refs[screen.Node] {
+			return fmt.Errorf("invalid_package_structure:screen_node")
+		}
+		if screened[screen.Node] {
+			return fmt.Errorf("invalid_package_structure:screen_duplicate")
+		}
+		screened[screen.Node] = true
+		if strings.TrimSpace(screen.Source) == "" {
+			return fmt.Errorf("missing_screen:%s", screen.Node)
+		}
+		if len(screen.Source) > maxGeneratedScreenSource {
+			return fmt.Errorf("invalid_package_structure:screen_too_large")
+		}
+		if screen.Artifact == "" || screen.Build.Runtime == "" {
+			return fmt.Errorf("invalid_package_structure:screen_artifact")
+		}
+		for token, ref := range screen.Bindings {
+			if token == "" || !refs[ref] {
+				return fmt.Errorf("missing_screen_binding:%s", screen.Node)
+			}
+		}
 	}
 	if _, err := orderPackageRefs(pkg.Nodes); err != nil {
 		return err
@@ -332,6 +371,10 @@ func packagePoints(node data.NodeEdge, idMap map[string]string, strips *[]packag
 	points := make(data.Points, 0, len(node.Points))
 	for _, p := range node.Points {
 		if p.Tombstone%2 != 0 {
+			continue
+		}
+		if p.Type == generatedScreenDraftType {
+			// 画面随 screens 条目单独承载：源码、绑定 token 与构建产物一起走。
 			continue
 		}
 		if reason := packageStripReason(node, p); reason != "" {
@@ -827,6 +870,91 @@ func orderPackageNodes(nodes []data.NodeEdge) []data.NodeEdge {
 	return ordered
 }
 
+// screenDraftPoint finds the newest confirmed screen on a node. The point key
+// is not reliable here: the draft is stored with an empty key.
+func screenDraftPoint(points data.Points) (data.Point, bool) {
+	var found data.Point
+	ok := false
+	for _, p := range points {
+		if p.Type == generatedScreenDraftType && p.Tombstone%2 == 0 {
+			found = p
+			ok = true
+		}
+	}
+	return found, ok
+}
+
+// collectProjectScreens turns each confirmed screen draft into a portable
+// screen. A draft that cannot be represented, or that carries a credential, is
+// refused: the package never ships a page the target could not rebuild or must
+// not copy.
+func collectProjectScreens(nodes []data.NodeEdge, idMap map[string]string, warnings *[]string) ([]packageScreen, error) {
+	screens := make([]packageScreen, 0, 1)
+	for _, node := range nodes {
+		point, ok := screenDraftPoint(node.Points)
+		if !ok {
+			continue
+		}
+		var draft struct {
+			Source string `json:"source"`
+		}
+		if json.Unmarshal([]byte(point.Txt()), &draft) != nil || strings.TrimSpace(draft.Source) == "" {
+			return nil, fmt.Errorf("missing_screen:%s", nodeName(node))
+		}
+		if hits := deepseek.ScanCredentials("screen", "source", draft.Source); len(hits) > 0 {
+			return nil, fmt.Errorf("screen_contains_secret:%s", nodeName(node))
+		}
+		source, bindings, unresolved := packageScreenBindings(genscreen.Parse(draft.Source).FindBindings(), draft.Source, idMap)
+		if len(unresolved) > 0 {
+			addPackageWarning(warnings, fmt.Sprintf("「%s」的画面绑定了项目包外的点位，导入后需重新绑定", nodeName(node)))
+		}
+		screens = append(screens, packageScreen{
+			Node: idMap[node.ID], Source: source, Bindings: bindings,
+			Artifact: genscreen.Fingerprint(source), Build: genscreen.BuildFor(source),
+		})
+	}
+	sort.Slice(screens, func(i, j int) bool { return screens[i].Node < screens[j].Node })
+	return screens, nil
+}
+
+// packageScreenBindings replaces the source instance's identifiers with stable
+// tokens assigned by first appearance, so the same screen exports
+// byte-identically from any deployment. A declared binding to an object
+// outside the package still becomes a token, but has no ref in the map: the
+// target shows it as unbound instead of silently pointing at an old site.
+func packageScreenBindings(bindings []genscreen.Binding, source string, idMap map[string]string) (string, map[string]string, []string) {
+	mapping := map[string]string{}
+	tokens := map[string]string{}
+	unresolved := []string{}
+	var out strings.Builder
+	cursor := 0
+	for _, binding := range bindings {
+		if binding.Start < cursor {
+			continue
+		}
+		token, seen := mapping[binding.ID]
+		ref, inPackage := idMap[binding.ID]
+		if !seen {
+			// 脚本文本里与点位无关的字面量原样保留。
+			if !inPackage && !binding.Declared {
+				continue
+			}
+			token = fmt.Sprintf("id%d", len(mapping)+1)
+			mapping[binding.ID] = token
+		}
+		if inPackage {
+			tokens[token] = ref
+		} else if binding.Declared {
+			unresolved = append(unresolved, binding.ID)
+		}
+		out.WriteString(source[cursor:binding.Start])
+		out.WriteString(token)
+		cursor = binding.End
+	}
+	out.WriteString(source[cursor:])
+	return out.String(), tokens, unresolved
+}
+
 func (h *Handler) exportProjectPackage(identity Identity, siteID string) (projectPackage, error) {
 	if siteID == "" {
 		return projectPackage{}, fmt.Errorf("site_required")
@@ -851,6 +979,11 @@ func (h *Handler) exportProjectPackage(identity Identity, siteID string) (projec
 		ID: "pp-" + data.NewID(), Name: nodeName(nodes[0]), CreatedAt: time.Now().UTC(),
 		Operator: operator, Dependencies: []packageDependency{}, Stripped: strips, Warnings: warnings,
 	}
+	screens, err := collectProjectScreens(nodes, idMap, &pkg.Warnings)
+	if err != nil {
+		return projectPackage{}, err
+	}
+	pkg.Screens = screens
 	profiles := map[string]bool{}
 	dependencies := map[string]packageDependency{}
 	for _, node := range nodes {
@@ -979,6 +1112,42 @@ func (h *Handler) requireDependencies(declared []packageDependency, usedProfiles
 	return nil
 }
 
+// importedScreenDraft restores a packaged screen into the target instance: the
+// stable tokens become this instance's IDs, the operable target set is derived
+// from the imported model, and the package's artifact and build pins stay
+// attached as the screen's record. Source-instance evidence (browser checks,
+// old node IDs, timestamps) is never carried.
+func importedScreenDraft(screen packageScreen, idMap map[string]string, model map[string]genscreen.Point) map[string]any {
+	ids := make(map[string]string, len(screen.Bindings))
+	tokens := make([]string, 0, len(screen.Bindings))
+	for token, ref := range screen.Bindings {
+		ids[token] = idMap[ref]
+		tokens = append(tokens, token)
+	}
+	sort.Strings(tokens)
+	var out strings.Builder
+	cursor := 0
+	for _, binding := range genscreen.Parse(screen.Source).FindBindings() {
+		id, known := ids[binding.ID]
+		if !known || binding.Start < cursor {
+			continue
+		}
+		out.WriteString(screen.Source[cursor:binding.Start])
+		out.WriteString(id)
+		cursor = binding.End
+	}
+	out.WriteString(screen.Source[cursor:])
+	points := make([]genscreen.Point, 0, len(tokens))
+	for _, token := range tokens {
+		points = append(points, model[ids[token]])
+	}
+	return map[string]any{
+		"source": out.String(), "points": points, "report": genscreen.Report{},
+		"checked_at": nil, "simulator": "preview", "node_id": idMap[screen.Node],
+		"artifact": screen.Artifact, "build": screen.Build,
+	}
+}
+
 func (h *Handler) importProjectPackage(identity Identity, pkg projectPackage, parent, name string) (importProjectResult, error) {
 	if err := pkg.validate(); err != nil {
 		return importProjectResult{}, err
@@ -998,11 +1167,26 @@ func (h *Handler) importProjectPackage(identity Identity, pkg projectPackage, pa
 		return importProjectResult{}, err
 	}
 	byRef := make(map[string]packageNode, len(pkg.Nodes))
+	screensByRef := make(map[string]packageScreen, len(pkg.Screens))
 	siteRef := ""
 	for _, node := range pkg.Nodes {
 		byRef[node.Ref] = node
 		if node.Type == NodeTypeSite && node.Parent == "" {
 			siteRef = node.Ref
+		}
+	}
+	// 画面：构建输入必须与本软件携带的一致，产物必须由这份源码、这些输入
+	// 构建出来，源码不得含凭据。任一项对不上就拒绝，不静默降级。
+	for _, screen := range pkg.Screens {
+		screensByRef[screen.Node] = screen
+		if hits := deepseek.ScanCredentials("screen", "source", screen.Source); len(hits) > 0 {
+			return importProjectResult{}, fmt.Errorf("screen_contains_secret:%s", screen.Node)
+		}
+		if screen.Build != genscreen.BuildFor(screen.Source) {
+			return importProjectResult{}, fmt.Errorf("screen_build_mismatch:%s", screen.Node)
+		}
+		if genscreen.Fingerprint(screen.Source) != screen.Artifact {
+			return importProjectResult{}, fmt.Errorf("screen_artifact_mismatch:%s", screen.Node)
 		}
 	}
 
@@ -1024,6 +1208,13 @@ func (h *Handler) importProjectPackage(identity Identity, pkg projectPackage, pa
 	prepared := make([]data.NodeEdge, 0, len(order))
 	for _, ref := range order {
 		packaged := byRef[ref]
+		if _, carried := screenDraftPoint(packaged.Points); carried {
+			// 画面必须随 screens 条目携带源码、绑定与构建产物；只有点位里
+			// 一份草稿的包没有可复现的产物，按缺画面拒绝。
+			if _, ok := screensByRef[ref]; !ok {
+				return importProjectResult{}, fmt.Errorf("missing_screen:%s", ref)
+			}
+		}
 		source := data.NodeEdge{ID: idMap[ref], Type: packaged.Type, Points: packaged.Points}
 		points := packagePoints(source, idMap, &ignored, &warnings)
 		if packaged.Type == data.NodeTypeModbus {
@@ -1049,6 +1240,23 @@ func (h *Handler) importProjectPackage(identity Identity, pkg projectPackage, pa
 			node.Points = append(node.Points, data.NewPointString(PointTypeCabinetState, "0", string(decision.CabinetStandby)))
 		}
 		prepared = append(prepared, node)
+	}
+	model := make(map[string]genscreen.Point, len(prepared))
+	preparedAt := make(map[string]int, len(prepared))
+	for i, node := range prepared {
+		model[node.ID] = generatedScreenPoint(node)
+		preparedAt[node.ID] = i
+	}
+	for _, screen := range pkg.Screens {
+		encoded, err := json.Marshal(importedScreenDraft(screen, idMap, model))
+		if err != nil {
+			return importProjectResult{}, fmt.Errorf("screen_encode_failed")
+		}
+		at := preparedAt[idMap[screen.Node]]
+		prepared[at].Points = append(prepared[at].Points, data.NewPointString(generatedScreenDraftType, "", string(encoded)))
+	}
+	if len(pkg.Screens) > 0 {
+		warnings = append(warnings, "画面已随工程导入；本实例尚未运行运行时与布局检查")
 	}
 	if err := h.requireDependencies(pkg.Dependencies, profilesUsed, packageNeedsIndustry(prepared)); err != nil {
 		return importProjectResult{}, err
