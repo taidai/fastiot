@@ -14,7 +14,8 @@
     "check:errors": "node error-message-check.mjs",
     "check:navigation:browser": "node navigation-browser-check.mjs",
     "check:acceptance": "node acceptance-status-check.mjs",
-    "check:preview-runtime": "node preview-runtime-check.mjs"
+    "check:preview-runtime": "node preview-runtime-check.mjs",
+    "check:three-preview": "node three-preview-check.mjs"
   },
   "dependencies": {
     "@ionic/react": "^9.0.10",

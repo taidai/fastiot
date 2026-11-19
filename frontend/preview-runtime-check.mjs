@@ -95,7 +95,7 @@ function boot({ marker, levelRect } = {}) {
   }
   function flushTimers() { const pending = timers.splice(0); pending.forEach((handler) => handler()) }
 
-  return { messages, receive, flushTimers, level, pump, start, windowListeners }
+  return { messages, receive, flushTimers, level, pump, start, windowListeners, document }
 }
 
 const bridge = boot()
@@ -121,6 +121,14 @@ assert.equal(bridge.pump.textContent, "运行")
 // A stale load token is ignored; the current one is honoured.
 bridge.receive({ type: "fastiot:values", token: "load-0", values: { level: { value: 1 } } })
 assert.equal(bridge.level.textContent, "42.4")
+
+// 3D screens read raw values from the document event the bridge dispatches.
+const observed = []
+bridge.document.addEventListener("fastiot:values", (event) => observed.push(event.detail.values))
+bridge.receive({ type: "fastiot:values", token: "load-1", values: { level: { value: 57.2, quality: "good" } } })
+assert.equal(observed.length, 1)
+assert.equal(observed[0].level.value, 57.2)
+assert.equal(bridge.level.textContent, "57.2")
 
 // Clicking a write binding asks the host; the host's decision is applied.
 bridge.start.click()

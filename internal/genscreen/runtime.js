@@ -93,6 +93,12 @@
         node.setAttribute("data-fastiot-updated", String(entry.time));
       }
     }
+    /* 3D screens read raw values from this event; DOM bindings stay declarative. */
+    try {
+      document.dispatchEvent(new CustomEvent("fastiot:values", { detail: { values: values || {} } }));
+    } catch (error) {
+      /* the screen simply does not observe values in old engines */
+    }
   }
 
   function applyWriteResult(result) {

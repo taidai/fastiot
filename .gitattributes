@@ -1,0 +1,3 @@
+# Vendored Three.js is pinned by its bytes (internal/genscreen/three_test.go);
+# never rewrite its line endings on checkout.
+internal/genscreen/three.min.js -text

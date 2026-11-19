@@ -33,6 +33,16 @@
 | 运行错误 | iframe 内 `error` / `unhandledrejection` | 行列；服务端按行回填最近元素标记 |
 | 布局 | 页面横向溢出、绑定元素不可见 / 内容裁切 / 移出可视区 | 元素标记 + 选择器 + 尺寸 |
 
+## 三维画面与离线资产
+
+- 内置 Three.js：`internal/genscreen/three.min.js` 固定为 npm `three@0.159.0` 的 UMD 构建（经典脚本、全局 `THREE`），字节由 `ThreeSHA256` 固定，MIT 许可证随文件保存。版本与哈希由 `internal/genscreen/three_test.go` 校验。
+- 按需注入：只有生成脚本引用 `THREE` 时，服务端才把该构建注入 frame；位置在可信桥接之后、模型脚本之前，并压缩成一行，不改变模型源码的行号。
+- 注入使用与其它脚本相同的响应 nonce，CSP 没有任何放宽：仍无 `'self'`、无 CDN 来源、`connect-src 'none'`。frame 文档自身带有全部依赖，不产生任何网络请求。
+- 素材只能内联：贴图用 `data:` URI 或由 canvas 程序化生成；外部模型、贴图、字体与 CDN 仍被静态检查阻断。
+- 三维代码通过 `document` 的 `fastiot:values` 事件读取实时值（`event.detail.values[点位 id].value`）；文字读数仍用 `data-fastiot-point`。
+- 确认后的草稿记录所用 Three.js 的版本与 sha256，便于在另一实例上得到同一运行依赖。
+- 证据：`frontend/three-preview-check.mjs`（`npm run check:three-preview`）在真实 Chromium 的 `sandbox="allow-scripts"` iframe 中，以服务端同一份 CSP 运行内置 Three.js，断言 WebGL 画出场景、桥接值进入场景、断网后仍可交互，并拦截并断言零外部请求；`internal/appapi/genscreen_frame_test.go` 断言 frame 响应带完整构建、正确的 nonce 与未放宽的策略。
+
 ## 证据边界
 
 - 服务端检查、模拟写入不落设备、确认门槛由 `internal/genscreen` 与 `internal/appapi/genscreen_integration_test.go` 覆盖。

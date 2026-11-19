@@ -318,6 +318,22 @@ func TestEmptyInstructionBlocks(t *testing.T) {
 	}
 }
 
+// TestMessagesOfferTheBundledThreeAndForbidExternalAssets keeps the model
+// guidance in step with the offline preview: the only 3D dependency is the
+// bundled global, live values arrive as an event, and assets stay inline.
+func TestMessagesOfferTheBundledThreeAndForbidExternalAssets(t *testing.T) {
+	raw, err := json.Marshal(MessagesForManifest(BuildManifest(cleanRequest())))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	for _, want := range []string{"Three.js", "THREE", "fastiot:values", "CDN", "data: URI"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("model guidance is missing %q: %s", want, text)
+		}
+	}
+}
+
 func contains(list []string, value string) bool {
 	for _, item := range list {
 		if item == value {
