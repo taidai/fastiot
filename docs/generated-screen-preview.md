@@ -23,6 +23,16 @@
 
 预览会话自带一个模拟设备：读数由点位 ID 与时间确定，写操作只改变这份内存状态并记入写入日志。`/generated-screens/{id}/write` 没有任何通往节点写入、命令运行时或设备通道的代码路径，所以"预览不产生真实设备写入"由结构保证，而不是靠一个可以忘记检查的开关。
 
+## 受控操作通道
+
+页面里的按钮不能调用任何内部接口，只能向宿主页面发一条 `fastiot:write` 消息；宿主用当前账号的平台会话调用 `POST /generated-screens/{id}/write`。该端点就是生成页面唯一的操作通道，按顺序做三项判决（票 #7）：
+
+1. 能力集：账号必须持有 `write_value`（按请求解析的当前策略），否则 403 `operation_not_allowed`。只有 `configure` 的账号可以生成和预览画面，但不能通过画面写点位。
+2. 目标范围：点位必须属于本预览生成时声明的点位模型（`session.Points`），否则 409 `point_not_in_preview`；并且仍在当前账号的数据范围内，否则 403 `forbidden`。会话只对创建者可用，`read`/`write`/`diagnostics`/`confirm` 都要求同一账号。
+3. 安全判决：与手工写点位共用 `manualWriteVerdict`（范围、能力上限、必需输入新鲜度、条件），`allowed` 照写、`clamped` 写夹紧后的值、`refused` 不写并返回原因。
+
+每次操作都写审计记录：`Action=控制写入`、`Actor=账号`、`Object=生成画面 {会话}（{节点}）点位 {点位}`、`Detail=decision=… value=… reason=…`，被拒绝时 `Result=failure`。判决之后写的仍然只是模拟器。
+
 ## 检查项与定位
 
 | 类别 | 检查 | 定位 |
@@ -35,7 +45,7 @@
 
 ## 证据边界
 
-- 服务端检查、模拟写入不落设备、确认门槛由 `internal/genscreen` 与 `internal/appapi/genscreen_integration_test.go` 覆盖。
+- 服务端检查、模拟写入不落设备、确认门槛由 `internal/genscreen` 与 `internal/appapi/genscreen_integration_test.go` 覆盖；操作通道的能力集、目标范围、安全判决与审计由 `internal/appapi/genscreen_action_integration_test.go` 覆盖。
 - 桥接脚本（绑定、格式化、写请求、错误捕获、布局检查、定位）由 `frontend/preview-runtime-check.mjs` 在最小 DOM 中执行验证；`npm run check:preview-runtime`。
 - 另在真实 fastiot 实例（`cmd/pumphouse`）上用 stub 模型走完"生成 → 预览 → frame → 模拟读/写 → 诊断 → 确认"，并检查了响应头、元素标记与写入日志；未落真实节点值。
 - 运行错误与布局检查在浏览器内执行；服务端只校验其上报格式并合并结果。修改过的客户端可以不报这些结果——服务端静态检查与写路径仍然是强制的。

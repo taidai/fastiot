@@ -5,12 +5,15 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/simpleiot/simpleiot/client"
 	"github.com/simpleiot/simpleiot/data"
 
+	"fastiot/internal/audit"
+	"fastiot/internal/authz"
 	"fastiot/internal/genscreen"
 )
 
@@ -165,8 +168,11 @@ func (h *Handler) generatedScreenRead(w http.ResponseWriter, r *http.Request, id
 	writeJSON(w, map[string]any{"values": session.Sim.Read(input.IDs), "simulated": true})
 }
 
-// generatedScreenWrite applies a screen's write binding to the preview
-// simulator. There is deliberately no device path from this handler.
+// generatedScreenWrite is the only channel a generated page has to operate a
+// value. It repeats the platform's decision for the request: the account's
+// write capability, the preview's own target set, and the same safety verdict
+// an operator write receives. There is still no device path from here; every
+// decision is audited with the page and the point.
 func (h *Handler) generatedScreenWrite(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
 	var input struct {
 		PointID string  `json:"point_id"`
@@ -180,14 +186,77 @@ func (h *Handler) generatedScreenWrite(w http.ResponseWriter, r *http.Request, i
 		writeError(w, http.StatusNotFound, "not_found")
 		return
 	}
+	if !canAction(identity, authz.WriteValue) {
+		h.auditScreenWrite(identity, r, session, input.PointID, input.Value, "refused", "write_value_required")
+		writeError(w, http.StatusForbidden, "operation_not_allowed")
+		return
+	}
+	if !session.HasPoint(input.PointID) {
+		h.auditScreenWrite(identity, r, session, input.PointID, input.Value, "refused", genscreen.ReasonNotInPreview)
+		writeJSONStatus(w, http.StatusConflict, map[string]any{
+			"error": "write_rejected", "reason": genscreen.ReasonNotInPreview,
+		})
+		return
+	}
+	if !h.allows(identity, input.PointID) {
+		h.auditScreenWrite(identity, r, session, input.PointID, input.Value, "refused", "point_out_of_scope")
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	verdict := h.manualWriteVerdict(input.PointID, input.Value)
+	if verdict.Decision == "refused" {
+		h.auditScreenWrite(identity, r, session, input.PointID, input.Value, verdict.Decision, verdict.Reason)
+		status := http.StatusConflict
+		if verdict.Reason == "read_only" {
+			status = http.StatusForbidden
+		}
+		writeJSONStatus(w, status, map[string]any{
+			"error": "write_rejected", "reason": verdict.Reason,
+		})
+		return
+	}
+	if verdict.Decision == "clamped" {
+		input.Value = verdict.Value
+	}
 	outcome := session.Sim.Write(input.PointID, input.Value)
 	if outcome.Status != genscreen.WriteSimulated {
+		h.auditScreenWrite(identity, r, session, input.PointID, input.Value, "refused", outcome.Reason)
 		writeJSONStatus(w, http.StatusConflict, map[string]any{
 			"error": "write_rejected", "reason": outcome.Reason,
 		})
 		return
 	}
+	h.auditScreenWrite(identity, r, session, input.PointID, input.Value, verdict.Decision, verdict.Reason)
 	writeJSON(w, outcome)
+}
+
+// auditScreenWrite records one generated-page operation. The record names the
+// account, the page, the point and the platform's reason: a page operation
+// never reaches a device, so this record is the only trace of the decision.
+func (h *Handler) auditScreenWrite(identity Identity, r *http.Request, session *genscreen.Session, pointID string, value float64, decision, reason string) {
+	if h.audit == nil {
+		return
+	}
+	actor := identity.Email
+	if actor == "" {
+		actor = identity.UserID
+	}
+	detail := "decision=" + decision + " value=" + strconv.FormatFloat(value, 'g', -1, 64)
+	if reason != "" {
+		if runes := []rune(reason); len(runes) > 200 {
+			reason = string(runes[:200])
+		}
+		detail += " reason=" + reason
+	}
+	result := "success"
+	if decision == "refused" {
+		result = "failure"
+	}
+	_ = h.audit.Append(audit.Record{
+		Time: time.Now(), Actor: actor, Action: "控制写入",
+		Object: "生成画面 " + session.ID + "（" + session.NodeID + "）点位 " + pointID,
+		Detail: detail, Result: result, IP: clientIP(r),
+	})
 }
 
 func (h *Handler) generatedScreenDiagnostics(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
