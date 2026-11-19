@@ -4,14 +4,17 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"fastiot/internal/industry"
 )
 
 type routeRequirement struct {
-	method  string
-	path    string
-	action  string
-	reason  string
-	targets []targetSpec
+	method    string
+	path      string
+	action    string
+	reason    string
+	targets   []targetSpec
+	packageID string
 }
 
 const (
@@ -26,6 +29,14 @@ func authenticatedRoute(method, path string) routeRequirement {
 
 func actionRoute(method, path, action, reason string) routeRequirement {
 	return routeRequirement{method: method, path: path, action: action, reason: reason}
+}
+
+// inPackage marks a route as belonging to one installable industry package.
+// The product API refuses such routes while the package is not installed, so
+// the declaration is the single source of what a package owns.
+func (r routeRequirement) inPackage(id string) routeRequirement {
+	r.packageID = id
+	return r
 }
 
 // routeRequirements declares every authenticated product and EMS route. An
@@ -62,9 +73,9 @@ var routeRequirements = []routeRequirement{
 	actionRoute(http.MethodPost, "projects/rollback", Configure, "admin_required").bodyTarget("site"),
 	actionRoute(http.MethodGet, "projects/export", Export, "export_required").queryTargetError("site", 400, "source_forbidden"),
 	actionRoute(http.MethodPost, "projects/import", Configure, "admin_required").bodyTarget("parent"),
-	authenticatedRoute(http.MethodGet, "demand").queryTarget("site"),
-	authenticatedRoute(http.MethodGet, "projects/plan96").queryTarget("site"),
-	actionRoute(http.MethodPut, "projects/plan96", Configure, "admin_required").bodyTarget("site"),
+	authenticatedRoute(http.MethodGet, "demand").queryTarget("site").inPackage(industry.EMSPackageID),
+	authenticatedRoute(http.MethodGet, "projects/plan96").queryTarget("site").inPackage(industry.EMSPackageID),
+	actionRoute(http.MethodPut, "projects/plan96", Configure, "admin_required").bodyTarget("site").inPackage(industry.EMSPackageID),
 	authenticatedRoute(http.MethodGet, "history").queryTargetError("node_id", 403, "history_forbidden"),
 	actionRoute(http.MethodGet, "history/export", Export, "export_required").queryTargetError("node_id", 403, "history_forbidden"),
 	actionRoute(http.MethodPost, "templates", Configure, "admin_required").bodyTargetError("parent", 400, "invalid_template").bodyTarget("source_bus_id"),
@@ -108,41 +119,41 @@ var routeRequirements = []routeRequirement{
 	authenticatedRoute(http.MethodPost, "rules/*/diff").pathTarget(1),
 	authenticatedRoute(http.MethodPost, "rules/*/replay").pathTarget(1),
 	authenticatedRoute(http.MethodPost, "rules/*/deps").pathTarget(1),
-	actionRoute(http.MethodPut, "tariff", SiteSettings, "admin_required").bodyTargetError("root", 403, "no_access"),
+	actionRoute(http.MethodPut, "tariff", SiteSettings, "admin_required").bodyTargetError("root", 403, "no_access").inPackage(industry.EMSPackageID),
 	authenticatedRoute(http.MethodGet, "aggregate").queryTargetError("group", 403, "no_access"),
 	actionRoute(http.MethodPut, "aggregate", Configure, "admin_required").bodyTargetError("group", 400, "invalid_group"),
-	authenticatedRoute(http.MethodGet, "energy-units"),
-	actionRoute(http.MethodPost, "energy-units", Configure, "admin_required").bodyTarget("plant_id"),
-	authenticatedRoute(http.MethodGet, "energy-units/*/rule").pathTarget(1),
-	actionRoute(http.MethodPut, "energy-units/*/rule", Configure, "admin_required").pathTarget(1),
-	actionRoute(http.MethodPost, "energy-units/*/rule/publish", Configure, "admin_required").pathTarget(1),
-	authenticatedRoute(http.MethodPost, "energy-units/*/rule/simulate").pathTarget(1),
-	authenticatedRoute(http.MethodGet, "energy-units/*/allocator").pathTarget(1),
-	actionRoute(http.MethodPut, "energy-units/*/allocator", Configure, "admin_required").pathTarget(1),
-	authenticatedRoute(http.MethodGet, "energy-units/*/devices").pathTarget(1),
-	actionRoute(http.MethodPost, "energy-units/*/devices", Configure, "admin_required").pathTarget(1),
-	authenticatedRoute(http.MethodGet, "energy-units/*/capability-inputs").pathTarget(1),
-	actionRoute(http.MethodPut, "energy-units/*/capability-inputs", Configure, "admin_required").pathTarget(1),
-	authenticatedRoute(http.MethodGet, "energy-units/*/forecast-inputs").pathTarget(1),
-	actionRoute(http.MethodPut, "energy-units/*/forecast-inputs", Configure, "admin_required").pathTarget(1),
-	authenticatedRoute(http.MethodGet, "energy-units/*/dispatch-records").pathTarget(1),
-	actionRoute(http.MethodPost, "energy-units/*/events", Command, "command_required").pathTarget(1),
-	actionRoute(http.MethodPut, "energy-units/*/mode", Command, "command_required").pathTarget(1),
-	actionRoute(http.MethodPost, "resource-groups", Configure, "admin_required").bodyTarget("members"),
-	authenticatedRoute(http.MethodGet, "resource-groups"),
-	actionRoute(http.MethodPost, "resource-groups/*/dispatch", Command, "command_required").pathTarget(1),
+	authenticatedRoute(http.MethodGet, "energy-units").inPackage(industry.EMSPackageID),
+	actionRoute(http.MethodPost, "energy-units", Configure, "admin_required").bodyTarget("plant_id").inPackage(industry.EMSPackageID),
+	authenticatedRoute(http.MethodGet, "energy-units/*/rule").pathTarget(1).inPackage(industry.EMSPackageID),
+	actionRoute(http.MethodPut, "energy-units/*/rule", Configure, "admin_required").pathTarget(1).inPackage(industry.EMSPackageID),
+	actionRoute(http.MethodPost, "energy-units/*/rule/publish", Configure, "admin_required").pathTarget(1).inPackage(industry.EMSPackageID),
+	authenticatedRoute(http.MethodPost, "energy-units/*/rule/simulate").pathTarget(1).inPackage(industry.EMSPackageID),
+	authenticatedRoute(http.MethodGet, "energy-units/*/allocator").pathTarget(1).inPackage(industry.EMSPackageID),
+	actionRoute(http.MethodPut, "energy-units/*/allocator", Configure, "admin_required").pathTarget(1).inPackage(industry.EMSPackageID),
+	authenticatedRoute(http.MethodGet, "energy-units/*/devices").pathTarget(1).inPackage(industry.EMSPackageID),
+	actionRoute(http.MethodPost, "energy-units/*/devices", Configure, "admin_required").pathTarget(1).inPackage(industry.EMSPackageID),
+	authenticatedRoute(http.MethodGet, "energy-units/*/capability-inputs").pathTarget(1).inPackage(industry.EMSPackageID),
+	actionRoute(http.MethodPut, "energy-units/*/capability-inputs", Configure, "admin_required").pathTarget(1).inPackage(industry.EMSPackageID),
+	authenticatedRoute(http.MethodGet, "energy-units/*/forecast-inputs").pathTarget(1).inPackage(industry.EMSPackageID),
+	actionRoute(http.MethodPut, "energy-units/*/forecast-inputs", Configure, "admin_required").pathTarget(1).inPackage(industry.EMSPackageID),
+	authenticatedRoute(http.MethodGet, "energy-units/*/dispatch-records").pathTarget(1).inPackage(industry.EMSPackageID),
+	actionRoute(http.MethodPost, "energy-units/*/events", Command, "command_required").pathTarget(1).inPackage(industry.EMSPackageID),
+	actionRoute(http.MethodPut, "energy-units/*/mode", Command, "command_required").pathTarget(1).inPackage(industry.EMSPackageID),
+	actionRoute(http.MethodPost, "resource-groups", Configure, "admin_required").bodyTarget("members").inPackage(industry.EMSPackageID),
+	authenticatedRoute(http.MethodGet, "resource-groups").inPackage(industry.EMSPackageID),
+	actionRoute(http.MethodPost, "resource-groups/*/dispatch", Command, "command_required").pathTarget(1).inPackage(industry.EMSPackageID),
 	authenticatedRoute(http.MethodGet, "opcua/channels"),
 	actionRoute(http.MethodPost, "opcua/channels", Configure, "admin_required").bodyTarget("parent"),
 	authenticatedRoute(http.MethodGet, "opcua/channels/*/points").pathTarget(2),
 	actionRoute(http.MethodPost, "opcua/channels/*/points", Configure, "admin_required").pathTarget(2),
-	authenticatedRoute(http.MethodGet, "sites/*/target").pathTarget(1),
-	actionRoute(http.MethodPut, "sites/*/target", Configure, "admin_required").pathTarget(1),
-	authenticatedRoute(http.MethodGet, "plants"),
-	authenticatedRoute(http.MethodGet, "plants/*/pcc").pathTarget(1),
-	actionRoute(http.MethodPut, "plants/*/pcc", Configure, "admin_required").pathTarget(1),
-	authenticatedRoute(http.MethodGet, "plants/*/phase-verdict").pathTarget(1),
-	authenticatedRoute(http.MethodGet, "plants/*/strategy").pathTarget(1),
-	actionRoute(http.MethodPut, "plants/*/strategy", Configure, "admin_required").pathTarget(1),
+	authenticatedRoute(http.MethodGet, "sites/*/target").pathTarget(1).inPackage(industry.EMSPackageID),
+	actionRoute(http.MethodPut, "sites/*/target", Configure, "admin_required").pathTarget(1).inPackage(industry.EMSPackageID),
+	authenticatedRoute(http.MethodGet, "plants").inPackage(industry.EMSPackageID),
+	authenticatedRoute(http.MethodGet, "plants/*/pcc").pathTarget(1).inPackage(industry.EMSPackageID),
+	actionRoute(http.MethodPut, "plants/*/pcc", Configure, "admin_required").pathTarget(1).inPackage(industry.EMSPackageID),
+	authenticatedRoute(http.MethodGet, "plants/*/phase-verdict").pathTarget(1).inPackage(industry.EMSPackageID),
+	authenticatedRoute(http.MethodGet, "plants/*/strategy").pathTarget(1).inPackage(industry.EMSPackageID),
+	actionRoute(http.MethodPut, "plants/*/strategy", Configure, "admin_required").pathTarget(1).inPackage(industry.EMSPackageID),
 	actionRoute(http.MethodPut, "safety", Configure, "admin_required").bodyTargetError("node", 400, "invalid_safety"),
 	authenticatedRoute(http.MethodGet, "alarm-types").queryTargetError("root", 400, "invalid_root"),
 	actionRoute(http.MethodPut, "alarm-types", Configure, "admin_required").queryTargetError("root", 400, "invalid_root"),
@@ -155,10 +166,10 @@ var routeRequirements = []routeRequirement{
 	actionRoute(http.MethodPut, "ems/screen/*", Configure, "admin_required").pathTarget(2),
 	actionRoute(http.MethodPost, "ems/acceptance/run", Configure, "admin_required"),
 	authenticatedRoute(http.MethodGet, "ems/acceptance/latest"),
-	authenticatedRoute(http.MethodGet, "ems/allocators/*").pathTarget(2),
-	actionRoute(http.MethodPut, "ems/allocators/*", Configure, "admin_required").pathTarget(2),
-	authenticatedRoute(http.MethodPost, "ems/allocators/*/simulate").pathTarget(2),
-	authenticatedRoute(http.MethodGet, "ems/allocators/*/history").pathTarget(2),
+	authenticatedRoute(http.MethodGet, "ems/allocators/*").pathTarget(2).inPackage(industry.EMSPackageID),
+	actionRoute(http.MethodPut, "ems/allocators/*", Configure, "admin_required").pathTarget(2).inPackage(industry.EMSPackageID),
+	authenticatedRoute(http.MethodPost, "ems/allocators/*/simulate").pathTarget(2).inPackage(industry.EMSPackageID),
+	authenticatedRoute(http.MethodGet, "ems/allocators/*/history").pathTarget(2).inPackage(industry.EMSPackageID),
 	authenticatedRoute(http.MethodGet, "ems/quality"),
 	actionRoute(http.MethodGet, "ems/frames", Command, "operator_required"),
 	actionRoute(http.MethodDelete, "ems/frames", Command, "operator_required"),
@@ -179,7 +190,10 @@ var routeRequirements = []routeRequirement{
 	actionRoute(http.MethodPost, "ems/identify", Configure, "admin_required"),
 	authenticatedRoute(http.MethodGet, "ems/profiles"),
 	actionRoute(http.MethodGet, "ems/profiles/*/points.csv", Export, "export_required"),
-	authenticatedRoute(http.MethodPost, "ems/allocation/preview"),
+	authenticatedRoute(http.MethodPost, "ems/allocation/preview").inPackage(industry.EMSPackageID),
+	authenticatedRoute(http.MethodGet, "industry/packages"),
+	actionRoute(http.MethodPost, "industry/packages", SiteSettings, "admin_required"),
+	actionRoute(http.MethodDelete, "industry/packages/*", SiteSettings, "admin_required"),
 }
 
 func matchRoutePath(pattern, path string) bool {
@@ -241,6 +255,9 @@ type Requirement struct {
 	AdminOnly     bool
 	Targets       []Target
 	UnknownTarget *Target
+	// Package is the industry package that owns the route. Empty means the
+	// route belongs to the base product and is always available.
+	Package string
 }
 
 // Allowed applies the declaration using the caller's resolved action set.
@@ -267,7 +284,7 @@ func Required(r *http.Request) (Requirement, bool) {
 			continue
 		}
 		action := resolvedRouteAction(r, route)
-		requirement := Requirement{Reason: route.reason}
+		requirement := Requirement{Reason: route.reason, Package: route.packageID}
 		requirement.AdminOnly = action == routeAdmin || (action == routeVirtualInput && strings.HasSuffix(path, "/impact"))
 		if action == routeCalculation || action == routeVirtualInput {
 			action = ""

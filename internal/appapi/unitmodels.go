@@ -30,17 +30,31 @@ type unitModelConfig struct {
 	VerifiedAt     string            `json:"verified_at,omitempty"`
 	DeviceSerial   string            `json:"device_serial,omitempty"`
 	Verification   string            `json:"verification,omitempty"`
+	// ReplacedFrom records the profile this device was mapped with before the
+	// current one. A non-empty value means the vendor changed after install.
+	ReplacedFrom string `json:"replaced_from,omitempty"`
+	// VerificationRequired blocks control until an operator confirms the new
+	// mapping against the physical device. It is set by a profile replacement
+	// and cleared only by a verified save.
+	VerificationRequired bool                `json:"verification_required,omitempty"`
+	Replacement          *profileReplacement `json:"replacement,omitempty"`
+}
+
+func verificationPending(model unitModelConfig) bool {
+	return model.VerificationRequired && !model.Verified
 }
 
 type unitModelPointView struct {
-	ID       string  `json:"id"`
-	Name     string  `json:"name"`
-	ServerID int     `json:"server_id"`
-	Address  int     `json:"address"`
-	IOType   string  `json:"io_type"`
-	ReadOnly bool    `json:"read_only"`
-	Unit     string  `json:"unit,omitempty"`
-	Scale    float64 `json:"scale"`
+	ID         string  `json:"id"`
+	Name       string  `json:"name"`
+	ServerID   int     `json:"server_id"`
+	Address    int     `json:"address"`
+	IOType     string  `json:"io_type"`
+	DataFormat string  `json:"data_format,omitempty"`
+	ReadOnly   bool    `json:"read_only"`
+	Unit       string  `json:"unit,omitempty"`
+	Scale      float64 `json:"scale"`
+	Offset     float64 `json:"offset"`
 }
 
 type unitModelView struct {
@@ -132,10 +146,12 @@ func (h *Handler) unitPoints(channelID string) []unitModelPointView {
 		points = append(points, unitModelPointView{
 			ID: node.ID, Name: textPoint(node.Points, data.PointTypeDescription),
 			ServerID: server, Address: address,
-			IOType:   textPoint(node.Points, data.PointTypeModbusIOType),
-			ReadOnly: readOnlyNode(node),
-			Unit:     textPoint(node.Points, data.PointTypeUnits),
-			Scale:    numberPoint(node.Points, data.PointTypeScale),
+			IOType:     textPoint(node.Points, data.PointTypeModbusIOType),
+			DataFormat: textPoint(node.Points, data.PointTypeDataFormat),
+			ReadOnly:   readOnlyNode(node),
+			Unit:       textPoint(node.Points, data.PointTypeUnits),
+			Scale:      numberPoint(node.Points, data.PointTypeScale),
+			Offset:     numberPoint(node.Points, data.PointTypeOffset),
 		})
 	}
 	return points
@@ -170,6 +186,7 @@ func unitModelResponse(channelID string, server int, model unitModelConfig, hasM
 		view.Model = &model
 	}
 	if hasModel {
+		pending := verificationPending(model)
 		if prof, ok := registry.Get(model.ProfileID); ok {
 			seen := map[string]bool{}
 			for _, spec := range prof.CommandSpecs {
@@ -240,6 +257,10 @@ func unitModelResponse(channelID string, server int, model unitModelConfig, hasM
 					available = false
 					reason = "命令未配置写点"
 				}
+				if pending {
+					available = false
+					reason = "换厂商后待重新验证控制保障"
+				}
 				item.Available = available
 				item.Reason = reason
 				view.Commands = append(view.Commands, item)
@@ -275,6 +296,10 @@ func (h *Handler) saveUnitModel(channel data.NodeEdge, server int, input unitMod
 	if input.Name == "" {
 		input.Name = "站号 " + strconv.Itoa(server)
 	}
+	if input.Verified {
+		// Re-verification is the only way out of a vendor replacement gate.
+		input.VerificationRequired = false
+	}
 	if input.Verified && (strings.TrimSpace(input.Verifier) == "" || strings.TrimSpace(input.VerifiedAt) == "" || strings.TrimSpace(input.DeviceSerial) == "") {
 		return fmt.Errorf("verified model requires verifier, date and device serial")
 	}
@@ -285,6 +310,25 @@ func (h *Handler) saveUnitModel(channel data.NodeEdge, server int, input unitMod
 	point := data.NewPointString(unitModelPoint, strconv.Itoa(server), string(encoded))
 	point.Origin = "easyems"
 	return client.SendNodePoint(h.nc, channel.ID, point, true)
+}
+
+// deviceVerificationPending reports whether the device's profile mapping was
+// replaced and has not been re-verified yet.
+func (h *Handler) deviceVerificationPending(deviceID string) bool {
+	channelID, serverText, ok := strings.Cut(deviceID, "/")
+	if !ok {
+		return false
+	}
+	server, err := strconv.Atoi(serverText)
+	if err != nil {
+		return false
+	}
+	channelNodes, err := client.GetNodes(h.nc, "all", channelID, "", false)
+	if err != nil || len(channelNodes) == 0 {
+		return false
+	}
+	model, ok := unitModelFor(channelNodes[0], server)
+	return ok && verificationPending(model)
 }
 
 func (h *Handler) commandProfile(deviceID string) (device.Profile, bool) {
@@ -305,7 +349,9 @@ func (h *Handler) commandProfile(deviceID string) (device.Profile, bool) {
 	}
 	channel := channelNodes[0]
 	model, ok := unitModelFor(channel, server)
-	if !ok {
+	if !ok || verificationPending(model) {
+		// A replacement's commands stay unavailable until an operator
+		// re-verifies the mapping, so no control path can use them silently.
 		return device.Profile{}, false
 	}
 	prof, ok := h.ems.Profiles.Get(model.ProfileID)
@@ -449,6 +495,10 @@ func (h *Handler) unitCommands(w http.ResponseWriter, r *http.Request, identity 
 		model, ok := unitModelFor(channel, server)
 		if !ok {
 			writeError(w, http.StatusConflict, "unit_model_not_configured")
+			return
+		}
+		if verificationPending(model) {
+			writeError(w, http.StatusConflict, "verification_required")
 			return
 		}
 		prof, ok := h.commandProfile(deviceID)

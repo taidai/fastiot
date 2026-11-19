@@ -298,7 +298,7 @@ func (p Profile) CSV(serverID int) []byte {
 			Description: point.Name,
 			ServerID:    serverID,
 			Address:     int(point.Address),
-			IOType:      ioTypeFor(point.Function),
+			IOType:      IOTypeFor(point.Function),
 			DataFormat:  format,
 			ReadOnly:    point.ReadOnly,
 			Scale:       point.Scale,
@@ -310,8 +310,8 @@ func (p Profile) CSV(serverID int) []byte {
 	return buf.Bytes()
 }
 
-// ioTypeFor maps a channel data area to the point-table IO type value.
-func ioTypeFor(function channel.Function) string {
+// IOTypeFor maps a channel data area to the point-table IO type value.
+func IOTypeFor(function channel.Function) string {
 	switch function {
 	case channel.InputRegister:
 		return data.PointValueModbusInputRegister

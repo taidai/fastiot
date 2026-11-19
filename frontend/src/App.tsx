@@ -42,6 +42,8 @@ import {
   businessId,
   Document,
   EmsAlarm,
+  fetchIndustryPackages,
+  IndustryPackage,
   listUsers,
   login,
   nameOf,
@@ -269,9 +271,21 @@ export default function App() {
   const isAdminUser = !!policy?.admin
   const canConfigureUser = can(Actions.configure)
   const canExportUser = can(Actions.export)
+  const [packages, setPackages] = useState<IndustryPackage[]>([])
+  // 读取失败时保持“已安装”，宁可显示行业页面也不隐藏底座可达能力。
+  const emsInstalled = packages.length === 0 || packages.some((item) => item.id === "ems" && item.installed)
+  useEffect(() => {
+    if (!token) return
+    let cancelled = false
+    void fetchIndustryPackages(token)
+      .then((result) => { if (!cancelled) setPackages(result.packages || []) })
+      .catch(() => { if (!cancelled) setPackages([]) })
+    return () => { cancelled = true }
+  }, [token])
+  const packageAvailable = useCallback((id: string) => id !== "ems" || emsInstalled, [emsInstalled])
   const visiblePages = useMemo(
-    () => visiblePagesFor(workbench, can),
-    [workbench, can],
+    () => visiblePagesFor(workbench, can, packageAvailable),
+    [workbench, can, packageAvailable],
   )
   const deliveryAvailable = useMemo(() => visiblePagesFor("delivery", can).length > 0, [can])
   // 路由守卫：切换工作台或角色变化后，当前页若不在可见集合内，落到该工作台第一个可见页。
@@ -537,7 +551,7 @@ export default function App() {
   const stationName = labelForRoot(view.roots[0])
   const currentSite = siteNodes.find((node) => node.id === siteID)
   const currentSiteName = currentSite ? nameOf(currentSite) : stationName
-  const navGroups = navGroupsFor(workbench, can)
+  const navGroups = navGroupsFor(workbench, can, packageAvailable)
   const pageGroup = pageDefs.find((def) => def.key === page)?.group
   const activeGroup = navGroups.find((group) => group.key === pageGroup)
   const groupIcons: Record<Group, IconName> = { run: "home", access: "devices", assets: "battery", strategy: "sliders", acceptance: "report", system: "gear" }
@@ -580,7 +594,7 @@ export default function App() {
             <label>玻璃透明度<span>{display.glass}%</span>
               <input type="range" min="30" max="90" step="1" value={display.glass} onChange={(event) => setDisplay({ ...display, glass: Number(event.target.value) })} />
             </label>
-            {isAdmin && <label>站点电价（元/kWh）<span>{tariff === null ? "未设置" : tariff.toFixed(2)}</span>
+            {isAdmin && emsInstalled && <label>站点电价（元/kWh）<span>{tariff === null ? "未设置" : tariff.toFixed(2)}</span>
               <div className="tariff-row">
                 <input type="number" min="0" max="100" step="0.01" value={tariffDraft} placeholder="例如 0.65" aria-label="站点电价" onChange={(event) => setTariffDraft(event.target.value)} />
                 <button className="secondary-button" disabled={busy} onClick={() => {
@@ -667,7 +681,7 @@ export default function App() {
 
       {page === "aggregate" && canConfigure && <AggregatesView token={token} nodes={view.nodes} groups={groups} canConfigure={canConfigure} />}
 
-      {page === "deploy" && canConfigure && <DeliveryWorkbench token={token} nodes={view.nodes} siteID={siteID} canConfigure={canConfigure} goPage={(next) => setPage(next)} onError={setError} />}
+      {page === "deploy" && canConfigure && <DeliveryWorkbench token={token} nodes={view.nodes} siteID={siteID} canConfigure={canConfigure} emsInstalled={emsInstalled} goPage={(next) => setPage(next)} onError={setError} />}
 
       {page === "allocators" && canConfigure && <AllocatorsView
         token={token} nodes={view.nodes} groups={groups} points={points}
