@@ -55,6 +55,19 @@ func (s *Session) ApplyRevision(source string, static []Finding) int {
 	return s.Revision
 }
 
+// HasPoint reports whether the point belongs to the model this preview was
+// generated from. It is the only target set a page may operate.
+func (s *Session) HasPoint(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, point := range s.Points {
+		if point.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
 // Report merges the server checks with the latest browser checks.
 func (s *Session) Report() Report {
 	s.mu.Lock()
