@@ -44,7 +44,7 @@ export default function ShiftHandover({ onClose }: { onClose: () => void }) {
   }
 
   function exportCSV() {
-    const header = ["交接时间", "班次", "值班人", "备注"]
+    const header = ["记录时间", "班次", "值班人", "备注"]
     const rows = [...records].sort((a, b) => b.at.localeCompare(a.at)).map((record) => [
       new Date(record.at).toLocaleString("zh-CN", { hour12: false }),
       record.shift,
@@ -55,27 +55,27 @@ export default function ShiftHandover({ onClose }: { onClose: () => void }) {
     const url = URL.createObjectURL(new Blob([String.fromCharCode(0xFEFF) + csv], { type: "text/csv;charset=utf-8" }))
     const link = document.createElement("a")
     link.href = url
-    link.download = `fastiot-班次交接-${new Date().toISOString().slice(0, 10)}.csv`
+    link.download = `fastiot-本机备忘-${new Date().toISOString().slice(0, 10)}.csv`
     link.click()
     URL.revokeObjectURL(url)
   }
 
   return createPortal(<div className="device-confirm-backdrop" onClick={onClose}>
-    <section className="device-confirm shift-handover" role="dialog" aria-label="班次交接" onClick={(event) => event.stopPropagation()}>
+    <section className="device-confirm shift-handover" role="dialog" aria-label="本机备忘" onClick={(event) => event.stopPropagation()}>
       <span className="section-kicker">本机保存</span>
-      <h3>班次交接</h3>
-      <p>记录交接班次、值班人与备注，导出为 CSV。记录只保存在本机浏览器，不含任何密码。</p>
+      <h3>本机备忘</h3>
+      <p>记录班次、值班人与备注，导出为 CSV。记录只保存在本机浏览器，不随账号同步；换设备或换浏览器后看不到这些记录，也不会发送给其他人。</p>
       <form className="shift-handover-form" onSubmit={add}>
         <label>班次<input value={shift} onChange={(event) => setShift(event.target.value)} placeholder="例如：早班 / 中班 / 晚班" /></label>
         <label>值班人<input value={operator} onChange={(event) => setOperator(event.target.value)} placeholder="交接值班人" /></label>
         <label className="shift-note">备注<textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="交接事项、设备异常、注意事项" /></label>
         <div className="device-confirm-actions">
           <button type="button" className="secondary-button" onClick={exportCSV} disabled={records.length === 0}>导出 CSV</button>
-          <button type="submit" className="primary-button">记录交接</button>
+          <button type="submit" className="primary-button">保存备忘</button>
         </div>
       </form>
       {recent.length > 0 && <div className="shift-handover-list">
-        <strong>最近交接</strong>
+        <strong>最近记录</strong>
         {recent.map((record) => <div className="shift-handover-row" key={record.id}>
           <div><strong>{record.shift} · {record.operator}</strong><small>{record.note || "无备注"}</small></div>
           <time>{new Date(record.at).toLocaleString("zh-CN", { hour12: false })}</time>

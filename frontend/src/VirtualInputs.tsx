@@ -40,7 +40,28 @@ function ValueField({ definition, value, onChange, label }: { definition: Defini
     </select>}</label>
 }
 
-export default function VirtualInputs({ token, nodes, engineering = false }: { token: string; nodes: Node[]; engineering?: boolean }) {
+export default function VirtualInputs({ token, nodes, engineering = false, customer = false }: { token: string; nodes: Node[]; engineering?: boolean; customer?: boolean }) {
+  const text = customer
+    ? {
+        title: "模拟输入",
+        intro: "模拟输入只参与计算，不会写设备，也不代表实测。配置保存为草稿，明确应用后才生效。",
+        create: "新建模拟输入",
+        loading: "正在读取模拟输入…",
+        empty: "当前范围尚无模拟输入。",
+        editDraft: "编辑模拟输入草稿",
+        createTitle: "新建模拟输入",
+        confirmTitle: "确认模拟输入变更",
+      }
+    : {
+        title: "虚拟输入",
+        intro: "独立非物理输入：不写设备，不代表实测。配置保存为草稿，明确应用后才生效。",
+        create: "新建虚拟输入",
+        loading: "正在读取虚拟输入…",
+        empty: "当前范围尚无虚拟输入。",
+        editDraft: "编辑虚拟输入草稿",
+        createTitle: "新建虚拟输入",
+        confirmTitle: "确认虚拟输入变更",
+      }
   const parents = nodes.filter(n => n.type === "group" || n.parent === "root")
   const scope = parents.map(n => n.id).sort().join(",")
   const [inputs, setInputs] = useState<Input[]>([])
@@ -111,12 +132,12 @@ export default function VirtualInputs({ token, nodes, engineering = false }: { t
   }
   return <EmsCard className="virtual-inputs">
     <IonCardContent>
-      <div className="flex flex-wrap items-center justify-between gap-3"><h2>虚拟输入</h2>{engineering && <EmsButton disabled={busy || !ready || !parents.length} onClick={() => edit()}>新建虚拟输入</EmsButton>}</div>
-      <p>独立非物理输入：不写设备，不代表实测。配置保存为草稿，明确应用后才生效。</p>
+      <div className="flex flex-wrap items-center justify-between gap-3"><h2>{text.title}</h2>{engineering && <EmsButton disabled={busy || !ready || !parents.length} onClick={() => edit()}>{text.create}</EmsButton>}</div>
+      <p>{text.intro}</p>
       {loadError && <InlineNotice tone="danger">读取失败：{loadError}；当前数据不可用。<EmsButton onClick={() => setRefresh(v => v + 1)}>重新读取</EmsButton></InlineNotice>}
       {error && <div role="alert" className="inline-error">{error}</div>}
-      {!ready && !loadError && <p>正在读取虚拟输入…</p>}
-      {ready && inputs.length === 0 && <p>当前范围尚无虚拟输入。</p>}
+      {!ready && !loadError && <p>{text.loading}</p>}
+      {ready && inputs.length === 0 && <p>{text.empty}</p>}
       <div className="grid gap-3">
         {inputs.map(input => <article key={input.id} className="rounded-xl border border-ems-line p-4" data-input-id={input.id}>
           <div className="flex flex-wrap items-center justify-between gap-2"><h3>{input.name}</h3><StatusBadge tone={input.source === "simulation" ? "warning" : "neutral"}>{sourceNames[input.source]}</StatusBadge></div>
@@ -132,7 +153,7 @@ export default function VirtualInputs({ token, nodes, engineering = false }: { t
           </div>
         </article>)}
       </div>
-      <EmsOverlay open={editing !== undefined} title={editing ? "编辑虚拟输入草稿" : "新建虚拟输入"} onClose={closeEditor} busy={busy}
+      <EmsOverlay open={editing !== undefined} title={editing ? text.editDraft : text.createTitle} onClose={closeEditor} busy={busy}
         actions={<><EmsButton variant="secondary" disabled={busy} onClick={closeEditor}>取消</EmsButton><EmsButton disabled={busy || !ready} onClick={() => void run(saveDraft)}>保存草稿（不生效）</EmsButton></>}>
         <div className="grid gap-3">
           <label>名称<input aria-label="输入名称" value={name} disabled={!!editing} onChange={e => setName(e.target.value)} /></label>
@@ -159,7 +180,7 @@ export default function VirtualInputs({ token, nodes, engineering = false }: { t
         {runtime?.applied && <><p>{runtime.name} · {sourceNames[runtime.source]} · {runtime.applied.purpose}</p><p>范围 {runtime.applied.min}～{runtime.applied.max} {runtime.applied.unit} · 有效期 {runtime.applied.ttl_seconds} 秒</p><ValueField definition={runtime.applied} value={runtimeValue} onChange={setRuntimeValue} label="新的运行输入" /></>}
         {error && <p role="alert" className="inline-error">{error}</p>}
       </EmsOverlay>
-      <EmsOverlay open={!!pending} title="确认虚拟输入变更" onClose={closeConfirmation} busy={busy}
+      <EmsOverlay open={!!pending} title={text.confirmTitle} onClose={closeConfirmation} busy={busy}
         actions={<><EmsButton variant="secondary" disabled={busy} onClick={closeConfirmation}>取消</EmsButton><EmsButton disabled={busy || !ready} onClick={() => void run(confirm)}>确认{pending?.action === "apply" ? "应用" : "修改"}（不写设备）</EmsButton></>}>
         {pending && <><p>{pending.input.name} · {sourceNames[pending.input.source]}</p><p>当前 {display(pending.input.state.value)} → {pending.action === "value" ? display(pending.payload.value) : pending.input.source === "configuration" ? display(pending.input.draft?.value) : "应用新定义，不产生运行值"}</p>
           <p>用途：{(pending.action === "apply" ? pending.input.draft : pending.input.applied)?.purpose} · 单位：{(pending.action === "apply" ? pending.input.draft : pending.input.applied)?.unit}</p>

@@ -521,7 +521,7 @@ export default function App() {
 
   const pageInfo: Record<string, { title: string; subtitle: string }> = {
     devices: { title: "站点总览", subtitle: "设备状态、通信健康与自动运行，一屏看清" },
-    screen: { title: "运行画面", subtitle: "按业务节点组织的运行画面" },
+    screen: { title: "运行画面", subtitle: "按站点与设备组织的运行画面" },
     ledger: { title: "设备台账与验证", subtitle: "一台设备一行：业务节点、通道/站号、Profile、健康与验证" },
     points: { title: "点位表", subtitle: "点位只在这里配置：批量管理、实时值、质量与回读" },
     channels: { title: "通道", subtitle: "运行健康、端口参数、单元与点位" },
@@ -610,7 +610,11 @@ export default function App() {
                 }}>保存</button>
               </div>
             </label>}
-            <small>显示设置保存在本机浏览器；电价保存在本站业务节点，用于“今日用电 × 电价”的电费估算。</small>
+            <small>显示设置保存在本机浏览器；电价保存在本站配置，用于“今日用电 × 电价”的电费估算。</small>
+            <div className="display-memo">
+              <button className="secondary-button" onClick={() => { setDisplayOpen(false); setShiftOpen(true) }}>本机备忘</button>
+              <small>只保存在本机浏览器，不随账号同步。</small>
+            </div>
           </div>}
         </div>
         <button className="console-icon" title="活动报警" aria-label="活动报警" onClick={() => setPage("alarms")}><Icon name="bell" size={25} />{alarmCount === null ? <em>?</em> : alarmCount > 0 && <em>{alarmCount}</em>}</button>
@@ -637,9 +641,8 @@ export default function App() {
             ? `站点 ${Math.max(1, siteNodes.findIndex((node) => node.id === siteID) + 1)} / ${siteNodes.length}`
             : `项目 1 / ${snapshot.roots.length}`}</span>
           {page === "devices" && <>
-            <button className="secondary-button head-action" onClick={() => setInputsOpen(true)}>运行输入与计算</button>
+            <button className="secondary-button head-action" onClick={() => setInputsOpen(true)}>模拟输入与计算</button>
             {canOperate && <button className="secondary-button head-action" onClick={() => setCommandsOpen(true)}>常用命令</button>}
-            <button className="secondary-button head-action" onClick={() => setShiftOpen(true)}>班次交接</button>
             <button className="secondary-button head-action" onClick={() => setKpiConfigOpen(true)}>显示设置</button>
           </>}
           {page !== "devices" && <div className="live-status"><span className="pulse" />数据每 2 秒更新</div>}
@@ -725,7 +728,6 @@ export default function App() {
       {page === "delivery" && isAdmin && <DeliveryView token={token} />}
 
       <footer className="console-foot">
-        <span>数据来自已配置点位；未接入或过期的值显示“—”，不生成模拟数据。</span>
         <span>单机本地运行 · 不依赖云端</span>
       </footer>
       </div>
@@ -743,8 +745,8 @@ export default function App() {
 
     {kpiConfigOpen && <KpiConfigPanel config={kpiConfig} onSave={(next) => { setKpiConfig(next); saveKpiConfig(next) }} onClose={() => setKpiConfigOpen(false)} />}
     {shiftOpen && <ShiftHandover onClose={() => setShiftOpen(false)} />}
-    <EmsOverlay open={inputsOpen} title="运行输入与计算" variant="drawer" onClose={closeInputs} actions={<EmsButton variant="secondary" onClick={closeInputs}>关闭运行输入与计算</EmsButton>}>
-      {inputsOpen && <><VirtualInputs token={token} nodes={view.nodes} /><CalculationPoints token={token} nodes={view.nodes} /></>}
+    <EmsOverlay open={inputsOpen} title="模拟输入与计算" variant="drawer" onClose={closeInputs} actions={<EmsButton variant="secondary" onClick={closeInputs}>关闭模拟输入与计算</EmsButton>}>
+      {inputsOpen && <><VirtualInputs token={token} nodes={view.nodes} customer /><CalculationPoints token={token} nodes={view.nodes} customer /></>}
     </EmsOverlay>
     {commandsOpen && <CommonCommands token={token} canOperate={canOperate} onError={setError} onClose={() => setCommandsOpen(false)} />}
   </div></div></IonContent></IonApp></CapabilityProvider>
@@ -770,7 +772,7 @@ function DevicesView({ snapshot, observations, points, siteName, groups, rules, 
   const [values, setValues] = useState<Record<string, number>>({})
   const [managedNode, setManagedNode] = useState<Node | null>(null)
   const [showDataNote, setShowDataNote] = useState(false)
-  const [confirm, setConfirm] = useState<{ kind: "setpoint" | "manual"; node: Node; value?: number } | null>(null)
+  const [confirm, setConfirm] = useState<{ kind: "record" | "setpoint" | "manual"; node: Node; value?: number } | null>(null)
   const token = sessionStorage.getItem("fastems-token") || ""
 
   const activities = useMemo(() => snapshot.nodes.flatMap((node) => node.points
@@ -779,7 +781,7 @@ function DevicesView({ snapshot, observations, points, siteName, groups, rules, 
     .sort((a, b) => b.item.time.localeCompare(a.item.time)).slice(0, 6), [snapshot])
 
   return <>
-    <KpiStrip points={points} tariff={tariff} config={kpiConfig} onOpen={openPoint} onSetup={canConfigure ? goChannels : undefined} />
+    <KpiStrip points={points} tariff={tariff} config={kpiConfig} onOpen={openPoint} />
 
     <EnergyFlow points={points} observations={observations} siteName={siteName} onOpenPoint={openPoint} onOpenTrends={goHistory} dispatch={dispatch} event={{
       activeRules, rules, alarmCount, errors, pointCount: points.length, onOpenRules: goRules,
@@ -789,7 +791,7 @@ function DevicesView({ snapshot, observations, points, siteName, groups, rules, 
 
     <EnergyUnitsStatus nodes={snapshot.nodes} onOpen={goEnergyUnits} token={token} canOperate={canOperate} canConfigure={canConfigure} />
 
-    <InlineNotice tone="info"><b>现场</b>：{showDataNote ? "所有指标均取自已配置点位；未接入、无值或过期显示“—”。能流画面只用于展示，不替代控制、保护或结算。" : "仅展示已绑定点位；未接入指标显示“—”，不生成模拟数据。"}<button className="ml-2 text-ems-accent" onClick={() => setShowDataNote(!showDataNote)}>说明 {showDataNote ? "收起" : "展开"}</button></InlineNotice>
+    <InlineNotice tone="info"><b>现场</b>：{showDataNote ? "所有指标均取自已配置点位。能流画面只用于展示，不替代控制、保护或结算。" : "未绑定来源的指标不显示；已绑定但尚未收到数据、或已过期的指标以“—”表示，不会用估算值填充。"}<button className="ml-2 text-ems-accent" onClick={() => setShowDataNote(!showDataNote)}>说明 {showDataNote ? "收起" : "展开"}</button></InlineNotice>
 
     <section className="content-grid">
       <EmsCard><IonCardContent>
@@ -838,15 +840,15 @@ function DevicesView({ snapshot, observations, points, siteName, groups, rules, 
               {isAdmin && <EmsButton variant="quiet" size="small" onClick={() => setManagedNode(node)}>管理</EmsButton>}
               {node.type === "modbusIo" && !writable(node) && <StatusBadge tone="neutral">只读</StatusBadge>}
               {(node.type === "variable" || writable(node)) && canOperate && !disabled && <div className="device-control"><EmsInput aria-label={`${nameOf(node)}操作值`} type="number" value={currentValue} onIonInput={(event) => setValues({ ...values, [node.id]: Number(event.detail.value) })} />
-                {node.type === "variable" && <EmsButton variant="secondary" size="small" disabled={busy} onClick={() => void run(() => request(token, `/nodes/${node.id}/value`, "POST", { value: currentValue, point_type: "value" }))}>更新当前值</EmsButton>}
-                <EmsButton variant="secondary" size="small" disabled={busy} onClick={() => setConfirm({ kind: "setpoint", node, value: currentValue })}>下发目标值</EmsButton>
+                {node.type === "variable" && <EmsButton variant="secondary" size="small" disabled={busy} onClick={() => setConfirm({ kind: "record", node, value: currentValue })}>记录当前值（不写设备）</EmsButton>}
+                <EmsButton variant="secondary" size="small" disabled={busy} onClick={() => setConfirm({ kind: "setpoint", node, value: currentValue })}>{node.type === "variable" ? "下发目标值（仅保存平台记录，不写设备）" : "下发目标值（写入设备并等待回读）"}</EmsButton>
                 {manual
                   ? <EmsButton variant="secondary" size="small" disabled={busy} onClick={() => void run(() => request(token, `/nodes/${node.id}/manual`, "POST", { manual: false }))}>恢复自动</EmsButton>
-                  : <EmsButton variant="quiet" size="small" disabled={busy} onClick={() => setConfirm({ kind: "manual", node })}>接管自动</EmsButton>}
+                  : <EmsButton variant="quiet" size="small" disabled={busy} onClick={() => setConfirm({ kind: "manual", node })}>接管自动调度</EmsButton>}
               </div>}
             </div>
           })}
-          {!snapshot.nodes.some((node) => isDomainNode(node.type) || node.type === "group" || node.type === "modbus" || node.type === "variable" || node.type === "modbusIo") && <EmptyState title="设备树还是空的" description="管理员可添加分组、测试变量；Modbus 端口与点位在“通道”页配置。" />}
+          {!snapshot.nodes.some((node) => isDomainNode(node.type) || node.type === "group" || node.type === "modbus" || node.type === "variable" || node.type === "modbusIo") && <EmptyState title="设备树还是空的" description={isAdmin ? "可添加分组、测试变量；Modbus 端口与点位在“通道”页配置。" : "如需接入设备，请联系交付人员。"} />}
         </div>
       </IonCardContent></EmsCard>
 
@@ -857,12 +859,16 @@ function DevicesView({ snapshot, observations, points, siteName, groups, rules, 
     </section>
     {managedNode && <NodeManager key={managedNode.id} token={token} node={snapshot.nodes.find((node) => node.id === managedNode.id) || managedNode} snapshot={snapshot} run={run} onClose={() => setManagedNode(null)} />}
     {confirm && <ConfirmDialog
-      title={confirm.kind === "manual" ? "人工接管" : "下发目标值"}
+      title={confirm.kind === "manual" ? "接管自动调度" : confirm.kind === "record" ? "记录当前值（不写设备）" : "下发目标值"}
       message={confirm.kind === "manual"
-        ? `接管后「${nameOf(confirm.node)}」将停止自动调度，自动策略不再控制它，直到你显式恢复自动。确定要接管吗？`
-        : `将把「${nameOf(confirm.node)}」的功率目标设为 ${confirm.value} kW，设备会立即按此调节。确认下发？`}
+        ? `接管后「${nameOf(confirm.node)}」将停止自动调度，自动策略不再控制它，直到你显式恢复自动。不会写入设备。确定要接管吗？`
+        : confirm.kind === "record"
+          ? `只更新平台记录，不写入设备，也不改变设备运行状态。确认把「${nameOf(confirm.node)}」的当前值记录为 ${confirm.value}${point(confirm.node, "units")?.text || ""}？`
+          : confirm.node.type === "variable"
+            ? `将把「${nameOf(confirm.node)}」的平台目标值设为 ${confirm.value}${point(confirm.node, "units")?.text || ""}，仅保存平台记录，不写入设备。确认下发？`
+            : `将把「${nameOf(confirm.node)}」的目标值设为 ${confirm.value}${point(confirm.node, "units")?.text || ""}，写入设备并等待回读确认。确认下发？`}
       danger={confirm.kind === "manual"}
-      confirmLabel={confirm.kind === "manual" ? "确认接管" : "确认下发"}
+      confirmLabel={confirm.kind === "manual" ? "确认接管" : confirm.kind === "record" ? "确认记录" : "确认下发"}
       busy={busy}
       onCancel={() => setConfirm(null)}
       onConfirm={() => {
@@ -870,7 +876,7 @@ function DevicesView({ snapshot, observations, points, siteName, groups, rules, 
         setConfirm(null)
         void run(async () => {
           if (target.kind === "manual") await request(token, `/nodes/${target.node.id}/manual`, "POST", { manual: true })
-          else await request(token, `/nodes/${target.node.id}/value`, "POST", { value: target.value, point_type: "valueSet" })
+          else await request(token, `/nodes/${target.node.id}/value`, "POST", { value: target.value, point_type: target.kind === "record" ? "value" : "valueSet" })
         })
       }}
     />}
