@@ -17,6 +17,10 @@ const (
 	NodeTypeEnergyUnit = "energyUnit"
 	// ResourceGroup 资源集群：一组 EnergyUnit + 共享功率上限（G02/T27）。
 	NodeTypeResourceGroup = "resourceGroup"
+	// NodeTypeSiteRoot 是快照层对「实例根」的视图类型：根仍是数据根（roots
+	// 里保留，store 里仍记作 upstream device），但客户设备树把它当容器，
+	// 不列为设备、也不计入设备数。
+	NodeTypeSiteRoot = "siteRoot"
 )
 
 // 四层节点字段的 point type。

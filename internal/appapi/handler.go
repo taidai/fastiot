@@ -721,9 +721,21 @@ func (h *Handler) snapshot(w http.ResponseWriter, identity Identity) {
 		return
 	}
 	writeJSON(w, map[string]any{
-		"user": identity, "roots": identity.Anchors, "nodes": data.RedactNodes(publicInputNodes(nodes)),
+		"user": identity, "roots": identity.Anchors, "nodes": data.RedactNodes(publicInputNodes(markSiteRoot(nodes))),
 		"session_timeout_seconds": int(h.sessionTimeout / time.Second),
 	})
+}
+
+// markSiteRoot 把实例根（虚拟 "root" 的子节点）在快照里标成容器而不是设备。
+// 根仍是数据根、仍出现在 roots 与 nodes 中，但客户设备清单按 type=="device"
+// 取节点，因此不再把根算成设备；数据模型不变，只改快照这一层的视图语义。
+func markSiteRoot(nodes []data.NodeEdge) []data.NodeEdge {
+	for i := range nodes {
+		if nodes[i].Parent == "root" && nodes[i].Type == data.NodeTypeDevice {
+			nodes[i].Type = NodeTypeSiteRoot
+		}
+	}
+	return nodes
 }
 
 func (h *Handler) visibleNodes(identity Identity) ([]data.NodeEdge, error) {
