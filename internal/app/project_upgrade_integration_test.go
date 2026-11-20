@@ -269,20 +269,25 @@ func TestProjectUpgradeConflictBlocksThenRollbackKeepsUpgradeHistory(t *testing.
 	if applied.Before == "" || applied.Version == "" || applied.Before == applied.Version {
 		t.Fatalf("upgrade did not freeze before/after versions: %+v", applied)
 	}
-	upgradedSnapshot := snapshotNodes(t, application, token)
-	channelUpgraded := false
-	for _, node := range upgradedSnapshot.Nodes {
-		if node.ID == channelID {
-			value, _ := pointValue(node, data.PointTypePollPeriod)
-			channelUpgraded = value == 300
+	// Config points land asynchronously, so a single read races the apply.
+	var upgradedSnapshot appSnapshot
+	waitFor(t, "the resolved upgrade to apply the template value", func() bool {
+		upgradedSnapshot = snapshotNodes(t, application, token)
+		for _, node := range upgradedSnapshot.Nodes {
+			if node.ID == channelID {
+				value, _ := pointValue(node, data.PointTypePollPeriod)
+				if value == 300 {
+					return true
+				}
+			}
 		}
-	}
-	if !channelUpgraded {
-		t.Fatal("resolved upgrade did not apply the template value")
-	}
-	if _, found := nodeByDescription(upgradedSnapshot.Nodes, "模板新增"); !found {
-		t.Fatal("resolved upgrade did not create the template node")
-	}
+		return false
+	})
+	waitFor(t, "the resolved upgrade to create the template node", func() bool {
+		upgradedSnapshot = snapshotNodes(t, application, token)
+		_, found := nodeByDescription(upgradedSnapshot.Nodes, "模板新增")
+		return found
+	})
 
 	// 升级窗口内新增的报警：真实液位触发。
 	mustCall(t, application, "PUT", "/alarm-types?root="+root, token, map[string]any{
