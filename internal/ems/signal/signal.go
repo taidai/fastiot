@@ -17,6 +17,11 @@ const (
 	Enum
 )
 
+// None is the kind of a value that carries no reading. It sits outside the
+// valid kinds on purpose: Value.Valid reports false for it, so a missing
+// reading is never mistaken for a real value.
+const None Kind = 255
+
 func (k Kind) String() string {
 	switch k {
 	case Number:
@@ -170,6 +175,13 @@ func (q Quality) String() string {
 		return fmt.Sprintf("quality(%d)", q)
 	}
 }
+
+// Source names where a reading came from. The set is open; a consumer compares
+// against the sources whose freshness policy it knows.
+const (
+	SourceObservation   = "observation"
+	SourceConfiguration = "configuration"
+)
 
 // Sample is one reading of one input, with its source time. SourceTime is the
 // device or rule time; ReceivedTime is when this instance accepted it.
