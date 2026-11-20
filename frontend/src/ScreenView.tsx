@@ -142,15 +142,15 @@ export default function ScreenView({ token, snapshot, points, groups, alarms, is
 
   return <section className="screen-page">
     <div className="panel screen-toolbar">
-      <label>画面所属节点
+      <label>显示范围
         <select value={nodeID} onChange={(event) => { setNodeID(event.target.value); setEditing(false) }}>
-          {groups.map((group) => <option key={group.id} value={group.id}>{snapshot.roots.includes(group.id) ? "整个设备树" : nameOf(group)}</option>)}
+          {groups.map((group) => <option key={group.id} value={group.id}>{snapshot.roots.includes(group.id) ? "整个站点" : nameOf(group)}</option>)}
         </select>
       </label>
       {isAdmin && <button className="secondary-button" onClick={() => { setEditing(!editing); setDraft(config) }}>{editing ? "退出编辑" : "配置画面"}</button>}
       {isAdmin && <button className="secondary-button" onClick={() => setTemplatesOpen(true)}>模板 / 版本</button>}
       {isAdmin && <button className="secondary-button" onClick={() => { setEditing(false); setAiOpen(true) }}>AI 生成</button>}
-      <span className="screen-hint">配置保存在业务节点上，跟随节点权限</span>
+      <span className="screen-hint">画面跟随所在站点，按账号权限显示。「下发目标值」会把输入的目标值写入设备，写入前会确认。</span>
     </div>
 
     {alarmCount > 0 && <button className="panel screen-alarm" onClick={openAlarms}>
@@ -198,9 +198,9 @@ export default function ScreenView({ token, snapshot, points, groups, alarms, is
             <button className="secondary-button" onClick={() => openHistory(node.id)}>历史</button>
             {writeVerdict.allowed && <div className="screen-control">
               <input aria-label={`${nameOf(node)}目标值`} type="number" value={values[node.id] ?? current?.value ?? 0} onChange={(event) => setValues({ ...values, [node.id]: Number(event.target.value) })} />
-              <button className="secondary-button" disabled={busy} onClick={() => setPendingWrite({ node, value: values[node.id] ?? current?.value ?? 0 })}>下发</button>
+              <button className="secondary-button" disabled={busy} title="把输入的目标值写入设备，写入前会确认" onClick={() => setPendingWrite({ node, value: values[node.id] ?? current?.value ?? 0 })}>下发目标值</button>
             </div>}
-            {!writeVerdict.allowed && <span className="text-xs text-ems-muted" title={writeReason}>{writeReason}，不能下发</span>}
+            {!writeVerdict.allowed && <span className="text-xs text-ems-muted" title={writeReason}>{writeReason}，不能下发目标值</span>}
           </div>
         </article>
       })}
