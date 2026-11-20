@@ -177,7 +177,7 @@ function latestDispatch(rules: Node[], nodes: Node[]): DispatchInfo | null {
 }
 
 function isDomainNode(type: string) {
-  return type === "site" || type === "plant" || type === "energyUnit" || type === "device"
+  return type === "site" || type === "plant" || type === "energyUnit" || type === "device" || type === "siteRoot"
 }
 
 function subtreeSnapshot(snapshot: Snapshot, rootID: string): Snapshot {  if (!rootID || !snapshot.roots.includes(rootID)) return snapshot
@@ -812,11 +812,11 @@ function DevicesView({ snapshot, observations, points, siteName, groups, rules, 
         <div className="device-list">
           {snapshot.nodes.filter((node) => isDomainNode(node.type) || node.type === "group" || node.type === "modbus" || node.type === "variable" || node.type === "modbusIo").map((node) => {
             if (isDomainNode(node.type)) {
-              const domainTypeName = { site: "站点", plant: "电站", energyUnit: "储能柜", device: "设备" }[node.type] || node.type
-              const domainIcon = { site: "站", plant: "电", energyUnit: "柜", device: "设" }[node.type] || "域"
+              const domainTypeName = { site: "站点", siteRoot: "站点", plant: "电站", energyUnit: "储能柜", device: "设备" }[node.type] || node.type
+              const domainIcon = { site: "站", siteRoot: "站", plant: "电", energyUnit: "柜", device: "设" }[node.type] || "域"
               const rated = point(node, "ratedPowerKW")?.text
               return <div className="device-line domain" key={`${node.parent}/${node.id}`}>
-                <div className={`device-icon ${node.type}`} aria-hidden="true">{domainIcon}</div>
+                <div className={`device-icon ${node.type === "siteRoot" ? "site" : node.type}`} aria-hidden="true">{domainIcon}</div>
                 <div className="device-name"><strong>{nameOf(node)}</strong><span>{domainTypeName}{rated ? ` · 额定 ${rated} kW` : ""}</span></div>
               </div>
             }
