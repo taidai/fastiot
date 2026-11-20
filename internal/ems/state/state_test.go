@@ -2,6 +2,7 @@ package state
 
 import (
 	"math"
+	"sync"
 	"testing"
 	"time"
 
@@ -103,11 +104,119 @@ func TestApplyDetailedReportsLateObservationWithoutChangingState(t *testing.T) {
 	if value.Value.Num != 38 || !value.SourceTime.Equal(current.SourceTime) || !value.ReceivedTime.Equal(t0.Add(5*time.Second)) {
 		t.Fatalf("late observation replaced the current value: %+v", value)
 	}
-	if _, events = store.ApplyDetailed(t0.Add(7*time.Second), []channel.Result{late}); len(events) != 1 || !events[0].Result.SourceTime.Equal(late.SourceTime) {
-		t.Fatalf("repeated late observation was lost: %+v", events)
+	if _, events = store.ApplyDetailed(t0.Add(7*time.Second), []channel.Result{late}); len(events) != 0 {
+		t.Fatalf("repeated late observation produced a duplicate event: %+v", events)
 	}
 	if _, events = store.ApplyDetailed(t0.Add(8*time.Second), []channel.Result{current}); len(events) != 0 {
 		t.Fatalf("duplicate current observation produced an event: %+v", events)
+	}
+}
+
+func TestRepeatedLateObservationReportsOnce(t *testing.T) {
+	store := New()
+	current := result("d1", "temp", 38)
+	current.SourceTime = t0.Add(5 * time.Second)
+	store.Apply(t0.Add(5*time.Second), []channel.Result{current})
+
+	late := result("d1", "temp", 12)
+	late.SourceTime = t0.Add(2 * time.Second)
+	for i := 0; i < 5; i++ {
+		_, events := store.ApplyDetailed(t0.Add(6*time.Second).Add(time.Duration(i)*time.Millisecond), []channel.Result{late})
+		want := 0
+		if i == 0 {
+			want = 1
+		}
+		if len(events) != want {
+			t.Fatalf("attempt %d: events = %+v, want %d", i, events, want)
+		}
+	}
+}
+
+func TestDistinctLateObservationsEachReport(t *testing.T) {
+	store := New()
+	current := func(device, point string, value signal.Value) channel.Result {
+		return channel.Result{DeviceID: device, PointID: point, Value: value, Quality: signal.Good, SourceTime: t0.Add(5 * time.Second)}
+	}
+	store.Apply(t0.Add(5*time.Second), []channel.Result{
+		current("d1", "temp", signal.Num(38)),
+		current("d1", "pressure", signal.Num(50)),
+		current("d2", "temp", signal.Num(40)),
+		current("d1", "mode", signal.Label("manual")),
+	})
+
+	lates := []channel.Result{
+		result("d1", "temp", 12),     // new source time and value
+		result("d1", "temp", 13),     // same source time, new value
+		result("d1", "pressure", 12), // new point
+		result("d2", "temp", 12),     // new device
+		{DeviceID: "d1", PointID: "mode", Value: signal.Label("auto"), Quality: signal.Good},
+	}
+	for i := range lates {
+		lates[i].SourceTime = t0.Add(2 * time.Second)
+	}
+	lates[0].SourceTime = t0.Add(3 * time.Second)
+	lates[1].SourceTime = lates[0].SourceTime
+
+	for i, late := range lates {
+		_, events := store.ApplyDetailed(t0.Add(6*time.Second), []channel.Result{late})
+		if len(events) != 1 || events[0].Kind != EventLate || !events[0].Result.SourceTime.Equal(late.SourceTime) {
+			t.Fatalf("case %d: distinct late observation produced %+v", i, events)
+		}
+		if _, events := store.ApplyDetailed(t0.Add(6*time.Second), []channel.Result{late}); len(events) != 0 {
+			t.Fatalf("case %d: repeat produced a duplicate event: %+v", i, events)
+		}
+	}
+}
+
+func TestLateDeduplicationSetIsBounded(t *testing.T) {
+	store := New()
+	current := result("d1", "temp", 100)
+	current.SourceTime = t0.Add(time.Hour)
+	store.Apply(t0.Add(time.Hour), []channel.Result{current})
+
+	var last channel.Result
+	base := t0.Add(2 * time.Second)
+	for i := 0; i < lateDedupMax+50; i++ {
+		last = result("d1", "temp", float64(i))
+		last.SourceTime = base.Add(time.Duration(i) * time.Millisecond)
+		if _, events := store.ApplyDetailed(t0.Add(time.Hour), []channel.Result{last}); len(events) != 1 {
+			t.Fatalf("sample %d produced %+v", i, events)
+		}
+	}
+	if len(store.lateSeen) != lateDedupMax || len(store.lateOrder) != lateDedupMax {
+		t.Fatalf("dedup set grew to %d/%d entries, want %d", len(store.lateSeen), len(store.lateOrder), lateDedupMax)
+	}
+	if _, events := store.ApplyDetailed(t0.Add(time.Hour), []channel.Result{last}); len(events) != 0 {
+		t.Fatalf("newest observation was evicted: %+v", events)
+	}
+}
+
+func TestLateDeduplicationIsConcurrentSafe(t *testing.T) {
+	store := New()
+	current := result("d1", "temp", 38)
+	current.SourceTime = t0.Add(5 * time.Second)
+	store.Apply(t0.Add(5*time.Second), []channel.Result{current})
+
+	late := result("d1", "temp", 12)
+	late.SourceTime = t0.Add(2 * time.Second)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	reported := 0
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				_, events := store.ApplyDetailed(t0.Add(6*time.Second), []channel.Result{late})
+				mu.Lock()
+				reported += len(events)
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if reported != 1 {
+		t.Fatalf("concurrent repeats reported %d events, want 1", reported)
 	}
 }
 

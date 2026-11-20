@@ -41,6 +41,8 @@ type Store struct {
 	health          map[string]channel.Health
 	updated         map[string]time.Time
 	lastEventReason map[Key]string
+	lateSeen        map[lateSignature]struct{}
+	lateOrder       []lateSignature
 	changed         chan struct{}
 	revision        uint64
 }
@@ -52,6 +54,7 @@ func New() *Store {
 		health:          make(map[string]channel.Health),
 		updated:         make(map[string]time.Time),
 		lastEventReason: make(map[Key]string),
+		lateSeen:        make(map[lateSignature]struct{}),
 		changed:         make(chan struct{}, 1),
 	}
 }
@@ -72,6 +75,45 @@ const (
 	// observation.
 	ReasonSourceExpired = "source_expired"
 )
+
+// lateDedupMax bounds how many distinct late observations are remembered for
+// deduplication. A device that keeps retransmitting one sample must produce one
+// event, not one per poll; a permanent set would grow without limit on a
+// long-running store, so the oldest signatures are evicted first. The trade is
+// that a duplicate pushed out by lateDedupMax newer distinct observations is
+// reported again — acceptable for a check that stays O(1) per sample and a few
+// hundred KiB of memory.
+const lateDedupMax = 4096
+
+// lateSignature is the identity of one observation: the point and the reading
+// it carried. Receive time is excluded — a retransmitted sample is the same
+// observation whenever it arrives.
+type lateSignature struct {
+	device     string
+	point      string
+	sourceTime int64
+	value      signal.Value
+}
+
+// recordLateLocked reports whether this late observation has not been seen
+// before and remembers it. Callers must hold s.mu.
+func (s *Store) recordLateLocked(result channel.Result) bool {
+	signature := lateSignature{
+		device: result.DeviceID, point: result.PointID,
+		sourceTime: result.SourceTime.UnixNano(), value: result.Value,
+	}
+	if _, seen := s.lateSeen[signature]; seen {
+		return false
+	}
+	for len(s.lateSeen) >= lateDedupMax {
+		oldest := s.lateOrder[0]
+		s.lateOrder = s.lateOrder[1:]
+		delete(s.lateSeen, oldest)
+	}
+	s.lateSeen[signature] = struct{}{}
+	s.lateOrder = append(s.lateOrder, signature)
+	return true
+}
 
 // Apply records newer observations and returns only newly accepted readings.
 func (s *Store) Apply(now time.Time, results []channel.Result) []channel.Result {
@@ -120,7 +162,9 @@ func (s *Store) ApplyDetailed(now time.Time, results []channel.Result) ([]channe
 			continue
 		}
 		if older {
-			events = append(events, Event{Result: result, Kind: EventLate, Reason: "late_observation", At: now})
+			if s.recordLateLocked(result) {
+				events = append(events, Event{Result: result, Kind: EventLate, Reason: "late_observation", At: now})
+			}
 			continue
 		}
 		if exists && !result.SourceTime.After(previous.SourceTime) {
