@@ -10,6 +10,12 @@ const ranges = [
   { key: "7d", label: "7 天", hours: 24 * 7 },
 ]
 
+const intervals = [
+  { key: "raw", label: "原始数据", meaning: "每条记录原样显示" },
+  { key: "5m", label: "5 分钟平均", meaning: "每 5 分钟汇总一个值" },
+  { key: "1h", label: "1 小时平均", meaning: "每 1 小时汇总一个值" },
+]
+
 const seriesColors = ["#2f6f9f", "#c07a1f", "#2d8f78", "#b14f6f", "#6b4fa0", "#5f8f3f", "#8a5a2b", "#3f7f7f"]
 const severityColors: Record<string, string> = { critical: "#b14f6f", warning: "#b07a2a", info: "#2f6f9f" }
 
@@ -397,7 +403,7 @@ export default function HistoryView({ token, points, initialPoint, onError, isAd
 
   if (points.length === 0) {
     return <section className="history-page">
-      <EmptyState title="还没有可查询的点位" description="先在工作台接入 Modbus 设备或添加测试变量，历史与趋势会从这里读取。" />
+      <EmptyState title="还没有可查询的点位" description="先接入设备，历史与趋势会从这里读取；需要接入请联系交付人员。" />
     </section>
   }
 
@@ -405,11 +411,11 @@ export default function HistoryView({ token, points, initialPoint, onError, isAd
     {initialPoint && !points.some(item => item.id === initialPoint) && <InlineNotice tone="warning">指定的原点位不可用、已删除或不在当前权限范围内；未自动切换到其他点位。</InlineNotice>}
     <EmsCard className="!block !p-0"><IonCardContent className="grid min-w-0 gap-4">
       <div className="flex min-w-0 flex-wrap items-end gap-3">
-        <div className="w-full min-w-0 sm:w-56"><EmsSelect label="对比点位" aria-label="添加对比点位" value="" onIonChange={(event) => addPoint(event.detail.value)}>
+        <div className="w-full min-w-0 sm:w-56"><EmsSelect label="选择点位" aria-label="添加点位" value="" onIonChange={(event) => addPoint(event.detail.value)}>
           <EmsSelectOption value="">＋ 添加点位…</EmsSelectOption>
           {points.map((item) => <EmsSelectOption key={item.id} value={item.id}>{nameOf(item)}</EmsSelectOption>)}
         </EmsSelect></div>
-        <div className="history-series min-w-0 flex-1" role="list" aria-label="已选对比点位">
+        <div className="history-series min-w-0 flex-1" role="list" aria-label="已选点位">
           {selected.map((id) => {
             const node = points.find((item) => item.id === id)
             const color = seriesColors[selected.indexOf(id) % seriesColors.length]
@@ -427,8 +433,8 @@ export default function HistoryView({ token, points, initialPoint, onError, isAd
 
       <div className="flex min-w-0 flex-wrap items-end gap-3">
         <div className="grid min-w-0 gap-1"><span className="ems-field-label text-ems-muted">时间范围</span><SegmentedTabs value={range} onChange={setRange} ariaLabel="时间范围" options={ranges.map((item) => ({ value: item.key, label: item.label }))} /></div>
-        <div className="w-full min-w-0 sm:w-40"><EmsSelect label="聚合" aria-label="聚合" value={interval} onIonChange={(event) => setInterval(event.detail.value)}>
-          <EmsSelectOption value="raw">原始</EmsSelectOption><EmsSelectOption value="5m">5 分钟平均</EmsSelectOption><EmsSelectOption value="1h">1 小时平均</EmsSelectOption>
+        <div className="w-full min-w-0 sm:w-64"><EmsSelect label="统计方式" aria-label="统计方式" value={interval} onIonChange={(event) => setInterval(event.detail.value)}>
+          {intervals.map((item) => <EmsSelectOption key={item.key} value={item.key}>{item.label}（{item.meaning}）</EmsSelectOption>)}
         </EmsSelect></div>
         <label className="history-alarm-toggle min-h-10"><input type="checkbox" checked={showAlarms} onChange={(event) => setShowAlarms(event.target.checked)} />叠加报警</label>
       </div>
@@ -450,11 +456,11 @@ export default function HistoryView({ token, points, initialPoint, onError, isAd
           ? <EmsButton variant="secondary" size="small" onClick={() => saveQueries(savedQueries.filter((query) => query !== matchedQuery))}>删查询</EmsButton>
           : <EmsButton variant="secondary" size="small" disabled={selected.length === 0} onClick={saveQuery}>保存查询</EmsButton>}
       </div>
-      <span className="history-hint !m-0">每次每点最多 2000 条；完整导出最多 10000 条，超限会明确拒绝。区间包含起止两端点，来源与观测/接收时间分别保留。</span>
+      <span className="history-hint !m-0">每个点位单次最多返回最近 2000 条数据；导出超过上限时会拒绝，并提示缩小范围。区间包含起止两端点。</span>
       {queryResult && <div className="history-scope" data-testid="history-scope">
         <strong>所选时间窗：{queryResult.bounds.start.toLocaleString()} 至 {queryResult.bounds.end.toLocaleString()}（本地时区，包含两端点）</strong>
         {queryResult.results.map(result => <div key={result.node_id}>
-          {points.find(item => item.id === result.node_id)?.points.find(p => p.type === "description")?.text || result.node_id}：{result.truncated ? `本次返回 ${result.returned} 条，仍有未取回数据` : `已返回所选范围内全部 ${result.returned} 条`}；来源 {result.source}；筛选 {queryResult.aggregate}；{result.sample_interval_ms ? `声明采样间隔 ${result.sample_interval_ms} ms` : "采样间隔未声明"}
+          {points.find(item => item.id === result.node_id)?.points.find(p => p.type === "description")?.text || result.node_id}：{result.truncated ? `本次返回 ${result.returned} 条，仍有未取回数据` : `已返回所选范围内全部 ${result.returned} 条`}{isAdmin && `；来源 ${result.source}；统计方式 ${intervals.find(item => item.key === queryResult.aggregate)?.label || queryResult.aggregate}；${result.sample_interval_ms ? `声明采样间隔 ${result.sample_interval_ms} ms` : "采样间隔未声明"}`}
           {result.truncated && <EmsButton variant="quiet" size="small" disabled={moreLoading} onClick={() => void loadMore()}>{moreLoading ? "继续读取中…" : "继续读取更早记录"}</EmsButton>}
         </div>)}
       </div>}
@@ -493,9 +499,9 @@ export default function HistoryView({ token, points, initialPoint, onError, isAd
         </aside>
       </div>
       <div className="trend-note mt-3 grid gap-2">
-        {hasUndeclaredCadence && <InlineNotice tone="info">该数据源未声明采样间隔，不推断缺口；只显示实际样本与明确质量事件。</InlineNotice>}
+        {isAdmin && hasUndeclaredCadence && <InlineNotice tone="info">该数据源未声明采样间隔，不推断缺口；只显示实际样本与明确质量事件。</InlineNotice>}
         {hasLateSamples && <InlineNotice tone="warning">迟到样本按真实观测时间补入，未参与当时实时控制，也不改变当前状态。</InlineNotice>}
-        <InlineNotice tone="info">缺失段不插值；缺口依据声明采样周期的 3 倍或明确质量事件。过期或无效的数据不会冒充实时值。</InlineNotice>
+        <InlineNotice tone="info">数据缺失处不补值；断线区间会明确标出。过期或无效的数据不会冒充实时值。</InlineNotice>
       </div>
     </EmsCard>
   </section>
