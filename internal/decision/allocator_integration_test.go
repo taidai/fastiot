@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"fastiot/internal/ems/safety"
+	"fastiot/internal/ems/signal"
 	"github.com/nats-io/nats.go"
 	siotclient "github.com/simpleiot/simpleiot/client"
 	"github.com/simpleiot/simpleiot/data"
@@ -263,6 +264,57 @@ func TestAllocatorRefusesMissingSafetyInput(t *testing.T) {
 	}
 	if got := pointValue(t, nc, "pcs-safety", data.PointTypeValueSet); got != -1 {
 		t.Fatalf("unsafe allocator write = %v", got)
+	}
+}
+
+func TestAllocatorRefusesUnusableInterlockQuality(t *testing.T) {
+	opts := server.TestServerOptions
+	opts.ID = "easyems-allocation-interlock-quality"
+	opts.DataDir = filepath.Join(t.TempDir(), "data")
+	opts.NatsPort = 19740
+	opts.NatsServer = "nats://127.0.0.1:19740"
+	opts.HTTPPort = "9707"
+	opts.NatsMonitorPort = 19741
+	opts.NatsWSPort = 19742
+	opts.NatsMQTTPort = 0
+	nc, root, stopServer, err := server.TestServerOpts(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopServer()
+	config := safety.Config{Conditions: []safety.ConditionConfig{{PointID: "interlock", Operator: "eq", Value: 1, Kind: "bool"}}}
+	encoded, _ := json.Marshal(config)
+	points := data.Points{
+		data.NewPointFloat(data.PointTypeValue, "", 0),
+		data.NewPointString("easyemsSafety", "", string(encoded)),
+	}
+	if err := siotclient.SendNode(nc, data.NodeEdge{ID: "pcs-safety", Type: data.NodeTypeVariable, Parent: root.ID, Points: points}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	// The node mirror carries a fresh, passing value; only the runtime
+	// observation records that the reading is untrustworthy.
+	if err := siotclient.SendNode(nc, data.NodeEdge{ID: "interlock", Type: data.NodeTypeVariable, Parent: root.ID,
+		Points: data.Points{data.NewPointFloat(data.PointTypeValue, "", 1)}}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	for _, quality := range []signal.Quality{signal.Invalid, signal.Stale} {
+		run := newAllocationRun(root.ID, AllocatorConfig{Members: []AllocatorMember{{ID: "pcs", Target: Target{NodeID: "pcs-safety"}, MaxDischarge: 100}}})
+		run.observations = func(time.Time) map[string]signal.Sample {
+			return map[string]signal.Sample{
+				"interlock": {Input: "interlock", Value: signal.Num(1), Quality: quality, SourceTime: now, ReceivedTime: now},
+			}
+		}
+		if err := run.start(nc, 80, now); err != nil {
+			t.Fatal(err)
+		}
+		run.step(nc, now)
+		if run.status != "failed" || !strings.Contains(run.reason, "quality is "+quality.String()) {
+			t.Fatalf("%s interlock = %s %s", quality, run.status, run.reason)
+		}
+		if got := pointValue(t, nc, "pcs-safety", data.PointTypeValueSet); got != -1 {
+			t.Fatalf("%s interlock wrote %v", quality, got)
+		}
 	}
 }
 

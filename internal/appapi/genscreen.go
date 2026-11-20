@@ -14,6 +14,7 @@ import (
 
 	"fastiot/internal/audit"
 	"fastiot/internal/authz"
+	"fastiot/internal/ems/safety"
 	"fastiot/internal/genscreen"
 )
 
@@ -203,9 +204,9 @@ func (h *Handler) generatedScreenWrite(w http.ResponseWriter, r *http.Request, i
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
-	verdict := h.manualWriteVerdict(input.PointID, input.Value)
-	if verdict.Decision == "refused" {
-		h.auditScreenWrite(identity, r, session, input.PointID, input.Value, verdict.Decision, verdict.Reason)
+	verdict := h.manualWriteVerdict(input.PointID, input.Value).Effective()
+	if verdict.Decision == safety.DecisionRefused {
+		h.auditScreenWrite(identity, r, session, input.PointID, input.Value, string(verdict.Decision), verdict.Reason)
 		status := http.StatusConflict
 		if verdict.Reason == "read_only" {
 			status = http.StatusForbidden
@@ -215,7 +216,7 @@ func (h *Handler) generatedScreenWrite(w http.ResponseWriter, r *http.Request, i
 		})
 		return
 	}
-	if verdict.Decision == "clamped" {
+	if verdict.Decision == safety.DecisionClamped {
 		input.Value = verdict.Value
 	}
 	outcome := session.Sim.Write(input.PointID, input.Value)
@@ -226,7 +227,7 @@ func (h *Handler) generatedScreenWrite(w http.ResponseWriter, r *http.Request, i
 		})
 		return
 	}
-	h.auditScreenWrite(identity, r, session, input.PointID, input.Value, verdict.Decision, verdict.Reason)
+	h.auditScreenWrite(identity, r, session, input.PointID, input.Value, string(verdict.Decision), verdict.Reason)
 	writeJSON(w, outcome)
 }
 

@@ -239,6 +239,25 @@ func TestSubmitGuardRefusesWithoutWriting(t *testing.T) {
 	}
 }
 
+func TestSubmitGuardRefusesUnknownDecisionWithoutWriting(t *testing.T) {
+	writer := &fakeWriter{}
+	samples := map[string]signal.Sample{}
+	m := manager(writer, &samples)
+	m.Guard = func(request GuardRequest) safety.Verdict {
+		return safety.Verdict{Decision: "permit", Value: 90}
+	}
+	outcome, err := m.Submit(t0, pointRequest("unknown-decision", 90))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.State != Failed || writer.calls != 0 {
+		t.Fatalf("unknown decision wrote a command: %+v calls=%d", outcome, writer.calls)
+	}
+	if !strings.Contains(outcome.Reason, "unknown safety decision") {
+		t.Fatalf("refusal reason = %q, want a diagnostic", outcome.Reason)
+	}
+}
+
 func TestSubmitGuardClampsBeforeWriting(t *testing.T) {
 	writer := &fakeWriter{}
 	samples := map[string]signal.Sample{}

@@ -25,6 +25,7 @@ import (
 	"fastiot/internal/decision"
 	"fastiot/internal/deepseek"
 	"fastiot/internal/ems/command"
+	"fastiot/internal/ems/safety"
 	"fastiot/internal/emsapi"
 	"fastiot/internal/genscreen"
 	"fastiot/internal/industry"
@@ -871,8 +872,8 @@ func (h *Handler) writeValue(w http.ResponseWriter, r *http.Request, identity Id
 	}
 	// One safety verdict for every write path: allowed writes the requested
 	// value, clamped writes the clamped value, refused writes nothing.
-	verdict := h.manualWriteVerdict(id, input.Value)
-	if verdict.Decision == "clamped" {
+	verdict := h.manualWriteVerdict(id, input.Value).Effective()
+	if verdict.Decision == safety.DecisionClamped {
 		input.Value = verdict.Value
 	}
 	if existing, found, err := h.existingCommand(id, input.RequestID, input.Value); err != nil {
@@ -882,7 +883,7 @@ func (h *Handler) writeValue(w http.ResponseWriter, r *http.Request, identity Id
 		writeJSON(w, existing)
 		return
 	}
-	if verdict.Decision == "refused" {
+	if verdict.Decision == safety.DecisionRefused {
 		_ = h.recordCommand(id, CommandResult{
 			RequestID: input.RequestID, Status: "failed", Target: input.Value,
 			Actor: identity.UserID, CreatedAt: time.Now(),

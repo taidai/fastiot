@@ -132,11 +132,11 @@ func (l targetLimiter) Limit(now time.Time, output string, requested signal.Valu
 		if l.values != nil {
 			samples = *l.values
 		}
-		verdict := commandSafety(now, &spec, requested.Num, samples)
-		if verdict.Decision == "refused" {
+		verdict := commandSafety(now, &spec, requested.Num, samples).Effective()
+		if verdict.Decision == safety.DecisionRefused {
 			return rule.LimitResult{Blocked: true, Reason: verdict.Reason}
 		}
-		if verdict.Decision == "clamped" {
+		if verdict.Decision == safety.DecisionClamped {
 			return rule.LimitResult{Value: signal.Num(verdict.Value), Reason: verdict.Reason}
 		}
 		return rule.LimitResult{Value: requested}

@@ -16,7 +16,7 @@ import (
 // product boundary. The command manager calls it once for every normalized write.
 func (h *Handler) commandGuard(request command.GuardRequest) safety.Verdict {
 	if len(request.Writes) != 1 {
-		return safety.Verdict{Decision: "refused", Reason: "invalid_command"}
+		return safety.Verdict{Decision: safety.DecisionRefused, Reason: "invalid_command"}
 	}
 	write := request.Writes[0]
 	now := time.Now()
@@ -54,12 +54,12 @@ func (h *Handler) commandGuard(request command.GuardRequest) safety.Verdict {
 	}
 	config, present, err := decision.LoadOutputSafety(h.nc, write.Point)
 	if err != nil {
-		return safety.Verdict{Decision: "refused", Value: write.Value.Num, Reason: "invalid_safety_config"}
+		return safety.Verdict{Decision: safety.DecisionRefused, Value: write.Value.Num, Reason: "invalid_safety_config"}
 	}
 	if present {
 		spec, err := config.Output()
 		if err != nil {
-			return safety.Verdict{Decision: "refused", Value: write.Value.Num, Reason: "invalid_safety_config"}
+			return safety.Verdict{Decision: safety.DecisionRefused, Value: write.Value.Num, Reason: "invalid_safety_config"}
 		}
 		req.Spec = &spec
 	}
