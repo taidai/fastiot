@@ -18,7 +18,7 @@ func Freshness(sample Sample, now time.Time) observation.Verdict {
 	case "invalid":
 		quality = signal.Invalid
 	}
-	value := signal.Value{Kind: signal.Kind(99)}
+	value := signal.Value{Kind: signal.None}
 	if sample.Value != nil {
 		value = signal.Num(*sample.Value)
 	}
@@ -29,7 +29,7 @@ func Freshness(sample Sample, now time.Time) observation.Verdict {
 	verdict := observation.Evaluate(observation.Input{
 		Value: value, Quality: quality, Reason: sample.Reason,
 		SourceTime: sample.SourceTime, ReceivedTime: sample.ReceivedTime,
-		MaxAge: maxAge, ExpiresAt: sample.ValidUntil, AllowNoExpiry: sample.Source != "observation" || sample.Simulated,
+		MaxAge: maxAge, ExpiresAt: sample.ValidUntil, AllowNoExpiry: sample.Source != signal.SourceObservation || sample.Simulated,
 	}, now)
 	verdict.ExpiresAt = sample.ValidUntil
 	if verdict.State == observation.Stale && verdict.Reason == "source_expired" {
