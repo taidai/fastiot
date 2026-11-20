@@ -93,9 +93,18 @@ type Client struct {
 	lastCheck     string
 	lastCheckRow  string
 	lastAllocSig  string
+	observations  Observations
 }
 
 func NewDecisionTableClient(nc *nats.Conn, config DecisionTable) siotclient.Client {
+	return NewDecisionTableClientWithObservations(nc, config, nil)
+}
+
+// NewDecisionTableClientWithObservations adds the runtime's sample snapshot so
+// allocator interlock inputs are judged by the quality recorded for them, not by
+// a value mirrored onto the node tree. A nil provider keeps the mirror as the
+// only source.
+func NewDecisionTableClientWithObservations(nc *nats.Conn, config DecisionTable, observations Observations) siotclient.Client {
 	return &Client{
 		nc:            nc,
 		config:        config,
@@ -104,6 +113,7 @@ func NewDecisionTableClient(nc *nats.Conn, config DecisionTable) siotclient.Clie
 		newEdgePoints: make(chan siotclient.NewPoints),
 		updates:       make(chan inputUpdate, 256),
 		manualUpdates: make(chan manualUpdate, 256),
+		observations:  observations,
 	}
 }
 
@@ -340,7 +350,9 @@ func (c *Client) start() (*activeTable, error) {
 			if err := ValidateAllocationOwnership(c.nc, c.config.ID, target.NodeID); err != nil {
 				return fail(fmt.Errorf("action %s: %w", actionID, err))
 			}
-			active.allocations[actionID] = newAllocationRun(target.NodeID, config)
+			run := newAllocationRun(target.NodeID, config)
+			run.observations = c.observations
+			active.allocations[actionID] = run
 		}
 	}
 	for pointID, target := range bindings.Points {

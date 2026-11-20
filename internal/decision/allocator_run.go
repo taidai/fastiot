@@ -30,6 +30,10 @@ type allocationRun struct {
 	requested     float64
 	startedAt     time.Time
 	lastRequested float64
+	// observations returns the runtime's samples keyed by source node id, so an
+	// interlock input is judged by the quality the runtime recorded for it
+	// rather than by a value mirrored onto the node tree.
+	observations Observations
 	// tracker keeps the last setpoint and grace period so a brief outage holds
 	// a member instead of stepping power.
 	tracker *alloc.Tracker
@@ -43,6 +47,10 @@ type allocationStep struct {
 	share  alloc.Share
 	sent   bool
 }
+
+// Observations returns the runtime's current samples keyed by source node id.
+// A nil provider means the node tree mirror is the only source.
+type Observations func(now time.Time) map[string]signal.Sample
 
 func newAllocationRun(parent string, config AllocatorConfig) *allocationRun {
 	return &allocationRun{
@@ -174,17 +182,21 @@ func (r *allocationRun) step(nc *nats.Conn, now time.Time) {
 				r.fail("failed", step, err.Error())
 				return
 			}
-			spec, samples, err := allocationSafety(nc, target)
+			var observed map[string]signal.Sample
+			if r.observations != nil {
+				observed = r.observations(now)
+			}
+			spec, samples, err := allocationSafety(nc, target, observed)
 			if err != nil {
 				r.fail("failed", step, "invalid safety config")
 				return
 			}
-			verdict := commandSafety(now, spec, step.share.Setpoint, samples)
-			if verdict.Decision == "refused" {
+			verdict := commandSafety(now, spec, step.share.Setpoint, samples).Effective()
+			if verdict.Decision == safety.DecisionRefused {
 				r.fail("failed", step, verdict.Reason)
 				return
 			}
-			if verdict.Decision == "clamped" {
+			if verdict.Decision == safety.DecisionClamped {
 				step.share.Setpoint = verdict.Value
 				r.updateShare(*step)
 			}
@@ -245,7 +257,7 @@ func (r *allocationRun) updateShare(step allocationStep) {
 	r.result.Shortfall = r.result.Requested - delivered
 }
 
-func allocationSafety(nc *nats.Conn, target Target) (*safety.Output, map[string]signal.Sample, error) {
+func allocationSafety(nc *nats.Conn, target Target, observed map[string]signal.Sample) (*safety.Output, map[string]signal.Sample, error) {
 	config, present, err := LoadOutputSafety(nc, target.NodeID)
 	if err != nil {
 		return nil, nil, err
@@ -259,6 +271,14 @@ func allocationSafety(nc *nats.Conn, target Target) (*safety.Output, map[string]
 	}
 	samples := map[string]signal.Sample{}
 	for _, condition := range config.Conditions {
+		// The node mirror carries a value and a time but no quality. Prefer the
+		// runtime observation, which records invalid/stale readings, so an
+		// interlock input that the runtime distrusts is refused instead of being
+		// re-stamped good.
+		if sample, ok := observed[condition.PointID]; ok {
+			samples[condition.PointID] = sample
+			continue
+		}
 		nodes, err := siotclient.GetNodes(nc, "all", condition.PointID, "", false)
 		if err != nil || len(nodes) == 0 {
 			continue

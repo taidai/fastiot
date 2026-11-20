@@ -55,12 +55,12 @@ func (l Limiter) Limit(now time.Time, output string, requested signal.Value) rul
 	verdict := Evaluate(Request{
 		Output: output, Requested: requested, Spec: &spec,
 		Samples: l.Samples, MaxAge: l.MaxAge,
-	}, now)
-	if verdict.Decision == "refused" {
+	}, now).Effective()
+	if verdict.Decision == DecisionRefused {
 		return rule.LimitResult{Value: requested, Blocked: true, Reason: verdict.Reason}
 	}
 	applied := requested
-	if verdict.Decision == "clamped" {
+	if verdict.Decision == DecisionClamped {
 		applied = signal.Num(verdict.Value)
 	}
 	return rule.LimitResult{Value: applied, Reason: verdict.Reason}

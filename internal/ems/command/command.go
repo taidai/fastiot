@@ -239,14 +239,14 @@ func (m *Manager) submitLocked(now time.Time, request Request) (Outcome, error) 
 			verdict := m.Guard(GuardRequest{
 				DeviceID: request.DeviceID, Point: writes[i].Point, Writes: []device.Write{writes[i]},
 				Automatic: request.Source != "" && request.Source != "manual",
-			})
-			if verdict.Decision == "refused" {
+			}).Effective()
+			if verdict.Decision == safety.DecisionRefused {
 				outcome.State = Failed
 				outcome.Reason = verdict.Reason
 				m.store(outcome)
 				return outcome, nil
 			}
-			if verdict.Decision != "clamped" {
+			if verdict.Decision != safety.DecisionClamped {
 				continue
 			}
 			writes[i].Value = signal.Num(verdict.Value)

@@ -14,6 +14,27 @@ func goodSample() signal.Sample {
 	return signal.Sample{Input: "soc", Value: signal.Num(50), Quality: signal.Good, SourceTime: verdictNow}
 }
 
+func TestEffectiveRefusesUnknownDecision(t *testing.T) {
+	for _, decision := range []Decision{"", "permit", "allowed "} {
+		verdict := Verdict{Decision: decision, Value: 10, Reason: "stale input"}.Effective()
+		if verdict.Decision != DecisionRefused {
+			t.Fatalf("decision %q resolved to %q, want refused", decision, verdict.Decision)
+		}
+		if verdict.Reason == "" || verdict.Reason == "stale input" {
+			t.Fatalf("decision %q has no diagnostic reason: %q", decision, verdict.Reason)
+		}
+		if verdict.Value != 10 {
+			t.Fatalf("decision %q dropped the value: %+v", decision, verdict)
+		}
+	}
+	for _, decision := range []Decision{DecisionAllowed, DecisionClamped, DecisionRefused} {
+		original := Verdict{Decision: decision, Value: 1, Reason: "kept"}
+		if got := original.Effective(); got != original {
+			t.Fatalf("%q changed: %+v", decision, got)
+		}
+	}
+}
+
 func TestRangeClamp(t *testing.T) {
 	spec := &Output{HasRange: true, Min: 10, Max: 100}
 	for _, test := range []struct {
@@ -73,10 +94,10 @@ func TestDefaultFreshnessToleranceTracksSharedValue(t *testing.T) {
 	for _, test := range []struct {
 		name     string
 		age      time.Duration
-		expected string
+		expected Decision
 	}{
-		{"within tolerance", observation.DefaultMaxAge - time.Second, "allowed"},
-		{"beyond tolerance", observation.DefaultMaxAge + time.Second, "refused"},
+		{"within tolerance", observation.DefaultMaxAge - time.Second, DecisionAllowed},
+		{"beyond tolerance", observation.DefaultMaxAge + time.Second, DecisionRefused},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			sample := goodSample()
