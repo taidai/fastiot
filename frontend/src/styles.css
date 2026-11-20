@@ -1289,6 +1289,8 @@ h1, h2, h3 { color: var(--ink); }
   accent-color: #b97812;
 }
 .display-panel small { color: var(--faint); font-size: 10px; line-height: 1.6; }
+.display-memo { display: grid; gap: 6px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.display-memo .secondary-button { width: 100%; }
 
 /* Login glass */
 .login-intro, .login-form {
@@ -2758,7 +2760,7 @@ body::after {
   .csv-diff-row span:last-child { grid-column: 1 / -1; }
 }
 
-/* 总览工作台：可配置 KPI、健康下钻、班次交接、常用命令 */
+/* 总览工作台：可配置 KPI、健康下钻、本机备忘、常用命令 */
 .head-action { white-space: nowrap; }
 .health-pill {
   display: inline-flex; align-items: center; gap: 5px; margin: 0;
@@ -2799,7 +2801,7 @@ body::after {
 .kpi-config-threshold select { min-height: 30px; font-size: 11.5px; }
 .kpi-config-threshold input { min-height: 30px; width: 84px; font-size: 11.5px; }
 
-/* 班次交接 */
+/* 本机备忘 */
 .shift-handover { width: min(640px, calc(100vw - 32px)); }
 .shift-handover-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
 .shift-note { grid-column: 1 / -1; }

@@ -22,7 +22,31 @@ const date = (value?: string) => value ? new Date(value).toLocaleString() : "—
 const explain = (reason?: string) => Object.entries(reasons).find(([key]) => reason?.includes(key))?.[1] || reason || "不可用"
 const errorText = (error: unknown) => error instanceof ApiError ? explain(error.code || error.message) : (error as Error).message
 
-export default function CalculationPoints({ token, nodes }: { token: string; nodes: Node[] }) {
+export default function CalculationPoints({ token, nodes, customer = false }: { token: string; nodes: Node[]; customer?: boolean }) {
+  const text = customer
+    ? {
+        title: "计算值",
+        intro: "计算值自动更新，不依赖页面打开；只用于展示和计算，不写设备。",
+        create: "新增计算值",
+        loading: "正在读取计算值…",
+        empty: "尚无计算值。先准备带单位的数值输入，再建立加法或除法。",
+        createTitle: "新增计算值",
+        nameLabel: "计算值名称",
+        parentLabel: "计算值分组",
+        sourceLabel: "计算值",
+      }
+    : {
+        title: "只读计算点",
+        intro: "后台持续计算，不依赖页面打开。保存草稿不生效，应用不会写设备。",
+        create: "新增计算点",
+        loading: "正在读取计算点…",
+        empty: "尚无计算点。先准备带单位的数值输入，再建立加法或除法。",
+        createTitle: "新增计算点",
+        nameLabel: "计算点名称",
+        parentLabel: "计算点分组",
+        sourceLabel: "计算点",
+      }
+  const sourceLabel = (key: string) => key === "calculation" ? text.sourceLabel : sources[key] || key
   const parents = nodes.filter(n => n.type === "group" || n.parent === "root")
   const scope = parents.map(n => n.id).sort().join(",")
   const key = `${token}/${scope}`
@@ -152,18 +176,18 @@ export default function CalculationPoints({ token, nodes }: { token: string; nod
   function evidence(inputs?: CalculationSample[]) {
     return <ul className="grid gap-3">{inputs?.map((s, index) => <li key={`${s.id}/${index}`} className="break-words">
       <strong>{label(s.id)}</strong>：{display(s.value)} {s.unit}；{s.quality === "good" ? "可用" : explain(s.reason)}
-      <p>{sources[s.source] || s.source}{s.simulated ? "；模拟试算 / 非实测" : ""}；原始观测 {date(s.source_time)}；接收 {date(s.received_time)}；变更 {date(s.changed_at)}；原到期 {date(s.valid_until)}</p>
+      <p>{sourceLabel(s.source)}{s.simulated ? "；模拟试算 / 非实测" : ""}；原始观测 {date(s.source_time)}；接收 {date(s.received_time)}；变更 {date(s.changed_at)}；原到期 {date(s.valid_until)}</p>
       <small className="break-all">ID {s.id}；输入版本 {s.version}；时间依据 {s.time_source || "非现场采样"}</small>
     </li>)}</ul>
   }
   const modalError = error || (!ready ? loadError || "正在重新确认数据，暂不能提交" : "")
   return <EmsCard className="calculation-points"><IonCardContent>
-    <div className="flex flex-wrap items-center justify-between gap-3"><h2>只读计算点</h2>{data?.can_create && <EmsButton disabled={busy || !parents.length} onClick={() => edit()}>新增计算点</EmsButton>}</div>
-    <p>后台持续计算，不依赖页面打开。保存草稿不生效，应用不会写设备。</p>
+    <div className="flex flex-wrap items-center justify-between gap-3"><h2>{text.title}</h2>{data?.can_create && <EmsButton disabled={busy || !parents.length} onClick={() => edit()}>{text.create}</EmsButton>}</div>
+    <p>{text.intro}</p>
     {loadError && <InlineNotice tone="danger">读取失败，当前计算值不可确认：{loadError}<EmsButton onClick={() => setRefresh(n => n + 1)}>重新读取计算</EmsButton></InlineNotice>}
     {error && <p role="alert" className="inline-error">{error}</p>}
-    {!ready && !loadError && <p>正在读取计算点…</p>}
-    {ready && !points.length && <p>尚无计算点。先准备带单位的数值输入，再建立加法或除法。</p>}
+    {!ready && !loadError && <p>{text.loading}</p>}
+    {ready && !points.length && <p>{text.empty}</p>}
     <div className="grid gap-3">{points.map(point => {
       const r = point.state, stale = expired(r), good = r.quality === "good" && !stale
       const previous = stale && r.value !== undefined ? r : r.retained
@@ -186,14 +210,14 @@ export default function CalculationPoints({ token, nodes }: { token: string; nod
         </div>
       </article>
     })}</div>
-    <EmsOverlay open={editing !== undefined} title={editing ? "编辑计算草稿" : "新增计算点"} onClose={closeEditor} busy={busy}
+    <EmsOverlay open={editing !== undefined} title={editing ? "编辑计算草稿" : text.createTitle} onClose={closeEditor} busy={busy}
       actions={<><EmsButton variant="secondary" disabled={busy} onClick={closeEditor}>取消</EmsButton><EmsButton disabled={busy || !ready} onClick={() => void run(save)}>保存计算草稿（不生效）</EmsButton></>}>
       <div className="grid gap-3">
-        <label>名称<input aria-label="计算点名称" value={name} disabled={!!editing} onChange={e => setName(e.target.value)} /></label>
-        <label>所属分组<select aria-label="计算点分组" value={parent} disabled={!!editing} onChange={e => setParent(e.target.value)}>{parents.map(n => <option key={n.id} value={n.id}>{nameOf(n)}</option>)}</select></label>
+        <label>名称<input aria-label={text.nameLabel} value={name} disabled={!!editing} onChange={e => setName(e.target.value)} /></label>
+        <label>所属分组<select aria-label={text.parentLabel} value={parent} disabled={!!editing} onChange={e => setParent(e.target.value)}>{parents.map(n => <option key={n.id} value={n.id}>{nameOf(n)}</option>)}</select></label>
         <label>运算<select aria-label="计算运算" value={definition.operator} onChange={e => { const operator = e.target.value as CalculationDefinition["operator"]; setDefinition({ ...definition, operator, unit: operator === "divide" ? "1" : sourceList.find(s => s.id === definition.inputs[0])?.unit || "kW" }) }}><option value="add">加法（相同单位）</option><option value="divide">除法（同单位，输出无量纲）</option></select></label>
         {[0, 1].map(index => <label key={index}>输入 {index + 1}<select aria-label={`计算输入${index + 1}`} value={definition.inputs[index]} onChange={e => setDefinition({ ...definition, inputs: definition.inputs.map((id, i) => i === index ? e.target.value : id) })}>
-          <option value="">请选择 / 待重绑定</option>{sourceList.filter(s => s.kind === "number" && s.id !== editing?.id && visible.has(s.id)).map(s => <option key={s.id} value={s.id}>{s.name} [{s.unit || "未声明单位"}] — {sources[s.source] || s.source}</option>)}
+          <option value="">请选择 / 待重绑定</option>{sourceList.filter(s => s.kind === "number" && s.id !== editing?.id && visible.has(s.id)).map(s => <option key={s.id} value={s.id}>{s.name} [{s.unit || "未声明单位"}] — {sourceLabel(s.source)}</option>)}
         </select></label>)}
         <label>输出单位<input aria-label="计算输出单位" value={definition.unit} onChange={e => setDefinition({ ...definition, unit: e.target.value })} /></label>
         <label>最大现场观测时间差（毫秒，可留空）<input aria-label="计算时间差" type="number" min="0" step="1" value={definition.max_skew_ms ?? ""} onChange={e => setDefinition({ ...definition, max_skew_ms: e.target.value === "" ? undefined : Number(e.target.value) })} /></label>

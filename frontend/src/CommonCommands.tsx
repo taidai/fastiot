@@ -85,7 +85,7 @@ export default function CommonCommands({ token, canOperate, onError, onClose }: 
       <h3>常用命令</h3>
       <p>{canOperate ? "点击执行后走确认对话框，命令会写入设备并等待回读。" : "当前账号只能查看，不能执行命令。"}</p>
       {loading && <div className="empty-state"><strong>正在读取设备命令…</strong></div>}
-      {!loading && rows.length === 0 && <div className="empty-state"><strong>还没有可用命令</strong><span>先在“通道 → 端口配置”绑定 Profile，Profile 里的命令会出现在这里。</span></div>}
+      {!loading && rows.length === 0 && <div className="empty-state"><span>当前没有可用命令；如需添加，请联系交付人员。</span></div>}
       {rows.map(({ device, commands }) => <div className="common-command-group" key={deviceKey(device)}>
         <div className="common-command-device"><strong>{device.business_node_name || device.name}</strong><small>{device.channel_name} / 站号 {device.server_id}</small></div>
         {commands.map((command) => {
