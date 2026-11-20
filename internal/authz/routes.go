@@ -12,13 +12,16 @@ type routeRequirement struct {
 	method    string
 	path      string
 	action    string
+	adminOnly bool
 	reason    string
 	targets   []targetSpec
 	packageID string
 }
 
+// routeCalculation and routeVirtualInput are internal dispatch markers: the
+// real action depends on the request's operation. They never leave Required as
+// Requirement.Action.
 const (
-	routeAdmin        = "route_admin"
 	routeCalculation  = "route_calculation"
 	routeVirtualInput = "route_virtual_input"
 )
@@ -31,6 +34,12 @@ func actionRoute(method, path, action, reason string) routeRequirement {
 	return routeRequirement{method: method, path: path, action: action, reason: reason}
 }
 
+// adminOnlyRoute declares a route restricted to admins without introducing an
+// action: the restriction is carried by AdminOnly, not by a pseudo-action name.
+func adminOnlyRoute(method, path, reason string) routeRequirement {
+	return routeRequirement{method: method, path: path, adminOnly: true, reason: reason}
+}
+
 // inPackage marks a route as belonging to one installable industry package.
 // The product API refuses such routes while the package is not installed, so
 // the declaration is the single source of what a package owns.
@@ -40,9 +49,10 @@ func (r routeRequirement) inPackage(id string) routeRequirement {
 }
 
 // routeRequirements declares every authenticated product and EMS route. An
-// empty action means any authenticated identity may read or simulate. Targets
-// declare direct object scope; list filters and derived references stay in the
-// owning module.
+// empty action means any authenticated identity may read or simulate; a route
+// restricted to admins says so with adminOnly rather than with an action name.
+// Targets declare direct object scope; list filters and derived references stay
+// in the owning module.
 var routeRequirements = []routeRequirement{
 	authenticatedRoute(http.MethodGet, "ws"),
 	authenticatedRoute(http.MethodGet, "metrics"),
@@ -68,7 +78,7 @@ var routeRequirements = []routeRequirement{
 	authenticatedRoute(http.MethodGet, "alarm-events"),
 	authenticatedRoute(http.MethodGet, "alarm-stats"),
 	authenticatedRoute(http.MethodGet, "device-ledger").queryTarget("site"),
-	actionRoute(http.MethodGet, "delivery/check", routeAdmin, "admin_required"),
+	adminOnlyRoute(http.MethodGet, "delivery/check", "admin_required"),
 	actionRoute(http.MethodGet, "delivery/evidence", Export, "admin_required"),
 	actionRoute(http.MethodGet, "delivery/gates", Configure, "admin_required").queryTarget("site"),
 	actionRoute(http.MethodPost, "delivery/preflight", Configure, "admin_required").queryTarget("site"),
@@ -260,8 +270,12 @@ func resolvedRouteAction(r *http.Request, route routeRequirement) string {
 
 // Requirement is the authorization declared for one HTTP route.
 type Requirement struct {
-	Action        string
-	Reason        string
+	// Action is a canonical action name from this package, or empty when the
+	// route requires no action. Admin-only routes keep it empty: their
+	// restriction is expressed by AdminOnly alone.
+	Action string
+	Reason string
+	// AdminOnly restricts the route to admins regardless of action grants.
 	AdminOnly     bool
 	Targets       []Target
 	UnknownTarget *Target
@@ -295,7 +309,7 @@ func Required(r *http.Request) (Requirement, bool) {
 		}
 		action := resolvedRouteAction(r, route)
 		requirement := Requirement{Reason: route.reason, Package: route.packageID}
-		requirement.AdminOnly = action == routeAdmin || (action == routeVirtualInput && strings.HasSuffix(path, "/impact"))
+		requirement.AdminOnly = route.adminOnly || (action == routeVirtualInput && strings.HasSuffix(path, "/impact"))
 		if action == routeCalculation || action == routeVirtualInput {
 			action = ""
 		}
