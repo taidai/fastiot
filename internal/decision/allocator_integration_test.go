@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"fastiot/internal/ems/alloc"
 	"fastiot/internal/ems/safety"
 	"github.com/nats-io/nats.go"
 	siotclient "github.com/simpleiot/simpleiot/client"
@@ -222,6 +223,73 @@ func TestAllocationMemberRejectsUnknownHealth(t *testing.T) {
 	}
 	if !member.Online {
 		t.Fatal("degraded health must remain eligible")
+	}
+}
+
+// A device without a health point is unknown, not online, and its capacity
+// must not be offered. Variables have no health contract at all and keep the
+// documented eligible default.
+func TestAllocationMemberHealthStates(t *testing.T) {
+	opts := server.TestServerOptions
+	opts.ID = "easyems-allocation-health-states-test"
+	opts.DataDir = filepath.Join(t.TempDir(), "data")
+	opts.NatsPort = 19730
+	opts.NatsServer = "nats://127.0.0.1:19730"
+	opts.HTTPPort = "9705"
+	opts.NatsMonitorPort = 19732
+	opts.NatsWSPort = 19733
+	opts.NatsMQTTPort = 0
+	nc, root, stopServer, err := server.TestServerOpts(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopServer()
+	bus := data.NodeEdge{ID: "bus-states", Type: data.NodeTypeModbus, Parent: root.ID}
+	if err := siotclient.SendNode(nc, bus, "test"); err != nil {
+		t.Fatal(err)
+	}
+	for id, state := range map[string]string{"io-online": "healthy", "io-offline": "offline", "io-unknown": "unknown"} {
+		points := data.Points{data.NewPointString("health", "", state)}
+		if err := siotclient.SendNode(nc, data.NodeEdge{ID: id, Type: data.NodeTypeModbusIO, Parent: bus.ID, Points: points}, "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := siotclient.SendNode(nc, data.NodeEdge{ID: "io-missing", Type: data.NodeTypeModbusIO, Parent: bus.ID}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	createVariable(t, nc, root.ID, "virtual-member", 0)
+
+	members := []AllocatorMember{
+		{ID: "online", Target: Target{NodeID: "io-online"}, MaxCharge: 100, MaxDischarge: 100},
+		{ID: "offline", Target: Target{NodeID: "io-offline"}, MaxCharge: 100, MaxDischarge: 100},
+		{ID: "unknown", Target: Target{NodeID: "io-unknown"}, MaxCharge: 100, MaxDischarge: 100},
+		{ID: "missing", Target: Target{NodeID: "io-missing"}, MaxCharge: 100, MaxDischarge: 100},
+		{ID: "virtual", Target: Target{NodeID: "virtual-member"}, MaxCharge: 100, MaxDischarge: 100},
+	}
+	resolved := make([]alloc.Member, 0, len(members))
+	for _, member := range members {
+		value, err := allocationMember(nc, member)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resolved = append(resolved, value)
+	}
+	for i, want := range []bool{true, false, false, false, true} {
+		if resolved[i].Online != want {
+			t.Errorf("%s online = %v, want %v", members[i].ID, resolved[i].Online, want)
+		}
+	}
+	result, err := alloc.Allocate(500, resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Delivered != 200 || result.Shortfall != 300 {
+		t.Fatalf("unknown capacity was counted: delivered %v shortfall %v", result.Delivered, result.Shortfall)
+	}
+	for i, want := range []string{"", "offline", "health unknown", "health unknown", ""} {
+		if result.Shares[i].Excluded != (want != "") || result.Shares[i].Reason != want {
+			t.Errorf("%s share = %+v, want reason %q", members[i].ID, result.Shares[i], want)
+		}
 	}
 }
 

@@ -189,11 +189,14 @@ func ValidateAllocationOwnership(nc *nats.Conn, ruleID, nodeID string) error {
 
 // allocationMember resolves online state, manual takeover, current
 // capabilities and constraint limits. The values are read again on every
-// dispatch cycle. Member.Detail carries why the member was taken over or
-// constrained; it is empty when the member is healthy.
+// dispatch cycle. Member.Detail carries why the member was taken over,
+// constrained or left at unknown health; it is empty when the member is
+// healthy.
 func allocationMember(nc *nats.Conn, member AllocatorMember) (alloc.Member, error) {
+	// Online is never assumed: a member is eligible only when its health is
+	// positively known, so an unobserved device cannot lend capacity.
 	result := alloc.Member{
-		ID: member.ID, Online: true,
+		ID:       member.ID,
 		MinPower: member.MinPower, MaxCharge: member.MaxCharge, MaxDischarge: member.MaxDischarge,
 		AvailableCharge: member.MaxCharge, AvailableDischarge: member.MaxDischarge,
 		Priority: member.Priority, Weight: member.Weight,
@@ -211,12 +214,25 @@ func allocationMember(nc *nats.Conn, member AllocatorMember) (alloc.Member, erro
 		result.Disabled = true
 		reasons = append(reasons, "manual takeover")
 	}
-	if health, _ := node.Points.Text("health", ""); health != "" {
-		result.Online = health != "offline" && health != "unknown"
-	} else if node.Type == data.NodeTypeModbusIO {
-		// No heartbeat is an offline member, not a reason to block every
-		// other member. Healthy members still wait for capability values.
-		result.Online = busHealthy(nc, node.Parent)
+	state, _ := node.Points.Text("health", "")
+	switch {
+	case state != "":
+		result.Online = state != "offline" && state != "unknown"
+		if state == "unknown" {
+			reasons = append(reasons, "health unknown")
+		}
+	case node.Type == data.NodeTypeModbusIO:
+		// The bridge publishes one health point per device point
+		// (bridge.PublishDeviceHealth). A device point without one has not been
+		// observed yet, so its state is unknown, not online. A bus heartbeat is
+		// not device health and does not stand in for it here.
+		reasons = append(reasons, "health unknown")
+	default:
+		// Variables and other non-device nodes are configuration or virtual
+		// objects: no adapter publishes health for them, so there is no device
+		// state that could be unknown. Their configured capability is the whole
+		// truth and they stay eligible.
+		result.Online = true
 	}
 	if member.Fault != nil {
 		fault, found, err := readNumber(nc, *member.Fault)
