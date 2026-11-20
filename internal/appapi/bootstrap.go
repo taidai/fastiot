@@ -37,7 +37,10 @@ func Bootstrap(nc *nats.Conn, dataDir string) error {
 		return fmt.Errorf("FASTEMS_ADMIN_PASSWORD must contain at least 12 characters")
 	}
 
-	deadline := time.Now().Add(10 * time.Second)
+	// The server creates the initial administrator asynchronously. A loaded
+	// machine can take well over ten seconds to see it, so wait long enough
+	// for startup to finish rather than failing the whole boot.
+	deadline := time.Now().Add(30 * time.Second)
 	var admin *client.User
 	for time.Now().Before(deadline) {
 		root, err := client.GetRootNode(nc)
