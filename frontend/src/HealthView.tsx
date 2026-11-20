@@ -90,7 +90,7 @@ export default function HealthView({ token, onError }: { token: string; onError:
           return {
             id: device.device_id || "",
             name: info?.name || device.device_id || "未知设备",
-            node: info?.business_node_name || "未绑定业务节点",
+            node: info?.business_node_name || "未归属",
             server: device.device_id?.split("/").pop() || "—",
             health: device.health || "unknown",
             window5: percent(device.window_5m?.success_rate, device.window_5m?.polls),
@@ -102,7 +102,7 @@ export default function HealthView({ token, onError }: { token: string; onError:
         : ledgerDevices.map((device) => ({
           id: `${device.channel_id}/${device.server_id}`,
           name: device.name,
-          node: device.business_node_name || "未绑定业务节点",
+          node: device.business_node_name || "未归属",
           server: String(device.server_id),
           health: device.health,
           window5: "—",

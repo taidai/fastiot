@@ -70,7 +70,7 @@ export default function AssistantPanel({ points, observations, alarmCount, error
 
     if (/报警|告警|异常|故障/.test(q) && /规则|调度|决策|自动/.test(q)) {
       return `当前有 ${alarmCount} 条活动报警，${errors} 个对象上报错误或命令失败。`
-        + (rules ? `决策表共 ${rules} 张，其中 ${activeRules} 张已启用；未启用的只保留草稿。` : "当前还没有决策表。")
+        + (rules ? `自动规则共 ${rules} 条，其中 ${activeRules} 条已启用；未启用的只保留草稿。` : "当前还没有自动规则。")
     }
 
     if (/报警|告警|异常|故障/.test(q)) {
@@ -93,8 +93,8 @@ export default function AssistantPanel({ points, observations, alarmCount, error
 
     if (/规则|调度|决策|自动/.test(q)) {
       return rules
-        ? `共有 ${rules} 张决策表，其中 ${activeRules} 张已启用。未启用的表只保留草稿，不参与现场调度。`
-        : "当前没有决策表。需要自动控制时，先在“决策表”页建立并发布规则。"
+        ? `共有 ${rules} 条自动规则，其中 ${activeRules} 条已启用。未启用的规则只保留草稿，不参与现场调度。`
+        : "当前没有自动规则。如需启用自动控制，请联系交付人员。"
     }
 
     if (/光伏|发电|储能|电池|电量|kwh|度电/.test(q)) {
