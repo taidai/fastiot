@@ -148,6 +148,41 @@
     border-bottom:1px dashed #eef2f5;cursor:pointer}
   .bind-opt input{accent-color:var(--accent)}
   .cfg-list .chips{margin:6px 0 2px}
+  .chip.ok{border-color:#cfe6dc;color:var(--mint);background:#eef8f3}
+  .chip.warn{border-color:#efdcc8;color:var(--amber);background:#fdf5ec}
+  .tpl-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:8px 0}
+  .tpl-card{display:flex;flex-direction:column;gap:4px;border:1px solid var(--line);border-radius:10px;
+    background:#fff;padding:11px 12px;text-align:left}
+  .tpl-card:hover{border-color:#bcd7d5}
+  .tpl-card.active{border-color:var(--accent);background:#f1faf9}
+  .tpl-card b{font-size:13px}
+  .tpl-card span{font-size:11.5px;color:var(--muted)}
+  .tpl-card small{font-size:10.5px;color:var(--faint)}
+  .outline{border:1px solid var(--line);border-radius:10px;background:#fff;padding:4px 10px}
+  .outline .row{padding:4px 0;font-size:12.5px}
+  .check-strip{display:flex;gap:6px;flex-wrap:wrap}
+  .ledger-table td{font-size:12px}
+  .ledger-table .row-actions{white-space:nowrap;text-align:right}
+  .row-actions .ghost{padding:2px 7px;font-size:11px;margin-left:4px}
+  .acc-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+  .acc-card{border:1px solid var(--line);border-radius:10px;background:#fff;padding:11px 12px}
+  .acc-card.wide{grid-column:1 / -1}
+  .acc-card h5{margin:0 0 8px;font-size:11px;color:var(--faint);letter-spacing:.06em;font-weight:600}
+  .acc-card h5 .src{font-weight:400;letter-spacing:0}
+  .pick{display:flex;flex-direction:column;gap:3px;width:100%;border:1px solid var(--line);border-radius:9px;
+    background:#fff;padding:8px 10px;text-align:left;margin-bottom:6px}
+  .pick.active{border-color:var(--accent);background:#f1faf9}
+  .pick b{font-size:12.5px}
+  .pick small{font-size:10.5px;color:var(--faint)}
+  .ok-text{color:var(--mint)}
+  .warn-text{color:var(--amber)}
+  .rules-table tr.hit td{background:#f6fbf7}
+  .sim{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap}
+  .sim label{display:flex;flex-direction:column;gap:4px;font-size:11.5px;color:var(--faint)}
+  .sim label b{color:var(--ink);font-size:14px}
+  .sim input[type=range]{width:180px;accent-color:var(--accent)}
+  .sim-result{display:flex;flex-direction:column;gap:4px;border:1px solid #cfe6dc;background:#eef8f3;
+    border-radius:10px;padding:10px 12px;margin-top:10px;font-size:12.5px}
   .canvas-main{display:flex;flex-direction:column;gap:12px;min-width:0}
   .canvas-side{display:flex;flex-direction:column;gap:12px;min-width:0}
   .stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
@@ -446,6 +481,8 @@ const state = {
   project:'教学泵房', workbench:'device', page:'ledger', ems:true,
   selD:'site-pump', newFor:null, step:null, published:false, pendingKind:null,
   screens:{}, cfgDraft:null, bindBlock:null,
+  siteTpl:'pump', scope:'sub', sim:{ p:0.62, level:46 }, simHit:null,
+  devProfile:{}, devChannel:{}, devMapped:{},
   acked:{}, alarmSel:'a1', custPoint:null, custFrom:'overview', custDevice:'p1',
   custLayer:'site-pump', custTreeOpen:true, alarmOpen:false, opDevice:null,
   custSearch:'', custTab:'live', custHistory:null,
@@ -1414,20 +1451,50 @@ function toolLine(label, keys){
   }).join(' · ')
   return `<div class="tool-links">${label}：${buttons}</div>`
 }
+const SITE_TEMPLATES = [
+  {key:'pump', name:'供水泵房', desc:'水箱、两台离心泵、出水压力', meta:'1 区域 · 1 单元 · 3 设备', deps:'底座'},
+  {key:'energy', name:'储能站', desc:'光伏区、储能区、并网点', meta:'2 区域 · 2 单元 · 6 设备', deps:'ems@1.0.0'},
+  {key:'blank', name:'空白项目', desc:'从零开始搭', meta:'0 对象', deps:'底座'},
+]
+function templateOutline(kind){
+  if (kind === 'blank') return []
+  const src = kind === 'pump' ? LEDGER_PUMP : LEDGER_ENERGY
+  const lines = []
+  ;(function walk(n, depth){
+    if (n.kind !== '现场') lines.push({ name:n.name, kind:n.kind, depth:depth - 1 })
+    ;(n.children || []).forEach(child => walk(child, depth + 1))
+  })(src, 0)
+  return lines
+}
 function siteStep(){
+  const tpl = SITE_TEMPLATES.find(t => t.key === state.siteTpl) || SITE_TEMPLATES[0]
+  const outline = templateOutline(tpl.key)
   return `<div class="step-head"><b>第 1 步 · 建现场</b><span>先确定这是哪个现场，后面所有对象都挂在它下面。</span></div>
     <div class="card">
       <div class="row"><span>项目</span><span>${esc(state.project)}</span></div>
       <div class="row"><span>现场</span><span>${esc(state.project)}</span></div>
-      <p class="note">从空白开始，或用一个模板把骨架先搭出来；模板只带结构，不带地址与凭据。</p>
-      <div class="actions">
-        <button class="ghost" onclick="toast('原型：保持当前空白项目')">空白项目</button>
-        <button class="ghost" onclick="createFromTemplate('pump')">泵房模板</button>
-        <button class="ghost" onclick="createFromTemplate('energy')">储能站模板</button>
-      </div>
+      <h5 style="margin:14px 0 8px">从哪种骨架开始</h5>
+      <div class="tpl-grid">${SITE_TEMPLATES.map(t => `<button class="tpl-card ${state.siteTpl === t.key ? 'active' : ''}"
+        onclick="state.siteTpl='${t.key}';render()">
+        <b>${t.name}</b><span>${t.desc}</span><small>${t.meta} · ${t.deps}</small></button>`).join('')}</div>
+      ${outline.length ? `<h5 style="margin:14px 0 6px">骨架预览</h5>
+        <div class="outline">${outline.map(line => `<div class="row" style="padding-left:${line.depth * 16}px">
+          <span><span class="node-kind ${kindClass(line.kind)}">${line.kind}</span>${esc(line.name)}</span></div>`).join('')}</div>
+        <p class="note">模板只带结构与默认策略，不带地址、凭据与运行数据。</p>` : '<p class="note">空白项目从第 2 步开始，一个对象一个对象地搭。</p>'}
       ${toolLine('模板从哪来', ['templates'])}
-      <div class="actions"><button class="primary" onclick="setStep('tree')">下一步：搭台账 →</button></div>
+      <div class="actions">
+        ${tpl.key === 'blank'
+          ? `<button class="primary" onclick="createBlankSite()">建空白项目 →</button>`
+          : `<button class="primary" onclick="createFromTemplate('${tpl.key}')">按「${tpl.name}」建出来 →</button>`}
+        <button class="ghost" onclick="toast('原型：导入项目包，依赖与版本随包校验')">导入项目包</button>
+      </div>
     </div>`
+}
+function createBlankSite(){
+  const name = '未命名项目'
+  ledgers[name] = { id:'site-new', name, kind:'现场', children:[] }
+  state.project = name; state.page = 'ledger'; state.step = 'tree'; state.published = false; render()
+  toast('已创建空白项目；从第 2 步开始')
 }
 function createFromTemplate(kind){
   const name = kind === 'pump' ? '泵房示例' : '储能示例'
@@ -1444,25 +1511,123 @@ function createFromTemplate(kind){
   state.project = name; state.step = 'tree'; state.published = false
   render(); toast('已按模板建好骨架；接下来接设备')
 }
+function ledgerRows(root){
+  const rows = []
+  ;(function walk(node, depth){
+    rows.push({ node, depth })
+    ;(node.children || []).forEach(child => walk(child, depth + 1))
+  })(root, 0)
+  return rows
+}
+function findParent(node, id){
+  for (const child of node.children || []) {
+    if (child.id === id) return node
+    const hit = findParent(child, id)
+    if (hit) return hit
+  }
+  return null
+}
+function duplicateNode(id){
+  const root = ledger()
+  const node = findNode(root, id)
+  const parent = findParent(root, id)
+  if (!node || !parent) { toast('现场根节点不能复制'); return }
+  const copy = JSON.parse(JSON.stringify(node))
+  ;(function rewalk(n){ n.id = 'n' + (nextNodeId++); (n.children || []).forEach(rewalk) })(copy)
+  copy.name = node.name + ' 副本'
+  parent.children.push(copy)
+  state.selD = copy.id; render(); toast('已复制子树')
+}
+function nodeStrategyLabel(node){
+  if (node.kind === '设备') return '继承所属层'
+  if (node.kind === '业务单元') return '功率分配 · 本单元'
+  if (node.kind === '区域') return '需量控制 · 含下级'
+  return '—'
+}
 function treeStep(){
   const root = ledger()
   const { total, unbound } = countDevices(root)
-  const areas = (root.children || []).filter(child => child.kind === '区域').length
-  const units = (root.children || []).filter(child => child.kind === '业务单元').length
+  const rows = ledgerRows(root)
+  const noScreen = rows.filter(r => { const s = screenFor(r.node); return !s.own && !s.from }).length
   return `<div class="step-head"><b>第 2 步 · 搭台账</b><span>按区域、单元、设备把现场搭出来；设备可以先占位。</span></div>
     <div class="card">
-      <div class="row"><span>已建对象</span><span class="src">区域 ${areas} · 单元 ${units} · 设备 ${total}</span></div>
-      <div class="row"><span>未绑定设备</span><span class="src">${unbound} 台</span></div>
-      <div class="actions">
+      <div class="panel-head"><h3>${esc(root.name)}</h3>
+        <span class="tag">区域 ${rows.filter(r => r.node.kind === '区域').length} · 单元 ${rows.filter(r => r.node.kind === '业务单元').length} · 设备 ${total}</span></div>
+      <div class="check-strip">
+        <button class="chip ${unbound ? 'warn' : 'ok'}" onclick="setStep('access')">${unbound ? `${unbound} 台设备未绑定` : '设备全部已绑定'}</button>
+        <button class="chip ${noScreen ? 'warn' : 'ok'}" onclick="setStep('ui')">${noScreen ? `${noScreen} 层还没配界面` : '每一层都已配界面'}</button>
+      </div>
+      <div class="actions" style="margin-top:10px">
         <button class="ghost" onclick="startNewWith('区域')">＋ 区域</button>
         <button class="ghost" onclick="startNewWith('业务单元')">＋ 业务单元</button>
         <button class="ghost" onclick="startNewWith('设备')">＋ 设备</button>
-        <button class="ghost" onclick="toast('原型：从泵房/储能站点模板一键建骨架')">从模板建骨架</button>
       </div>
+      <h5 style="margin:14px 0 6px">台账</h5>
+      <table class="mini-table ledger-table"><thead><tr>
+        <th>对象</th><th>子对象</th><th>设备</th><th>未绑定</th><th>策略</th><th>总览</th><th></th>
+      </tr></thead><tbody>
+        ${rows.map(({ node, depth }) => {
+          const c = countDevices(node)
+          const s = screenFor(node)
+          const screenText = s.own ? '本层已配' : s.from ? `继承 ${s.from.name}` : '默认块'
+          const bound = c.total - c.unbound
+          return `<tr>
+            <td><span style="padding-left:${depth * 14}px"><span class="node-kind ${kindClass(node.kind)}">${node.kind}</span>${esc(node.name)}</span></td>
+            <td>${(node.children || []).length || '—'}</td>
+            <td>${node.kind === '设备' ? (node.status === '未绑定' ? '—' : '1') : c.total}</td>
+            <td>${c.unbound ? `<span class="chip warn">${c.unbound}</span>` : '0'}</td>
+            <td class="src">${nodeStrategyLabel(node)}</td>
+            <td class="src">${screenText}</td>
+            <td class="row-actions">
+              <button class="ghost" onclick="selectNode('${node.id}')">选中</button>
+              ${allowedKinds(node).length ? `<button class="ghost" onclick="state.selD='${node.id}';startNew()">＋</button>` : ''}
+              ${node.id !== root.id ? `<button class="ghost" onclick="duplicateNode('${node.id}')">复制</button>` : ''}
+            </td></tr>`
+        }).join('')}
+      </tbody></table>
+      <p class="note">设备先建成占位；绑定通道与点位之前，它不产生数据，也不出现在客户画面里。</p>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <div class="panel-head"><h3>模板库</h3><span class="tag">点表 · 策略 · 画面</span></div>
+      <div class="tpl-grid">${SITE_TEMPLATES.filter(t => t.key !== 'blank').map(t => `<button class="tpl-card"
+        onclick="createFromTemplate('${t.key}')"><b>${t.name}</b><span>${t.desc}</span><small>${t.meta} · ${t.deps}</small></button>`).join('')}</div>
+      <p class="note">模板只带结构与默认策略，不带地址与凭据；建出来后仍要在本现场重新绑定。</p>
       ${toolLine('复用已有定义', ['templates'])}
-      <p class="note">在左侧树里选中节点，可以继续加子对象；设备先建成占位，绑定后才进入运行。</p>
       <div class="actions"><button class="primary" onclick="setStep('access')">下一步：接设备 →</button></div>
     </div>`
+}
+const PROFILES = [
+  {key:'pump13', name:'离心泵 v1.3', points:12, commands:2, note:'启停 + 目标压力'},
+  {key:'pump14', name:'离心泵 v1.4（测试）', points:14, commands:2, note:'新增振动与温度'},
+]
+const CHANNELS = [
+  {key:'ch1', name:'Modbus TCP · 192.168.1.10:502', online:true, last:'2 秒前', note:'1 号端口'},
+  {key:'ch2', name:'Modbus RTU · COM3 9600', online:false, last:'3 小时前', note:'备用'},
+]
+const POINT_MAP = [
+  {name:'出口压力', addr:'40101', unit:'MPa', scale:'×0.01', dir:'只读'},
+  {name:'目标压力', addr:'40102', unit:'MPa', scale:'×0.01', dir:'读写'},
+  {name:'运行状态', addr:'40103', unit:'—', scale:'位 0', dir:'只读'},
+  {name:'电流', addr:'40104', unit:'A', scale:'×0.1', dir:'只读'},
+  {name:'故障', addr:'40105', unit:'—', scale:'位 1', dir:'只读'},
+  {name:'水箱液位', addr:'40106', unit:'%', scale:'×0.1', dir:'只读'},
+]
+function devProfileOf(node){ return state.devProfile[node.id] || 'pump13' }
+function devChannelOf(node){ return state.devChannel[node.id] || (node.status === '未绑定' ? '' : 'ch1') }
+function devMapped(node){ return node.status !== '未绑定' || !!state.devMapped[node.id] }
+function autoMatchPoints(node){
+  state.devMapped[node.id] = true
+  if (!state.devChannel[node.id]) state.devChannel[node.id] = 'ch1'
+  render(); toast('已按型号推荐匹配 6 个点位；核对后运行验证')
+}
+function runVerify(node){
+  if (!devChannelOf(node)) { toast('先选通道'); return }
+  if (!devMapped(node)) { toast('先把点位映射补齐'); return }
+  const prefix = (node.meta || '').split(' · ')[0] || '设备'
+  const station = { p2:2, pv2:22, pcs2:12, bms2:13 }[node.id] || 1
+  node.status = '在线'
+  node.meta = `${prefix} · Modbus 站号 ${station}`
+  render(); toast('验证通过：连通、读值、写回读；设备已接入')
 }
 function accessStep(){
   const root = ledger()
@@ -1471,10 +1636,10 @@ function accessStep(){
   const body = total === 0
     ? `<div class="panel-head"><h3>还没有设备</h3></div><p class="note">先回第 2 步搭台账，把设备建成占位。</p>
        <button class="ghost" onclick="setStep('tree')">回第 2 步 →</button>`
-    : node.kind === '设备' ? slimDevice(node)
-    : node.kind === '业务单元' ? slimUnit(node)
-    : unboundList(root)
-  return `<div class="step-head"><b>第 3 步 · 接设备</b><span>把设备接到通道、绑定点位；已绑定 ${total - unbound} / ${total}。</span></div>
+    : node.kind === '设备' ? deviceAccess(node)
+    : node.kind === '业务单元' ? unitAccess(node)
+    : scopeAccess(node)
+  return `<div class="step-head"><b>第 3 步 · 接设备</b><span>型号 → 通道 → 点位 → 验证；已绑定 ${total - unbound} / ${total}。</span></div>
     <div class="card">${body}
       ${toolLine('数据从哪来', ['channels','points','profiles'])}
       ${toolLine('接不进来时', ['health'])}
@@ -1482,67 +1647,153 @@ function accessStep(){
       <div class="actions"><button class="primary" onclick="setStep('strategy')">下一步：配策略 →</button></div>
     </div>`
 }
-function slimDevice(node){
+function deviceAccess(node){
   const bound = node.status !== '未绑定'
+  const profile = PROFILES.find(p => p.key === devProfileOf(node)) || PROFILES[0]
+  const channel = CHANNELS.find(c => c.key === devChannelOf(node))
+  const mapped = devMapped(node)
   return `<div class="panel-head"><h3>${esc(node.name)}</h3><span class="tag">设备</span>
-      <span class="tag ${bound ? 'ok' : 'warn'}">${bound ? '已绑定' : '未绑定'}</span></div>
-    ${pipeline(node)}
-    <div class="row"><span>来源模板</span><span>${bound ? '离心泵 v1.3' : '未选择'}</span></div>
-    <div class="row"><span>通道与站号</span><span>${esc(node.meta || '')}</span></div>
-    <div class="row"><span>点位</span><span>${bound ? '12 个 · 均有最新值' : '0 个'}</span></div>
-    <div class="row"><span>数据</span><span class="src">${bound ? '采集 12 · 计算 2' : '无'}</span></div>
-    <button class="tag" onclick="toast('原型：先选通道，再选点位，最后确认覆盖项')">${bound ? '更换绑定' : '绑定设备与点位'} →</button>`
+      <span class="tag ${bound ? 'ok' : 'warn'}">${bound ? '已接入' : '未绑定'}</span></div>
+    <div class="pipeline">
+      <span class="ok">选型号</span><i>→</i>
+      <span class="${channel ? 'ok' : 'cur'}">选通道</span><i>→</i>
+      <span class="${mapped ? 'ok' : 'cur'}">核对点位 ${mapped ? '6/6' : '0/6'}</span><i>→</i>
+      <span class="${bound ? 'ok' : ''}">验证</span>
+    </div>
+    <div class="acc-grid">
+      <div class="acc-card"><h5>1 · 选型号</h5>
+        ${PROFILES.map(p => `<button class="pick ${devProfileOf(node) === p.key ? 'active' : ''}" onclick="setProfile('${node.id}','${p.key}')">
+          <b>${p.name}</b><small>${p.points} 点位 · ${p.commands} 命令 · ${p.note}</small></button>`).join('')}
+      </div>
+      <div class="acc-card"><h5>2 · 选通道</h5>
+        ${CHANNELS.map(c => `<button class="pick ${devChannelOf(node) === c.key ? 'active' : ''}" onclick="setChannel('${node.id}','${c.key}')">
+          <b>${c.name}</b><small>${c.note} · <span class="${c.online ? 'ok-text' : 'warn-text'}">${c.online ? '在线' : '离线'}</span> · ${c.last}</small></button>`).join('')}
+        <p class="note">一个端口一行；线路测试与扫描只读，不写设备。</p>
+      </div>
+      <div class="acc-card wide"><h5>3 · 核对点位 <span class="src">${mapped ? '6/6 已映射' : '0/6 已映射'}</span></h5>
+        <table class="mini-table"><thead><tr><th>模板点位</th><th>地址</th><th>单位</th><th>换算</th><th>读写</th><th>状态</th></tr></thead>
+          <tbody>${POINT_MAP.map(p => `<tr><td>${p.name}</td><td>${mapped ? p.addr : '—'}</td><td>${p.unit}</td><td>${p.scale}</td><td>${p.dir}</td>
+            <td>${mapped ? '<span class="chip ok">已映射</span>' : '<span class="chip warn">待匹配</span>'}</td></tr>`).join('')}</tbody></table>
+        <div class="actions"><button class="ghost" onclick="autoMatchPoints(findNode(ledger(),'${node.id}'))">按型号自动匹配</button></div>
+      </div>
+      <div class="acc-card wide"><h5>4 · 验证</h5>
+        <div class="row"><span>连通</span><span>${channel && channel.online ? '<span class="chip ok">通过 · 12 ms</span>' : '<span class="chip warn">未运行</span>'}</span></div>
+        <div class="row"><span>读值</span><span>${mapped && channel && channel.online ? '<span class="chip ok">通过 · 6/6</span>' : '<span class="chip">未运行</span>'}</span></div>
+        <div class="row"><span>写回读</span><span>${bound ? '<span class="chip ok">通过 · 0.45 → 0.45</span>' : '<span class="chip">未运行</span>'}</span></div>
+        <div class="actions"><button class="primary" onclick="runVerify(findNode(ledger(),'${node.id}'))">${bound ? '重新验证' : '运行验证并接入'}</button></div>
+        <p class="note">验证结论只说明这台设备接得通；项目能否交付还要看策略、界面与包。</p>
+      </div>
+    </div>`
 }
-function pipeline(node){
-  const bound = node.status !== '未绑定'
-  return `<div class="pipeline">
-    <span class="${bound ? 'ok' : ''}">选型号</span><i>→</i>
-    <span class="${bound ? 'ok' : ''}">选通道</span><i>→</i>
-    <span class="${bound ? 'ok' : 'cur'}">核对点位 ${bound ? '12/12' : '0/12'}</span><i>→</i>
-    <span class="${bound ? 'ok' : ''}">验证</span>
-  </div>`
-}
-function slimUnit(node){
+function setProfile(id, key){ state.devProfile[id] = key; render() }
+function setChannel(id, key){ state.devChannel[id] = key; render() }
+function unitAccess(node){
   const members = node.members || []
   return `<div class="panel-head"><h3>${esc(node.name)}</h3><span class="tag">业务单元</span></div>
-    ${members.length ? members.map(m => `<div class="row"><span>${esc(m.role)}</span>
-      <span class="chip ${m.bound ? 'open' : ''}">${esc(m.bound || '未绑定')}</span></div>`).join('')
-      : '<div class="row"><span class="unbound">还没有成员角色</span></div>'}
-    <button class="tag" onclick="toast('原型：从台账里选择成员，必需角色未绑定则能力不可用')">添加成员 →</button>`
+    <table class="mini-table"><thead><tr><th>角色</th><th>绑定</th><th>值</th><th>状态</th></tr></thead>
+      <tbody>${members.map(m => `<tr><td>${esc(m.role)}</td><td>${esc(m.bound || '未绑定')}</td>
+        <td>${esc(boundValue(m.bound))}</td>
+        <td>${m.bound ? '<span class="chip ok">在线</span>' : '<span class="chip warn">未绑定</span>'}</td></tr>`).join('')}</tbody></table>
+    <p class="note">必需角色没有绑定，这个单元的能力不可用；可选角色缺失只标缺口。</p>
+    <div class="actions"><button class="ghost" onclick="toast('原型：从台账里选择成员，必需角色未绑定则能力不可用')">添加成员</button></div>`
 }
-function unboundList(root){
-  const list = []
-  ;(function walk(node){
-    if (node.kind === '设备' && node.status === '未绑定') list.push(node)
-    ;(node.children || []).forEach(walk)
-  })(root)
-  if (!list.length) {
-    return `<div class="panel-head"><h3>全部已绑定</h3><span class="tag ok">0 台待处理</span></div>
-      <p class="note">设备都已接入；可以进入配策略，或从左侧树里选一台设备调整绑定。</p>`
-  }
-  return `<div class="panel-head"><h3>待接设备</h3><span class="tag warn">${list.length} 台</span></div>
-    ${list.map(node => `<div class="row"><span>${esc(node.name)}</span>
-      <button class="tag" onclick="selectNode('${node.id}')">打开绑定 →</button></div>`).join('')}`
+function scopeAccess(node){
+  const devices = []
+  ;(function walk(n){ if (n.kind === '设备') devices.push(n); (n.children || []).forEach(walk) })(node)
+  if (!devices.length) return `<div class="panel-head"><h3>这一层还没有设备</h3></div>
+    <p class="note">从左侧树里选一台设备逐台接入，或回第 2 步先建占位。</p>`
+  return `<div class="panel-head"><h3>${esc(node.name)} 的设备</h3>
+      <span class="tag">${devices.filter(d => d.status !== '未绑定').length} / ${devices.length} 已接入</span></div>
+    <table class="mini-table"><thead><tr><th>设备</th><th>状态</th><th>型号</th><th>通道</th><th>点位</th><th></th></tr></thead>
+      <tbody>${devices.map(d => {
+        const bound = d.status !== '未绑定'
+        return `<tr><td>${esc(d.name)}</td>
+          <td>${bound ? '<span class="chip ok">已接入</span>' : '<span class="chip warn">未绑定</span>'}</td>
+          <td>${bound ? '离心泵 v1.3' : '未选择'}</td>
+          <td>${bound ? 'Modbus TCP · 站号 1' : '未选择'}</td>
+          <td>${bound ? '6 / 6' : '0 / 6'}</td>
+          <td><button class="ghost" onclick="selectNode('${d.id}')">打开绑定 →</button></td></tr>`
+      }).join('')}</tbody></table>`
 }
+const RULES = [
+  { when:'液位 < 10%', then:'停止全部泵并报警' },
+  { when:'出口压力 < 0.35 MPa', then:'启动 1号泵' },
+  { when:'出口压力 > 0.55 MPa', then:'降频到 35 Hz' },
+]
+function simIndex(){
+  if (state.sim.level < 10) return 0
+  if (state.sim.p < 0.35) return 1
+  if (state.sim.p > 0.55) return 2
+  return -1
+}
+function runSim(){
+  state.simHit = simIndex()
+  render()
+  toast(state.simHit < 0 ? '没有规则命中：条件都不满足，本次不动作' : `命中第 ${state.simHit + 1} 行`)
+}
+function setSim(key, value){ state.sim[key] = value; state.simHit = null; render() }
 function strategyStep(){
   const root = ledger()
   const node = findNode(root, state.selD) || root
-  let body
-  if (node.kind === '设备' || node.kind === '业务单元' || node.kind === '区域') {
-    body = `<div class="panel-head"><h3>${esc(node.name)}</h3><span class="tag">${node.kind}</span></div>${strategySection(node)}`
-  } else {
-    const units = []
-    ;(function walk(n){ if (n.kind === '业务单元') units.push(n); (n.children || []).forEach(walk) })(root)
-    body = `<div class="panel-head"><h3>全站策略</h3></div>
-      ${units.map(unit => `<div class="row"><span>${esc(unit.name)}</span><span class="src">功率分配 · 本单元</span></div>`).join('')}
-      <p class="note">从左侧树里选一个设备、单元或区域，策略会带上它的作用范围。</p>`
-  }
-  return `<div class="step-head"><b>第 4 步 · 配策略</b><span>决定什么条件做什么；作用范围写在策略上。</span></div>
+  const body = node.kind === '设备' ? deviceStrategies(node) : strategyTable(node)
+  return `<div class="step-head"><b>第 4 步 · 配策略</b><span>有序、首命中、可模拟；作用范围必须写清楚。</span></div>
     <div class="card">${body}
       ${toolLine('策略的输入从哪来', ['aggregate','calculations','virtualInputs'])}
       ${toolLine('什么算异常', ['alarmTypes'])}
       <div class="actions"><button class="primary" onclick="setStep('ui')">下一步：配界面 →</button></div>
     </div>`
+}
+function deviceStrategies(node){
+  return `<div class="panel-head"><h3>${esc(node.name)}</h3><span class="tag">设备</span></div>
+    <p class="note">设备上的策略来自所属单元与区域；设备本身不单独下发调度。</p>
+    <table class="mini-table"><thead><tr><th>策略</th><th>来自</th><th>范围</th></tr></thead>
+      <tbody>
+        <tr><td>功率分配 · 本单元</td><td>供水单元</td><td>本单元 → 本设备</td></tr>
+        <tr><td>需量控制</td><td>泵房（区域）</td><td>含下级 → 本设备</td></tr>
+      </tbody></table>
+    <div class="actions"><button class="ghost" onclick="toast('原型：设备级联锁只允许本设备动作，不允许跨设备分配')">＋ 设备级联锁</button></div>`
+}
+function strategyTable(node){
+  const hit = state.simHit
+  const scopeText = state.scope === 'sub'
+    ? `本对象与下级（共 ${countDevices(node).total} 台设备）`
+    : '仅本对象'
+  return `<div class="panel-head"><h3>${esc(node.name)}</h3><span class="tag">${node.kind}</span>
+      <span class="tag">${nodeStrategyLabel(node)}</span></div>
+    <div class="acc-grid">
+      <div class="acc-card"><h5>作用范围</h5>
+        <div class="chips">
+          <button class="${state.scope === 'self' ? 'active' : ''}" onclick="state.scope='self';render()">本对象</button>
+          <button class="${state.scope === 'sub' ? 'active' : ''}" onclick="state.scope='sub';render()">含下级</button>
+        </div>
+        <p class="note">${scopeText}；下级能看到继承来源，未声明的范围不生效。</p>
+      </div>
+      <div class="acc-card"><h5>状态机 · ${state.project === '储能站 A' ? '储能单元' : '离心泵'}</h5>
+        <div class="pipeline">
+          <span class="ok">停止</span><i>→</i><span class="ok">启动中</span><i>→</i>
+          <span class="cur">运行</span><i>→</i><span>停止中</span>
+        </div>
+        <p class="note">事件：启动 / 停止 / 故障 / 复位；守卫不满足时保持原状态，并记录原因。</p>
+      </div>
+    </div>
+    <h5 style="margin:14px 0 6px">决策表 · 有序，首命中</h5>
+    <table class="mini-table rules-table"><thead><tr><th>#</th><th>条件</th><th>动作</th><th>命中</th></tr></thead>
+      <tbody>${RULES.map((rule, i) => `<tr class="${hit === i ? 'hit' : ''}">
+        <td>${i + 1}</td><td>${rule.when}</td><td>${rule.then}</td>
+        <td>${hit === i ? '<span class="chip ok">命中</span>' : hit === null ? '' : '<span class="src">跳过</span>'}</td></tr>`).join('')}</tbody></table>
+    <h5 style="margin:14px 0 6px">模拟</h5>
+    <div class="sim">
+      <label>出口压力 <b>${state.sim.p.toFixed(2)}</b> MPa
+        <input type="range" min="0.2" max="0.7" step="0.01" value="${state.sim.p}" oninput="setSim('p', +this.value)"></label>
+      <label>液位 <b>${state.sim.level}</b> %
+        <input type="range" min="0" max="100" step="1" value="${state.sim.level}" oninput="setSim('level', +this.value)"></label>
+      <button class="primary" onclick="runSim()">运行模拟</button>
+    </div>
+    ${hit === null ? '' : hit < 0
+      ? '<p class="note">没有规则命中：本次不动作，也不下发任何命令。</p>'
+      : `<div class="sim-result"><b>命中第 ${hit + 1} 行：${RULES[hit].then}</b>
+          <span class="src">下发 ${RULES[hit].then.includes('降频') ? '频率 45 → 35 Hz' : '动作请求'} · 回读确认后记为完成；未回读显示结果未知。</span></div>`}
+    <div class="actions"><button class="ghost" onclick="toast('原型：新增一行规则，排在选中行之后')">＋ 添加规则</button></div>`
 }
 function uiStep(){
   const root = ledger()
@@ -1760,24 +2011,43 @@ function resetScreen(id){
   render(); toast('已恢复默认块（尚未保存）')
 }
 function deliveryStep(){
-  const total = countDevices(ledger()).total
-  const screens = Object.keys(state.screens).length
+  const root = ledger()
+  const rows = ledgerRows(root)
+  const total = countDevices(root).total
+  const bound = total - countDevices(root).unbound
+  const screensOwn = rows.filter(r => state.screens[r.node.id]).length
+  const points = rows.reduce((sum, r) => sum + (r.node.kind === '设备' && r.node.status !== '未绑定' ? 12 : 0), 0)
   const checks = [
     ['通道','2 条在线','ok'],
-    ['点位',`${total} 台已绑定`,'ok'],
-    ['策略','1 条已发布','ok'],
-    ['界面',`${screens} 层已配`,screens ? 'ok' : 'warn'],
+    ['点位',`${bound} 台已绑定 · ${points} 个点位`,'ok'],
+    ['策略',`${RULES.length} 条规则 · 已发布`,'ok'],
+    ['界面',`${screensOwn} 层本层已配 · 其余继承或默认`,screensOwn ? 'ok' : 'warn'],
     ['依赖',state.ems ? 'ems@1.0.0' : '无行业包','ok'],
   ]
   return `<div class="step-head"><b>第 6 步 · 交付</b><span>把这份工程变成可复现的包，交给下一位同事或客户。</span></div>
     <div class="card">
       <div class="row"><span>当前版本</span><span>${state.published ? 'v2026.11.21-1' : '未发布'}</span></div>
-      <div class="row"><span>依赖</span><span class="src">${state.ems ? 'ems@1.0.0' : '无行业包依赖'}</span></div>
+      <div class="row"><span>依赖</span><span class="src">${state.ems ? 'ems@1.0.0（不匹配拒绝启动）' : '无行业包依赖'}</span></div>
       <div class="row"><span>部署目标</span><span>${esc(state.project)}</span></div>
-      <div class="group" style="margin-top:14px"><h5>交付前检查</h5>
-        ${checks.map(c => `<div class="row"><span>${c[0]}</span>
-          <span class="chip ${c[2]}">${c[1]}</span></div>`).join('')}
-      </div>
+      <h5 style="margin:14px 0 6px">项目包里有什么</h5>
+      <table class="mini-table"><tbody>
+        <tr><td>对象</td><td class="src">${rows.length} 个节点 · ${rows.filter(r => r.node.kind === '设备').length} 台设备</td></tr>
+        <tr><td>点位</td><td class="src">${points} 个采集点 · 画面绑定已 token 化</td></tr>
+        <tr><td>画面</td><td class="src">${rows.filter(r => state.screens[r.node.id]).length} 份本层配置 · 未配置的层用默认块</td></tr>
+        <tr><td>策略</td><td class="src">${RULES.length} 条规则 · 1 个状态机</td></tr>
+        <tr><td>现场绑定</td><td class="src">已剥离：地址、凭据、控制启动不进包</td></tr>
+      </tbody></table>
+      <h5 style="margin:14px 0 6px">交付前检查</h5>
+      ${checks.map(c => `<div class="row"><span>${c[0]}</span>
+        <span class="chip ${c[2]}">${c[1]}</span></div>`).join('')}
+      <h5 style="margin:14px 0 6px">部署记录</h5>
+      <table class="mini-table"><thead><tr><th>目标</th><th>版本</th><th>时间</th><th>人</th><th>状态</th></tr></thead>
+        <tbody>
+          <tr><td>${esc(state.project)}（本站）</td><td>v2026.11.19-1</td><td>11-19</td><td>张工</td><td><span class="chip ok">运行中</span></td></tr>
+          <tr><td>客户现场</td><td>—</td><td>—</td><td>—</td><td><span class="chip">待部署</span></td></tr>
+        </tbody></table>
+      ${state.published ? `<h5 style="margin:14px 0 6px">版本差异</h5>
+        <div class="row"><span>v2026.11.17-1 → 当前</span><span class="src">+1 设备 · +1 画面 · 规则 2 → 3</span></div>` : ''}
       ${toolLine('历史留多久', ['retention'])}
       <div class="actions">
         <button class="primary" onclick="publishVersion()">${state.published ? '重新发布' : '发布版本'}</button>
