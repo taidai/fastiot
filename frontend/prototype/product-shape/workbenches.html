@@ -177,6 +177,14 @@
   .ok-text{color:var(--mint)}
   .warn-text{color:var(--amber)}
   .rules-table tr.hit td{background:#f6fbf7}
+  .rules-table .row-actions{white-space:nowrap}
+  .rule-form{border:1px solid #cfe0ea;background:#f1f8fb;border-radius:10px;padding:10px 12px;margin:8px 0}
+  .rule-form h5{margin:0 0 8px;font-size:11px;color:var(--faint);letter-spacing:.06em;font-weight:600}
+  .rule-fields{display:flex;gap:16px;flex-wrap:wrap}
+  .rule-fields label{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+  .rule-fields select,.rule-fields input{border:1px solid var(--line);border-radius:8px;padding:5px 8px;
+    font:inherit;font-size:12px;background:#fff}
+  .rule-fields input[type=number]{width:88px}
   .sim{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap}
   .sim label{display:flex;flex-direction:column;gap:4px;font-size:11.5px;color:var(--faint)}
   .sim label b{color:var(--ink);font-size:14px}
@@ -512,7 +520,7 @@ const state = {
   project:'教学泵房', workbench:'device', page:'ledger', ems:true,
   selD:'site-pump', newFor:null, step:null, published:false, pendingKind:null,
   screens:{}, cfgDraft:null, bindBlock:null,
-  siteTpl:'pump', scope:'sub', sim:{ p:0.62, level:46 }, simHit:null,
+  siteTpl:'pump', scope:'sub', sim:{ p:0.62, level:46 }, simRan:false, rules:{}, editRule:null,
   devProfile:{}, devChannel:{}, devMapped:{},
   treeQuery:'', batchMode:false, batchSel:{}, batchResult:{}, batchChannel:'ch1',
   csvText:'设备,型号,通道,站号\nPCS7,储能变流器,ch1,17\nBMS7,电池管理,ch1,47\nPCS8,储能变流器,ch1,17',
@@ -535,7 +543,7 @@ function closeMenu(){ $('projectMenu').classList.remove('open') }
 function setProject(name){
   state.project = name; state.page = 'ledger'; state.step = null; state.published = false
   state.treeQuery = ''; state.batchSel = {}; state.batchResult = {}; state.batchMode = false
-  state.selD = ''; state.csvPreview = null
+  state.selD = ''; state.csvPreview = null; state.rules = {}; state.editRule = null; state.simRan = false
   closeMenu(); render()
   toast('已切换项目：' + name)
 }
@@ -1946,23 +1954,98 @@ function importCsv(){
   state.csvPreview = null
   render(); toast(`已导入并接入 ${rows.length} 台`)
 }
-const RULES = [
-  { when:'液位 < 10%', then:'停止全部泵并报警' },
-  { when:'出口压力 < 0.35 MPa', then:'启动 1号泵' },
-  { when:'出口压力 > 0.55 MPa', then:'降频到 35 Hz' },
-]
-function simIndex(){
-  if (state.sim.level < 10) return 0
-  if (state.sim.p < 0.35) return 1
-  if (state.sim.p > 0.55) return 2
-  return -1
+const METRICS = {
+  pressure:{ label:'出口压力', unit:'MPa' },
+  level:{ label:'液位', unit:'%' },
+}
+const ACTIONS = {
+  stop_all:'停止全部泵并报警',
+  start_pump:'启动 1号泵',
+  derate:'降频',
+  notify:'通知值班',
+}
+function rulesFor(node){
+  if (!state.rules[node.id]) state.rules[node.id] = [
+    { metric:'level', op:'<', value:10, action:'stop_all' },
+    { metric:'pressure', op:'<', value:0.35, action:'start_pump' },
+    { metric:'pressure', op:'>', value:0.55, action:'derate', param:35 },
+  ]
+  return state.rules[node.id]
+}
+function ruleValue(rule){ return rule.metric === 'level' ? state.sim.level : state.sim.p }
+function rulePass(rule){ const v = ruleValue(rule); return rule.op === '<' ? v < rule.value : v > rule.value }
+function unitSuffix(unit){ return unit === '%' ? '%' : ' ' + unit }
+function ruleText(rule){
+  const m = METRICS[rule.metric]
+  return `${m.label} ${rule.op === '<' ? '&lt;' : '&gt;'} ${rule.value}${unitSuffix(m.unit)}`
+}
+function actionText(rule){
+  if (rule.action === 'derate') return `降频到 ${rule.param || 35} Hz`
+  return ACTIONS[rule.action] || rule.action
+}
+function ruleReason(rule){
+  const m = METRICS[rule.metric], v = ruleValue(rule)
+  return `${m.label} ${v}${unitSuffix(m.unit)} ${rule.op === '<' ? '≥' : '≤'} ${rule.value}${unitSuffix(m.unit)}`
+}
+function ruleDuplicate(rules, rule, index){
+  return rules.some((r, i) => i !== index && r.metric === rule.metric && r.op === rule.op && r.value === rule.value)
 }
 function runSim(){
-  state.simHit = simIndex()
-  render()
-  toast(state.simHit < 0 ? '没有规则命中：条件都不满足，本次不动作' : `命中第 ${state.simHit + 1} 行`)
+  state.simRan = true
+  const hit = rulesFor(findNode(ledger(), state.selD) || ledger()).findIndex(rulePass)
+  render(); toast(hit < 0 ? '没有规则命中：条件都不满足，本次不动作' : `命中第 ${hit + 1} 行`)
 }
-function setSim(key, value){ state.sim[key] = value; state.simHit = null; render() }
+function setSim(key, value){ state.sim[key] = value; state.simRan = false; render() }
+function editRule(nodeId, index){ state.editRule = { nodeId, index }; render() }
+function saveRule(){
+  const node = findNode(ledger(), state.editRule.nodeId)
+  const rules = rulesFor(node)
+  const rule = {
+    metric: $('rMetric').value, op: $('rOp').value,
+    value: Number($('rValue').value), action: $('rAction').value,
+  }
+  if (!Number.isFinite(rule.value)) { toast('阈值要填数字'); return }
+  if (rule.action === 'derate') rule.param = Number($('rParam').value) || 35
+  const index = state.editRule.index
+  if (index >= 0) rules[index] = rule; else rules.push(rule)
+  state.editRule = null; state.simRan = false; render(); toast('规则已保存')
+}
+function deleteRule(nodeId, index){
+  const rules = rulesFor(findNode(ledger(), nodeId) || ledger())
+  if (rules.length === 1) { toast('至少留一条规则'); return }
+  rules.splice(index, 1); state.simRan = false; render()
+}
+function moveRule(nodeId, index, dir){
+  const rules = rulesFor(findNode(ledger(), nodeId) || ledger())
+  const j = index + dir
+  if (j < 0 || j >= rules.length) return
+  ;[rules[index], rules[j]] = [rules[j], rules[index]]
+  state.simRan = false; render()
+}
+function ruleForm(node){
+  const rules = rulesFor(node)
+  const index = state.editRule.index
+  const rule = index >= 0 ? rules[index] : { metric:'pressure', op:'>', value:0.5, action:'notify' }
+  return `<div class="rule-form">
+    <h5>${index >= 0 ? `编辑第 ${index + 1} 行` : '新增规则'}</h5>
+    <div class="rule-fields">
+      <label>条件
+        <select id="rMetric">${Object.entries(METRICS).map(([key, m]) => `<option value="${key}" ${rule.metric === key ? 'selected' : ''}>${m.label}</option>`).join('')}</select>
+        <select id="rOp"><option ${rule.op === '<' ? 'selected' : ''}>&lt;</option><option ${rule.op === '>' ? 'selected' : ''}>&gt;</option></select>
+        <input id="rValue" type="number" step="0.01" value="${rule.value}">
+      </label>
+      <label>动作
+        <select id="rAction">${Object.entries(ACTIONS).map(([key, label]) => `<option value="${key}" ${rule.action === key ? 'selected' : ''}>${label}</option>`).join('')}</select>
+        <input id="rParam" type="number" step="1" value="${rule.param || 35}" title="降频目标 Hz">
+      </label>
+    </div>
+    <div class="actions">
+      <button class="primary" onclick="saveRule()">保存规则</button>
+      <button class="ghost" onclick="state.editRule=null;render()">取消</button>
+    </div>
+    <p class="note">条件按行序求值，首命中后不再看后面的行；降频参数只对“降频”动作生效。</p>
+  </div>`
+}
 function strategyStep(){
   const root = ledger()
   const node = findNode(root, state.selD) || root
@@ -1985,10 +2068,23 @@ function deviceStrategies(node){
     <div class="actions"><button class="ghost" onclick="toast('原型：设备级联锁只允许本设备动作，不允许跨设备分配')">＋ 设备级联锁</button></div>`
 }
 function strategyTable(node){
-  const hit = state.simHit
+  const rules = rulesFor(node)
+  const trace = state.simRan ? rules.map(rulePass) : null
+  const hit = trace ? trace.findIndex(Boolean) : null
+  const devices = []
+  ;(function walk(n){ if (n.kind === '设备') devices.push(n); (n.children || []).forEach(walk) })(node)
   const scopeText = state.scope === 'sub'
-    ? `本对象与下级（共 ${countDevices(node).total} 台设备）`
+    ? `本对象与下级（${devices.length} 台设备：${devices.slice(0, 6).map(d => d.name).join('、')}${devices.length > 6 ? ' 等' : ''}）`
     : '仅本对象'
+  const transitions = isEnergy()
+    ? [['待机','并网','许可 ∧ 无故障','充电 / 放电','下发功率指令并回读'],
+       ['充电','SOC ≥ 95%','—','待机','停止充电'],
+       ['放电','SOC ≤ 15%','—','待机','停止放电'],
+       ['任意','故障','—','故障','报警，禁止自动重启']]
+    : [['停止','启动','许可 ∧ 无故障','启动中','下发启动并等回读'],
+       ['启动中','回读运行','电流 > 0','运行','记录开始时间'],
+       ['运行','停止','—','停止中','下发停止'],
+       ['运行','故障','—','故障','报警，禁止自动重启']]
   return `<div class="panel-head"><h3>${esc(node.name)}</h3><span class="tag">${node.kind}</span>
       <span class="tag">${nodeStrategyLabel(node)}</span></div>
     <div class="acc-grid">
@@ -2001,17 +2097,36 @@ function strategyTable(node){
       </div>
       <div class="acc-card"><h5>状态机 · ${isEnergy() ? '储能单元' : '离心泵'}</h5>
         <div class="pipeline">
-          <span class="ok">停止</span><i>→</i><span class="ok">启动中</span><i>→</i>
-          <span class="cur">运行</span><i>→</i><span>停止中</span>
+          <span class="ok">${isEnergy() ? '待机' : '停止'}</span><i>→</i>
+          <span class="ok">${isEnergy() ? '充电' : '启动中'}</span><i>→</i>
+          <span class="cur">${isEnergy() ? '放电' : '运行'}</span><i>→</i>
+          <span>${isEnergy() ? '待机' : '停止中'}</span>
         </div>
-        <p class="note">事件：启动 / 停止 / 故障 / 复位；守卫不满足时保持原状态，并记录原因。</p>
+        <table class="mini-table"><thead><tr><th>当前</th><th>事件</th><th>守卫</th><th>下一状态</th><th>动作</th></tr></thead>
+          <tbody>${transitions.map(t => `<tr>${t.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>
       </div>
     </div>
     <h5 style="margin:14px 0 6px">决策表 · 有序，首命中</h5>
-    <table class="mini-table rules-table"><thead><tr><th>#</th><th>条件</th><th>动作</th><th>命中</th></tr></thead>
-      <tbody>${RULES.map((rule, i) => `<tr class="${hit === i ? 'hit' : ''}">
-        <td>${i + 1}</td><td>${rule.when}</td><td>${rule.then}</td>
-        <td>${hit === i ? '<span class="chip ok">命中</span>' : hit === null ? '' : '<span class="src">跳过</span>'}</td></tr>`).join('')}</tbody></table>
+    ${state.editRule && state.editRule.nodeId === node.id ? ruleForm(node) : ''}
+    <table class="mini-table rules-table"><thead><tr><th>#</th><th>条件</th><th>动作</th><th>评估</th><th></th></tr></thead>
+      <tbody>${rules.map((rule, i) => {
+        const dup = ruleDuplicate(rules, rule, i)
+        const evalText = trace === null ? (dup ? '<span class="chip warn">条件重复</span>' : '')
+          : trace[i] ? '<span class="chip ok">命中</span>'
+          : `<span class="src">跳过 · ${ruleReason(rule)}</span>`
+        return `<tr class="${hit === i ? 'hit' : ''}">
+          <td>${i + 1}</td>
+          <td>${ruleText(rule)}${dup ? ' <span class="chip warn">重复</span>' : ''}</td>
+          <td>${actionText(rule)}</td>
+          <td>${evalText}</td>
+          <td class="row-actions">
+            <button class="ghost" onclick="moveRule('${node.id}',${i},-1)">↑</button>
+            <button class="ghost" onclick="moveRule('${node.id}',${i},1)">↓</button>
+            <button class="ghost" onclick="editRule('${node.id}',${i})">编辑</button>
+            <button class="ghost" onclick="deleteRule('${node.id}',${i})">删除</button>
+          </td></tr>`
+      }).join('')}</tbody></table>
+    <div class="actions"><button class="ghost" onclick="editRule('${node.id}',-1)">＋ 添加规则</button></div>
     <h5 style="margin:14px 0 6px">模拟</h5>
     <div class="sim">
       <label>出口压力 <b>${state.sim.p.toFixed(2)}</b> MPa
@@ -2022,9 +2137,8 @@ function strategyTable(node){
     </div>
     ${hit === null ? '' : hit < 0
       ? '<p class="note">没有规则命中：本次不动作，也不下发任何命令。</p>'
-      : `<div class="sim-result"><b>命中第 ${hit + 1} 行：${RULES[hit].then}</b>
-          <span class="src">下发 ${RULES[hit].then.includes('降频') ? '频率 45 → 35 Hz' : '动作请求'} · 回读确认后记为完成；未回读显示结果未知。</span></div>`}
-    <div class="actions"><button class="ghost" onclick="toast('原型：新增一行规则，排在选中行之后')">＋ 添加规则</button></div>`
+      : `<div class="sim-result"><b>命中第 ${hit + 1} 行：${actionText(rules[hit])}</b>
+          <span class="src">下发 ${rules[hit].action === 'derate' ? `频率 45 → ${rules[hit].param || 35} Hz` : '动作请求'} · 回读确认后记为完成；未回读显示结果未知。</span></div>`}`
 }
 function uiStep(){
   const root = ledger()
@@ -2251,7 +2365,7 @@ function deliveryStep(){
   const checks = [
     ['通道','2 条在线','ok'],
     ['点位',`${bound} 台已绑定 · ${points} 个点位`,'ok'],
-    ['策略',`${RULES.length} 条规则 · 已发布`,'ok'],
+    ['策略',`${rulesFor(ledger()).length} 条规则 · 已发布`,'ok'],
     ['界面',`${screensOwn} 层本层已配 · 其余继承或默认`,screensOwn ? 'ok' : 'warn'],
     ['依赖',state.ems ? 'ems@1.0.0' : '无行业包','ok'],
   ]
@@ -2265,7 +2379,7 @@ function deliveryStep(){
         <tr><td>对象</td><td class="src">${rows.length} 个节点 · ${rows.filter(r => r.node.kind === '设备').length} 台设备</td></tr>
         <tr><td>点位</td><td class="src">${points} 个采集点 · 画面绑定已 token 化</td></tr>
         <tr><td>画面</td><td class="src">${rows.filter(r => state.screens[r.node.id]).length} 份本层配置 · 未配置的层用默认块</td></tr>
-        <tr><td>策略</td><td class="src">${RULES.length} 条规则 · 1 个状态机</td></tr>
+        <tr><td>策略</td><td class="src">${rulesFor(ledger()).length} 条规则 · 1 个状态机</td></tr>
         <tr><td>现场绑定</td><td class="src">已剥离：地址、凭据、控制启动不进包</td></tr>
       </tbody></table>
       <h5 style="margin:14px 0 6px">交付前检查</h5>
