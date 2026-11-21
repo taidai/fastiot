@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prototype:shape": "vite --open /prototype/product-shape/index.html",
     "build": "tsc --noEmit && vite build",
     "check:navigation": "node navigation-check.mjs",
     "check:consistency": "node consistency-check.mjs",

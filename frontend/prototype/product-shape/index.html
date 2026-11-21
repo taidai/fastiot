@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型入口 · FastIOT 产品形态</title>
+<style>
+  :root{font-family:"HarmonyOS Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif;color:#1a2a33;background:#f3f7fa}
+  body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px}
+  .box{max-width:760px;width:100%}
+  h1{font-size:22px;margin:0 0 6px}
+  p.sub{margin:0 0 22px;color:#4c5d72;font-size:13.5px;line-height:1.7}
+  .cards{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  a.card{display:block;text-decoration:none;color:inherit;background:#fff;border:1px solid #e4e9ee;border-radius:14px;padding:18px;
+    box-shadow:0 10px 26px rgba(31,46,58,.07)}
+  a.card:hover{border-color:#0e7c7b;box-shadow:0 12px 30px rgba(14,124,123,.12)}
+  .kicker{font-size:11px;letter-spacing:.1em;color:#6b7f92;margin-bottom:8px}
+  h2{font-size:16px;margin:0 0 6px}
+  .card p{margin:0;font-size:12.5px;color:#4c5d72;line-height:1.6}
+  .tag{display:inline-block;margin-top:12px;font-size:11.5px;color:#0e7c7b;border:1px solid #cfe6dc;background:#f1faf9;border-radius:999px;padding:2px 9px}
+  .foot{margin-top:18px;font-size:11.5px;color:#6b7f92}
+  @media (max-width:700px){.cards{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="box">
+  <h1>FastIOT 产品形态 · 原型入口</h1>
+  <p class="sub">两个原型，各回答一个问题。都是丢弃式代码，不接后端、不保存状态。参照 ADR 0002。</p>
+  <div class="cards">
+    <a class="card" href="./workbenches.html">
+      <div class="kicker">当前方向 · 界面结构</div>
+      <h2>三个大项：总览 / 设计 / 交付</h2>
+      <p>总览是按层的 SCADA 大屏；设计按建现场 → 搭台账 → 接设备 → 配策略 → 配界面 → 交付六步牵引。</p>
+      <span class="tag">悬浮台账切层 · 铃铛收告警 · 每一步只露当前功能</span>
+    </a>
+    <a class="card" href="./state-machine.html">
+      <div class="kicker">逻辑问题</div>
+      <h2>状态机表格</h2>
+      <p>不做画布，只用状态 + 转移 + 守卫，能不能说清启动、无回读、结果未知、接管与检修。</p>
+      <span class="tag">自由操作 + 五段演练</span>
+    </a>
+  </div>
+  <p class="foot">看完后告诉我要“B 的头部配 C 的展开”还是“逻辑缺了某个事件”，这比直接改代码有用。</p>
+</div>
+</body>
+</html>

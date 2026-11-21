@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型 · 状态机表格能不能表达设备过程</title>
+<!--
+  原型代码，不是产品代码。双击即可打开，不接后端。
+  要回答的问题：不做画布，只用“状态 + 转移 + 守卫”的表格，能不能把设备过程
+  （启动、无回读、未知、接管、检修、重复请求）表达清楚？
+  逻辑模块 MACHINE 与页面分离，验证通过后可整体搬进真实代码。
+-->
+<style>
+  :root{
+    color-scheme:light;
+    font-family:"HarmonyOS Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    --ink:#1a2a33; --muted:#4c5d72; --faint:#6b7f92; --line:#e4e9ee;
+    --accent:#0e7c7b; --mint:#23705f; --amber:#8f5f19; --danger:#b23a32; --bg:#f3f7fa;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink)}
+  button{font:inherit;color:inherit;cursor:pointer}
+  .wrap{max-width:1080px;margin:0 auto;padding:26px 22px 80px}
+  h1{font-size:22px;margin:0 0 6px}
+  .question{font-size:13.5px;color:var(--muted);line-height:1.7;max-width:760px;margin:0 0 20px}
+  .grid{display:grid;grid-template-columns:360px 1fr;gap:16px;align-items:start}
+  .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px;box-shadow:0 8px 22px rgba(31,46,58,.06)}
+  .card h2{font-size:12px;letter-spacing:.08em;color:var(--faint);margin:0 0 12px;font-weight:600}
+  .state-big{font-size:30px;font-weight:700;line-height:1.1;margin-bottom:2px}
+  .state-sub{font-size:12px;color:var(--faint);margin-bottom:14px}
+  .field{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px dashed #e8eef2;font-size:13px}
+  .field:last-child{border-bottom:0}
+  .field b{font-weight:600}
+  .badge{display:inline-block;font-size:11.5px;padding:2px 9px;border-radius:999px;border:1px solid var(--line);background:#f6fafb;color:var(--muted)}
+  .badge.ok{background:#e6f3ee;color:var(--mint);border-color:#cfe6dc}
+  .badge.warn{background:#fbf1de;color:var(--amber);border-color:#eeddb9}
+  .badge.bad{background:#fbf0ef;color:var(--danger);border-color:#eed3d0}
+  .last{margin-top:12px;font-size:12.5px;line-height:1.6;padding:10px 12px;border-radius:10px;background:#f2f8fa;color:var(--muted)}
+  .last.deny{background:#fdf4f2;color:#7a4a45}
+  .group{margin-bottom:14px}
+  .group h3{font-size:11px;letter-spacing:.08em;color:var(--faint);margin:0 0 6px;font-weight:600}
+  .btns{display:flex;flex-wrap:wrap;gap:6px}
+  .btns button{border:1px solid var(--line);background:#fff;border-radius:9px;padding:7px 11px;font-size:12.5px}
+  .btns button:hover{border-color:#b9d7d5;background:#f6fbfa}
+  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:4px 0 14px;flex-wrap:wrap}
+  .tabs button{border:0;background:none;padding:8px 11px;font-size:12.5px;color:var(--faint);border-bottom:2px solid transparent;margin-bottom:-1px}
+  .tabs button.active{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+  .scenario p{font-size:13px;color:var(--muted);line-height:1.7;margin:0 0 14px}
+  .steps{display:flex;flex-direction:column;gap:8px}
+  .step{display:flex;align-items:center;gap:10px;font-size:13px}
+  .step .idx{width:22px;height:22px;border-radius:50%;border:1px solid var(--line);display:grid;place-items:center;font-size:11px;color:var(--faint);flex:none}
+  .step.done .idx{background:#e6f3ee;border-color:#cfe6dc;color:var(--mint)}
+  .step.next .idx{border-color:var(--accent);color:var(--accent)}
+  .step button{border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px 11px;font-size:12.5px}
+  .step.next button{border-color:var(--accent);color:var(--accent);background:#f1faf9}
+  .step.done span{color:var(--faint)}
+  .step.pending button{opacity:.45;cursor:not-allowed}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:4px}
+  th{text-align:left;font-size:10.5px;letter-spacing:.06em;color:var(--faint);font-weight:600;padding:7px 8px;border-bottom:1px solid var(--line)}
+  td{padding:7px 8px;border-bottom:1px solid #eef3f6;vertical-align:top}
+  tr:last-child td{border-bottom:0}
+  code{font-size:11.5px;background:#f1f6f8;border-radius:4px;padding:1px 5px}
+  .log{font-size:12px;color:var(--muted);line-height:1.8;font-variant-numeric:tabular-nums}
+  .log div:last-child{color:var(--ink)}
+  .boundary{border:1px dashed #c9d6e0;border-radius:12px;padding:14px 16px;font-size:12.5px;color:var(--muted);line-height:1.7;background:rgba(255,255,255,.5)}
+  .boundary b{color:var(--ink)}
+  .foot{margin-top:18px;font-size:11.5px;color:var(--faint)}
+  @media (max-width:860px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>状态机表格 · 能不能不画布地表达设备过程</h1>
+  <p class="question">
+    这个演示用“状态 + 转移 + 守卫”的表格描述一台泵。你只按事件按钮，模型自己决定是否允许。
+    注意面板里同时显示<b>过程状态</b>和<b>最近请求结果</b>——它们是两件事：设备可以在“启动中”，
+    而最近一次命令“结果未知”。表格要能说清这些情况，才值得做成产品。
+  </p>
+
+  <div class="grid">
+    <!-- 状态面板 -->
+    <div>
+      <div class="card" style="margin-bottom:14px">
+        <h2>当前状态</h2>
+        <div class="state-big" id="process">待机</div>
+        <div class="state-sub" id="processSub">设备过程</div>
+        <div class="field"><span>最近请求结果</span><span id="request" class="badge">无</span></div>
+        <div class="field"><span>运行模式</span><span id="mode">自动</span></div>
+        <div class="field"><span>远程位</span><span id="remote">远程</span></div>
+        <div class="field"><span>液位条件</span><span id="level">正常</span></div>
+        <div class="field"><span>自动是否被阻断</span><span id="blocked">否</span></div>
+        <div class="last" id="last">初始状态：待机，没有进行中的请求。</div>
+      </div>
+
+      <div class="card" style="margin-bottom:14px">
+        <h2>自由操作</h2>
+        <div id="freeplay"></div>
+      </div>
+
+      <div class="card">
+        <h2>操作记录</h2>
+        <div class="log" id="log"></div>
+      </div>
+    </div>
+
+    <!-- 演练 + 规则表 -->
+    <div>
+      <div class="card" style="margin-bottom:14px">
+        <h2>跟着走</h2>
+        <div class="tabs" id="scenarioTabs"></div>
+        <div class="scenario" id="scenario"></div>
+      </div>
+
+      <div class="card" style="margin-bottom:14px">
+        <h2>这张表（原型里真正驱动行为的规则）</h2>
+        <table>
+          <thead><tr><th>事件</th><th>允许条件</th><th>之后</th><th>请求结果</th></tr></thead>
+          <tbody id="rules"></tbody>
+        </table>
+      </div>
+
+      <div class="boundary">
+        <b>这张表表达不了的：</b>两台泵的轮换、跨设备的联合目标、并行过程。
+        它们需要“同一时刻只能一个来源”“另一个对象的状态”这类条件，单张转移表放不下。
+        这类内容应留在行业包或策略编排里，而不是把转移表扩成画布。
+      </div>
+    </div>
+  </div>
+
+  <p class="foot">原型，不是产品代码；状态不保存。</p>
+</div>
+
+<script>
+/* ================= 纯逻辑模块：可整体搬走 ================= */
+const MACHINE = (() => {
+  const PROCESS = {
+    standby:'待机', starting:'启动中', running:'运行',
+    stopping:'停机中', fault:'故障', maintenance:'检修',
+  }
+  const REQUEST = { none:'无', accepted:'已下发', confirmed:'已回读确认', unknown:'结果未知' }
+
+  function initial(){
+    return { process:'standby', request:'none', mode:'auto', remote:true, levelOk:true,
+             autoBlocked:false, last:'初始状态：待机，没有进行中的请求。', lastOk:true, log:[] }
+  }
+
+  // 一条规则 = 一个事件；when 决定是否允许，apply 决定之后的状态。
+  // deny 只负责解释为什么不允许，让“不可用”也有原因。
+  const RULES = [
+    { event:'opStart', label:'人工启动', group:'命令',
+      when:s => s.process==='standby' && s.remote && s.levelOk,
+      deny:s => s.process==='fault' ? '故障未消除'
+              : s.process==='starting' ? '已有进行中的启动请求'
+              : s.process==='running' ? '设备已在运行'
+              : s.process==='stopping' ? '正在停机，等结束后再启动'
+              : !s.remote ? '就地位禁止远程命令'
+              : !s.levelOk ? '液位低，启动条件不满足'
+              : '当前状态不允许启动',
+      apply:s => { s.process='starting'; s.request='accepted' },
+      note:'启动命令已下发，等待运行反馈' },
+
+    { event:'autoStart', label:'自动求值：启动', group:'自动',
+      when:s => s.process==='standby' && s.remote && s.levelOk && s.mode==='auto' && !s.autoBlocked,
+      deny:s => s.mode==='manual' ? '已被人工接管，自动逻辑暂停'
+              : s.autoBlocked ? '上次请求结果未知，需人工确认后才能重新自动'
+              : s.process!=='standby' ? '设备不在待机，自动启动不成立'
+              : !s.remote ? '就地位禁止自动命令'
+              : '液位低，自动启动条件不满足',
+      apply:s => { s.process='starting'; s.request='accepted' },
+      note:'自动逻辑满足条件，启动命令已下发' },
+
+    { event:'ack', label:'运行反馈到达', group:'反馈',
+      when:s => s.process==='starting',
+      deny:s => '当前没有等待确认的启动请求',
+      apply:s => { s.process='running'; s.request='confirmed' },
+      note:'回读确认设备已运行' },
+
+    { event:'timeout', label:'等待超时（6 秒）', group:'反馈',
+      when:s => s.process==='starting' && s.request==='accepted',
+      deny:s => '当前没有等待中的启动请求',
+      apply:s => { s.request='unknown'; s.autoBlocked=true },
+      note:'到期仍无回读：过程仍是启动中，请求结果记为未知；自动逻辑被阻断' },
+
+    { event:'opStop', label:'人工停机', group:'命令',
+      when:s => s.process==='running' && s.remote,
+      deny:s => s.process==='starting' ? '启动过程未结束，先处理未知结果'
+              : !s.remote ? '就地位禁止远程命令'
+              : '当前状态不允许停机',
+      apply:s => { s.process='stopping'; s.request='accepted' },
+      note:'停止命令已下发，等待停止反馈' },
+
+    { event:'stopAck', label:'停止反馈到达', group:'反馈',
+      when:s => s.process==='stopping',
+      deny:s => '当前没有等待确认的停止请求',
+      apply:s => { s.process='standby'; s.request='confirmed' },
+      note:'回读确认设备已停止' },
+
+    { event:'faultOn', label:'故障发生', group:'工况',
+      when:s => s.process!=='fault' && s.process!=='maintenance',
+      deny:s => s.process==='maintenance' ? '检修中不接收运行故障' : '已处于故障',
+      apply:s => { s.process='fault' },
+      note:'进入故障：自动调度停止；已下发的请求不会因此被当成成功' },
+
+    { event:'faultClear', label:'故障消除', group:'工况',
+      when:s => s.process==='fault',
+      deny:s => '当前没有故障',
+      apply:s => { s.process='standby' },
+      note:'回到待机；恢复自动仍是单独的动作' },
+
+    { event:'remoteOff', label:'切到就地', group:'工况',
+      when:() => true, deny:() => '',
+      apply:s => { s.remote=false }, note:'就地位：远程与自动命令被拒' },
+    { event:'remoteOn', label:'切到远程', group:'工况',
+      when:() => true, deny:() => '',
+      apply:s => { s.remote=true }, note:'远程位恢复' },
+    { event:'levelLow', label:'液位低', group:'工况',
+      when:() => true, deny:() => '',
+      apply:s => { s.levelOk=false }, note:'启动条件不再满足' },
+    { event:'levelOk', label:'液位正常', group:'工况',
+      when:() => true, deny:() => '',
+      apply:s => { s.levelOk=true }, note:'启动条件恢复' },
+
+    { event:'takeOver', label:'人工接管', group:'模式',
+      when:s => s.mode!=='manual',
+      deny:s => '已经是人工接管',
+      apply:s => { s.mode='manual' }, note:'自动逻辑暂停；安全保护仍有效' },
+    { event:'release', label:'恢复自动', group:'模式',
+      when:s => s.mode==='manual' && !s.autoBlocked && s.process!=='maintenance',
+      deny:s => s.process==='maintenance' ? '检修中不能恢复自动'
+              : s.autoBlocked ? '上次结果未知，先人工确认' : '当前已是自动',
+      apply:s => { s.mode='auto' }, note:'自动逻辑恢复参与控制' },
+
+    { event:'maintOn', label:'进入检修', group:'检修',
+      when:s => s.process==='standby' || s.process==='fault',
+      deny:s => '先停机，再进入检修',
+      apply:s => { s.process='maintenance'; s.mode='manual' }, note:'检修态：禁止自动调度' },
+    { event:'maintOff', label:'退出检修', group:'检修',
+      when:s => s.process==='maintenance',
+      deny:s => '当前不在检修',
+      apply:s => { s.process='standby' }, note:'回到待机；不会自动恢复运行' },
+
+    { event:'resolveStopped', label:'现场核实：其实没启动', group:'核实',
+      when:s => s.request==='unknown' && s.process==='starting',
+      deny:s => '当前没有未知结果需要核实',
+      apply:s => { s.process='standby' }, note:'过程回到待机；历史里的“未知”仍保留' },
+    { event:'resolveRunning', label:'现场核实：其实在运行', group:'核实',
+      when:s => s.request==='unknown' && s.process==='starting',
+      deny:s => '当前没有未知结果需要核实',
+      apply:s => { s.process='running' }, note:'过程记为运行；请求结果仍是未知，不是回读确认' },
+    { event:'rearm', label:'确认可重新自动', group:'核实',
+      when:s => s.autoBlocked,
+      deny:s => '当前没有被阻断的自动',
+      apply:s => { s.autoBlocked=false }, note:'人工确认后解除阻断；历史未知不受影响' },
+  ]
+
+  function dispatch(state, event){
+    const rule = RULES.find(r => r.event === event)
+    if (!rule) return { state, ok:false, note:'未知事件', changed:[] }
+    if (!rule.when(state)) {
+      const note = `被拒绝：${rule.deny(state)}`
+      const stamp = new Date().toLocaleTimeString('zh-CN', { hour12:false })
+      return {
+        state: { ...state, last:note, lastOk:false,
+                 log:[...state.log, `${stamp} ${rule.label} ✕ ${note}`].slice(-8) },
+        ok:false, note, changed:[],
+      }
+    }
+    const next = { process:state.process, request:state.request, mode:state.mode,
+                   remote:state.remote, levelOk:state.levelOk, autoBlocked:state.autoBlocked,
+                   last:'', lastOk:true, log:state.log.slice() }
+    rule.apply(next)
+    next.last = rule.note
+    next.lastOk = true
+    const stamp = new Date().toLocaleTimeString('zh-CN', { hour12:false })
+    next.log = [...next.log, `${stamp} ${rule.label} → ${PROCESS[next.process]}（${REQUEST[next.request]}）`].slice(-8)
+    return { state:next, ok:true, note:rule.note, changed:[] }
+  }
+
+  return { PROCESS, REQUEST, RULES, initial, dispatch }
+})()
+
+/* ================= 页面：只调用模块，不反向影响它 ================= */
+let current = MACHINE.initial()
+let scenarioKey = 'normal'
+let stepIndex = 0
+
+const SCENARIOS = [
+  { key:'normal', title:'正常启动', desc:'从待机出发，人工下发启动，收到运行反馈。看“过程”和“请求结果”如何一起推进。',
+    steps:[{label:'人工启动', event:'opStart'}, {label:'运行反馈到达', event:'ack'}] },
+  { key:'unknown', title:'没有回读', desc:'启动命令下发后设备始终不回读。超时后过程仍是“启动中”，但请求结果是“未知”；此时自动逻辑不能重开同一动作。',
+    steps:[
+      {label:'人工启动', event:'opStart'}, {label:'等待超时（6 秒）', event:'timeout'},
+      {label:'再试一次自动启动（应被拒）', event:'autoStart'},
+      {label:'人工接管', event:'takeOver'}, {label:'现场核实：其实没启动', event:'resolveStopped'},
+      {label:'再试一次自动启动（仍被拒）', event:'autoStart'},
+      {label:'确认可重新自动', event:'rearm'}, {label:'自动启动', event:'autoStart'},
+    ] },
+  { key:'fault', title:'故障与接管', desc:'运行中发生故障，自动调度停止；人工接管后故障消除。接管不等于设备恢复。',
+    steps:[
+      {label:'人工启动', event:'opStart'}, {label:'运行反馈到达', event:'ack'},
+      {label:'故障发生', event:'faultOn'}, {label:'人工接管', event:'takeOver'},
+      {label:'故障消除', event:'faultClear'}, {label:'恢复自动', event:'release'},
+    ] },
+  { key:'maintenance', title:'检修中禁止启动', desc:'检修是独立状态：启动被拒并给出原因；退出检修回到待机，不会自动恢复运行。',
+    steps:[
+      {label:'进入检修', event:'maintOn'}, {label:'自动求值：启动（应被拒）', event:'autoStart'},
+      {label:'退出检修', event:'maintOff'}, {label:'自动启动', event:'autoStart'},
+    ] },
+  { key:'duplicate', title:'重复请求', desc:'启动中再点一次启动：表格能直接拒绝，并说明已有进行中的请求，不需要额外的“去重”代码路径。',
+    steps:[
+      {label:'人工启动', event:'opStart'}, {label:'再次人工启动（应被拒）', event:'opStart'},
+      {label:'运行反馈到达', event:'ack'},
+    ] },
+]
+
+function reset(){ current = MACHINE.initial(); stepIndex = 0; render() }
+function act(event){ current = MACHINE.dispatch(current, event).state; render() }
+function selectScenario(key){ scenarioKey = key; stepIndex = 0; current = MACHINE.initial(); render() }
+
+function render(){
+  const s = current
+  document.getElementById('process').textContent = MACHINE.PROCESS[s.process]
+  document.getElementById('processSub').textContent = s.process === 'starting' ? '设备过程 · 等待启动确认'
+    : s.process === 'stopping' ? '设备过程 · 等待停止确认'
+    : s.process === 'fault' ? '设备过程 · 故障' : '设备过程'
+  const req = document.getElementById('request')
+  req.textContent = MACHINE.REQUEST[s.request]
+  req.className = 'badge ' + (s.request === 'confirmed' ? 'ok' : s.request === 'unknown' ? 'bad' : s.request === 'accepted' ? 'warn' : '')
+  document.getElementById('mode').textContent = s.mode === 'auto' ? '自动' : '人工接管'
+  document.getElementById('remote').textContent = s.remote ? '远程' : '就地'
+  document.getElementById('level').textContent = s.levelOk ? '正常' : '低液位'
+  document.getElementById('blocked').textContent = s.autoBlocked ? '是（结果未知）' : '否'
+  const last = document.getElementById('last')
+  last.textContent = s.last
+  last.className = 'last' + (s.last.startsWith('被拒绝') ? ' deny' : '')
+
+  document.getElementById('log').innerHTML = s.log.length
+    ? s.log.map(x => `<div>${x}</div>`).join('')
+    : '<div>还没有操作。</div>'
+
+  renderFreeplay()
+  renderScenarios()
+  renderRules()
+}
+
+function renderFreeplay(){
+  const groups = {}
+  MACHINE.RULES.forEach(r => { (groups[r.group] ||= []).push(r) })
+  document.getElementById('freeplay').innerHTML = Object.entries(groups).map(([g, rules]) => `
+    <div class="group"><h3>${g}</h3><div class="btns">
+      ${rules.map(r => `<button onclick="act('${r.event}')">${r.label}</button>`).join('')}
+    </div></div>`).join('')
+}
+
+function renderScenarios(){
+  document.getElementById('scenarioTabs').innerHTML = SCENARIOS.map(s =>
+    `<button class="${s.key===scenarioKey?'active':''}" onclick="selectScenario('${s.key}')">${s.title}</button>`).join('')
+  const sc = SCENARIOS.find(x => x.key === scenarioKey)
+  const steps = sc.steps.map((st, i) => {
+    const cls = i < stepIndex ? 'done' : i === stepIndex ? 'next' : 'pending'
+    return `<div class="step ${cls}">
+      <span class="idx">${i+1}</span>
+      ${i === stepIndex
+        ? `<button onclick="runStep('${st.event}')">${st.label}</button>`
+        : `<span>${st.label}</span>`}
+    </div>`
+  }).join('')
+  const done = stepIndex >= sc.steps.length
+  document.getElementById('scenario').innerHTML = `
+    <p>${sc.desc}</p>
+    <div class="steps">${steps}</div>
+    <div style="margin-top:14px;display:flex;gap:8px">
+      <button class="badge" style="cursor:pointer" onclick="reset()">重来</button>
+      ${done ? '<span class="badge ok">这一段走完了</span>' : ''}
+    </div>`
+}
+
+function runStep(event){
+  act(event)
+  stepIndex += 1
+  render()
+}
+
+function renderRules(){
+  document.getElementById('rules').innerHTML = MACHINE.RULES.map(r => {
+    const cond = guardText(r)
+    return `<tr><td><b>${r.label}</b><br><code>${r.event}</code></td>
+      <td>${cond}</td><td>${outcomeText(r)}</td><td>${requestText(r)}</td></tr>`
+  }).join('')
+}
+
+// 规则表只用于阅读：从 when/apply 里能读出的部分写成人话，读不出的留给实现。
+function guardText(r){
+  switch (r.event) {
+    case 'opStart': return '待机 + 远程 + 液位正常'
+    case 'autoStart': return '待机 + 远程 + 液位正常 + 自动 + 未被阻断'
+    case 'ack': return '启动中'
+    case 'timeout': return '启动中 + 请求已下发'
+    case 'opStop': return '运行 + 远程'
+    case 'stopAck': return '停机中'
+    case 'faultOn': return '非故障、非检修'
+    case 'faultClear': return '故障'
+    case 'remoteOff': case 'remoteOn': case 'levelLow': case 'levelOk': return '总是允许'
+    case 'takeOver': return '当前不是人工'
+    case 'release': return '人工 + 无未知 + 非检修'
+    case 'maintOn': return '待机或故障'
+    case 'maintOff': return '检修'
+    case 'resolveStopped': case 'resolveRunning': return '未知 + 启动中'
+    case 'rearm': return '自动被阻断'
+    default: return ''
+  }
+}
+function outcomeText(r){
+  switch (r.event) {
+    case 'opStart': case 'autoStart': return '启动中'
+    case 'ack': return '运行'
+    case 'timeout': return '启动中'
+    case 'opStop': return '停机中'
+    case 'stopAck': return '待机'
+    case 'faultOn': return '故障'
+    case 'faultClear': return '待机'
+    case 'maintOn': return '检修'
+    case 'maintOff': return '待机'
+    case 'resolveStopped': return '待机'
+    case 'resolveRunning': return '运行'
+    case 'remoteOff': case 'remoteOn': case 'levelLow': case 'levelOk': case 'takeOver': case 'release': case 'rearm': return '不变'
+    default: return ''
+  }
+}
+function requestText(r){
+  switch (r.event) {
+    case 'opStart': case 'autoStart': case 'opStop': return '已下发'
+    case 'ack': case 'stopAck': return '已回读确认'
+    case 'timeout': return '结果未知'
+    default: return '不变'
+  }
+}
+
+render()
+</script>
+</body>
+</html>
