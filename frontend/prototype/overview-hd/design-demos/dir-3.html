@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>FastIOT 总览 · 方向三 · 技术图录</title>
+<style>
+  :root{
+    --cream:#f0ead8; --black:#141311; --cobalt:#2b4f91; --vermilion:#b23a2e;
+    --hair:rgba(20,19,17,.28); --muted:#6f6a5c;
+    --sans:"Helvetica Neue",Arial,"Microsoft YaHei","PingFang SC",sans-serif;
+    --serif:"Songti SC","SimSun","Noto Serif SC",serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--cream);color:var(--black);font-family:var(--sans)}
+  body{min-height:100vh;display:flex;flex-direction:column}
+  .num{font-variant-numeric:tabular-nums}
+  header{display:grid;grid-template-columns:170px 1fr auto;gap:20px;align-items:end;
+    padding:20px 26px 12px;border-bottom:1px solid var(--hair)}
+  .plate{font-size:9.5px;letter-spacing:.16em;color:var(--muted);line-height:1.6}
+  .plate b{color:var(--black);font-weight:600;letter-spacing:.12em}
+  h1{margin:0;font-family:var(--serif);font-weight:600;font-size:44px;letter-spacing:.02em;line-height:1}
+  .sub{font-family:var(--serif);font-style:italic;color:var(--cobalt);font-size:15px;margin-top:6px}
+  .meta{text-align:right;font-size:10px;color:var(--muted);line-height:1.9}
+  .meta b{color:var(--black);font-weight:500}
+  .body{flex:1;display:grid;grid-template-columns:172px 1fr 31%;min-height:0}
+  /* ledger index */
+  nav{border-right:1px solid var(--hair);padding:16px 0;display:flex;flex-direction:column}
+  nav .cap{font-size:9px;letter-spacing:.16em;color:var(--muted);padding:0 18px 10px;display:flex;justify-content:space-between}
+  nav button{background:none;border:0;font:inherit;text-align:left;padding:8px 18px;font-size:11.5px;cursor:pointer;
+    color:var(--black);display:flex;gap:7px;line-height:1.4}
+  nav button i{font-style:normal;color:var(--muted);font-size:9.5px;padding-top:2px}
+  nav button:hover{background:rgba(20,19,17,.05)}
+  nav button.on{font-weight:600;background:rgba(43,79,145,.08);box-shadow:inset 2px 0 0 var(--cobalt)}
+  nav .foot{margin-top:auto;padding:14px 18px;border-top:1px solid var(--hair);font-size:9.5px;color:var(--muted);line-height:1.8}
+  /* stage */
+  main{padding:14px 26px 16px;min-width:0;display:flex;flex-direction:column}
+  .crumb{font-size:9.5px;letter-spacing:.14em;color:var(--muted)}
+  .diagram{flex:0 0 auto;margin-top:2px}
+  .diagram svg{display:block;width:100%;height:346px}
+  .figures{display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid var(--black);margin-top:2px}
+  .fig{padding:10px 14px 8px;border-left:1px solid var(--hair)}
+  .fig:first-child{border-left:0;padding-left:0}
+  .fig .k{font-size:9.5px;letter-spacing:.1em;color:var(--muted)}
+  .fig .v{font-family:var(--sans);font-weight:600;font-size:30px;margin-top:2px;letter-spacing:-.01em}
+  .fig .v small{font-size:11px;font-family:var(--sans);color:var(--muted);margin-left:2px}
+  .lower{display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-top:12px;border-top:1px solid var(--hair);padding-top:10px;min-height:0;overflow:auto}
+  h2{font-size:9.5px;letter-spacing:.16em;color:var(--muted);font-weight:600;margin:0 0 6px;display:flex;justify-content:space-between}
+  h2 .no{letter-spacing:0;color:var(--black)}
+  table{width:100%;border-collapse:collapse;font-size:11.5px}
+  th{text-align:left;font-size:9px;letter-spacing:.1em;color:var(--muted);font-weight:500;padding:4px 6px;border-bottom:1px solid var(--hair)}
+  td{padding:6px;border-bottom:1px solid rgba(20,19,17,.12)}
+  tr:last-child td{border-bottom:0}
+  .ok{color:var(--cobalt)}
+  .alert{color:var(--vermilion)}
+  .change{display:flex;justify-content:space-between;gap:8px;font-size:11px;padding:6px 0;border-bottom:1px solid rgba(20,19,17,.12);color:var(--black)}
+  .change em{font-style:normal;color:var(--muted);font-size:9.5px;white-space:nowrap}
+  .link{background:none;border:0;font:inherit;font-size:9.5px;color:var(--black);text-decoration:underline;cursor:pointer;padding:0;letter-spacing:.06em}
+  /* black rail */
+  aside{background:var(--black);color:var(--cream);padding:18px 22px;display:flex;flex-direction:column;gap:18px;overflow:auto}
+  aside .cap{display:flex;justify-content:space-between;align-items:baseline;font-size:9px;letter-spacing:.18em;color:#9b9484}
+  .bell{display:flex;align-items:center;gap:10px;background:none;border:1px solid #4a463c;color:var(--cream);
+    font:inherit;font-size:10.5px;letter-spacing:.08em;padding:7px 11px;cursor:pointer}
+  .bell b{font-size:15px;color:#e2b04a}
+  aside h2{color:#9b9484;border-bottom:1px solid #37342c;padding-bottom:5px}
+  .alarm{border-bottom:1px solid #2a2823;padding:9px 0}
+  .alarm .t{font-size:12px;line-height:1.4}
+  .alarm .m{font-size:9.5px;color:#8f897a;margin-top:3px}
+  .run{display:flex;justify-content:space-between;gap:8px;font-size:11px;padding:6px 0;border-bottom:1px solid #2a2823}
+  .run .r{font-size:9.5px;color:#a9b48a}
+  .run .r.skip{color:#d3a24a}
+  aside table th{color:#8f897a;border-color:#37342c}
+  aside table td{border-color:#26241f;font-size:10.5px}
+  aside .note{font-size:9.5px;color:#8f897a;line-height:1.8;margin-top:auto}
+  /* overlays */
+  .hist{position:fixed;inset:0;background:var(--cream);z-index:12;padding:24px 34px;display:none;overflow:auto}
+  .hist.open{display:block}
+  .hist h1{font-size:26px;margin:6px 0 2px}
+  .hist .sub{font-family:var(--sans);font-style:normal;color:var(--muted);font-size:10.5px;margin-bottom:14px}
+  .drawer{position:fixed;top:0;right:0;width:360px;height:100%;background:var(--black);color:var(--cream);
+    transform:translateX(100%);transition:transform .2s;z-index:13;padding:18px;overflow:auto}
+  .drawer.open{transform:none}
+  .drawer h2{color:#9b9484;font-size:9.5px;display:flex;justify-content:space-between}
+  .drawer button.x{background:none;border:1px solid #4a463c;color:var(--cream);font:inherit;font-size:10px;padding:3px 8px;cursor:pointer}
+  .drawer .act{display:flex;gap:6px;margin-top:7px}
+  .drawer .act button{background:none;border:1px solid #4a463c;color:var(--cream);font:inherit;font-size:9.5px;padding:4px 8px;cursor:pointer}
+  @media (max-width:1100px){.body{grid-template-columns:140px 1fr}aside{display:none}}
+</style>
+</head>
+<body>
+<header>
+  <div class="plate"><b>PLATE 02</b><br>现场图录 · 教学泵房<br>N 31°14′ · E 121°28′</div>
+  <div>
+    <h1 id="title">泵房</h1>
+    <div class="sub" id="subtitle">供水回路 · 水箱 → 泵 → 管网</div>
+  </div>
+  <div class="meta">更新于 <b>21:34:02</b> · 通信 <b>正常</b><br>数据质量 <b>99.2%</b> · 采样 <b>5 秒</b><br><span id="layerMeta">本层按配界面显示</span></div>
+</header>
+
+<div class="body">
+  <nav id="tree">
+    <div class="cap"><span>台账</span><span>Ⅵ</span></div>
+    <button data-layer="site"><i>01</i>现场 · 教学泵房</button>
+    <button data-layer="area" class="on"><i>02</i>区域 · 泵房</button>
+    <button data-layer="d1"><i>03</i>设备 · 1号泵</button>
+    <button data-layer="d2"><i>04</i>设备 · 2号泵</button>
+    <button data-layer="t1"><i>05</i>设备 · 水箱</button>
+    <button data-layer="unit"><i>06</i>单元 · 供水单元</button>
+    <div class="foot">设备 3 · 未绑定 0<br>告警 2 · 今日执行 3<br>每层一张图录</div>
+  </nav>
+
+  <main>
+    <div class="crumb" id="crumb">教学泵房 / 泵房</div>
+    <div class="diagram">
+      <svg viewBox="0 0 640 346" preserveAspectRatio="xMidYMid meet" aria-label="供水回路">
+        <ellipse cx="320" cy="165" rx="205" ry="112" fill="none" stroke="#141311" stroke-width="1" stroke-opacity=".55"/>
+        <ellipse cx="320" cy="165" rx="175" ry="88" fill="none" stroke="#2b4f91" stroke-width="1" stroke-dasharray="1 5" stroke-opacity=".55"/>
+        <!-- direction arrows on path -->
+        <g fill="#2b4f91">
+          <path d="M320 53 l7 9 -14 0 z"/>
+          <path d="M525 165 l-9 7 0 -14 z"/>
+          <path d="M320 277 l-7 -9 14 0 z"/>
+          <path d="M115 165 l9 -7 0 14 z"/>
+        </g>
+        <!-- nodes -->
+        <g>
+          <circle cx="115" cy="165" r="7" fill="#f0ead8" stroke="#141311" stroke-width="1.5"/>
+          <circle cx="115" cy="165" r="2.5" fill="#141311"/>
+          <text x="115" y="140" text-anchor="middle" font-size="10" fill="#6f6a5c" font-family="Arial">水箱</text>
+          <text x="115" y="196" text-anchor="middle" font-size="26" font-family="SimSun,serif" class="num" id="vTank">68%</text>
+          <text x="115" y="214" text-anchor="middle" font-size="9" fill="#6f6a5c">液位 2.4 m</text>
+        </g>
+        <g>
+          <circle cx="525" cy="165" r="7" fill="#f0ead8" stroke="#141311" stroke-width="1.5"/>
+          <circle cx="525" cy="165" r="2.5" fill="#2b4f91"/>
+          <text x="525" y="140" text-anchor="middle" font-size="10" fill="#6f6a5c">供水管网</text>
+          <text x="525" y="196" text-anchor="middle" font-size="26" font-family="SimSun,serif" class="num" id="vNet">0.42 MPa</text>
+          <text x="525" y="214" text-anchor="middle" font-size="9" fill="#6f6a5c">流量 36 m³/h</text>
+        </g>
+        <g>
+          <circle cx="320" cy="277" r="7" fill="#f0ead8" stroke="#141311" stroke-width="1.5"/>
+          <circle cx="320" cy="277" r="2.5" fill="#2b4f91"/>
+          <text x="320" y="248" text-anchor="middle" font-size="10" fill="#6f6a5c">1号泵</text>
+          <text x="320" y="312" text-anchor="middle" font-size="20" font-family="SimSun,serif" class="num" id="vPump" fill="#2b4f91">运行</text>
+          <text x="320" y="330" text-anchor="middle" font-size="9" fill="#6f6a5c">0.42 MPa · 12.4 A</text>
+        </g>
+        <g>
+          <circle cx="320" cy="53" r="7" fill="#f0ead8" stroke="#141311" stroke-width="1.5"/>
+          <circle cx="320" cy="53" r="2.5" fill="#141311"/>
+          <text x="320" y="36" text-anchor="middle" font-size="10" fill="#6f6a5c">回水 · 今日 86 m³</text>
+        </g>
+        <text x="14" y="20" font-size="9" fill="#6f6a5c" letter-spacing="1">FIG. 02 — 供水回路，非比例</text>
+      </svg>
+    </div>
+
+    <div class="figures">
+      <div class="fig"><div class="k">总功率</div><div class="v num">12.4<small>kW</small></div></div>
+      <div class="fig"><div class="k">今日电量</div><div class="v num">124<small>kWh</small></div></div>
+      <div class="fig"><div class="k">在线设备</div><div class="v num">3 / 3</div></div>
+    </div>
+
+    <div class="lower">
+      <section>
+        <h2><span>设备清单</span><span class="no">03</span></h2>
+        <table>
+          <thead><tr><th>设备</th><th>状态</th><th>主要值</th><th>更新</th></tr></thead>
+          <tbody>
+            <tr><td>1号泵</td><td class="ok">在线</td><td>0.42 MPa</td><td>2 分钟前</td></tr>
+            <tr><td>2号泵</td><td class="ok">在线</td><td>停止</td><td>2 分钟前</td></tr>
+            <tr><td>水箱</td><td class="ok">在线</td><td>68%</td><td>2 分钟前</td></tr>
+          </tbody>
+        </table>
+        <h2 style="margin-top:12px"><span>最近变化</span><span class="no">03</span></h2>
+        <div class="change"><span>1号泵 出口压力 0.44 → 0.42 MPa</span><em>2 分钟前</em></div>
+        <div class="change"><span>水箱 液位 71 → 68%</span><em>6 分钟前</em></div>
+        <div class="change"><span>2号泵 启动请求已回读</span><em>18 分钟前</em></div>
+      </section>
+      <section>
+        <h2><span>最近数据</span><button class="link" id="allHist">查看全部</button></h2>
+        <table>
+          <thead><tr><th>时间</th><th>出口压力</th><th>目标</th><th>电流</th></tr></thead>
+          <tbody id="recentBody"></tbody>
+        </table>
+      </section>
+    </div>
+  </main>
+
+  <aside>
+    <div class="cap"><span>告警中心</span><button class="bell" id="bell">待处理 <b>2</b></button></div>
+    <section>
+      <h2>告警</h2>
+      <div class="alarm"><div class="t">2号泵 出口压力低</div><div class="m">预警 · 3 分钟前 · 未接手</div></div>
+      <div class="alarm"><div class="t">水箱 液位偏低</div><div class="m">提示 · 12 分钟前 · 未接手</div></div>
+    </section>
+    <section>
+      <h2>今日执行</h2>
+      <div class="run"><span>14:00 饮水线冲洗</span><span class="r">完成</span></div>
+      <div class="run"><span>09:00 备用泵试转</span><span class="r">完成</span></div>
+      <div class="run"><span>07:00 采暖预循环</span><span class="r skip">跳过</span></div>
+      <div class="run" style="border:0;color:#8f897a;font-size:9.5px">回水 36℃，无需预循环</div>
+    </section>
+    <section>
+      <h2>这一层</h2>
+      <table>
+        <tbody>
+          <tr><td>更新</td><td class="num">21:34:02</td></tr>
+          <tr><td>采样</td><td class="num">5 秒</td></tr>
+          <tr><td>通信</td><td>正常</td></tr>
+          <tr><td>数据质量</td><td class="num">99.2%</td></tr>
+        </tbody>
+      </table>
+    </section>
+    <div class="note">确认接手不等于设备恢复；超时未回读显示“结果未知”。</div>
+  </aside>
+</div>
+
+<div class="drawer" id="drawer">
+  <h2><span>告警中心 · 2 条</span><button class="x" id="closeDrawer">关闭</button></h2>
+  <div class="alarm"><div class="t">2号泵 出口压力低</div><div class="m">预警 · 3 分钟前 · 2号泵</div>
+    <div class="act"><button>确认接手</button><button>定位到设备</button><button>看历史</button></div></div>
+  <div class="alarm"><div class="t">水箱 液位偏低</div><div class="m">提示 · 12 分钟前 · 水箱</div>
+    <div class="act"><button>确认接手</button><button>定位到设备</button><button>看历史</button></div></div>
+  <p style="font-size:9.5px;color:#8f897a;line-height:1.8">确认接手只表示有人处理；设备是否恢复看回读。</p>
+</div>
+
+<div class="hist" id="hist">
+  <button class="link" id="histBack">← 返回</button>
+  <h1>1号泵 · 出口压力</h1>
+  <div class="sub">最近 15 分钟 · 5 秒/行 · 保留期 30 天 · 缺失段不补值</div>
+  <table><thead><tr><th>时间</th><th>出口压力 MPa</th><th>目标压力 MPa</th><th>电流 A</th><th>运行状态</th><th>质量</th></tr></thead>
+    <tbody id="histBody"></tbody></table>
+</div>
+
+<script>
+const RECENT = [['21:34:00','0.42','0.45','13.2'],['21:33:55','0.43','0.45','13.2'],
+  ['21:33:50','0.43','0.45','13.1'],['21:33:45','0.44','0.45','13.0'],['21:33:40','0.44','0.45','12.8']];
+const LAYERS = {
+  area:{crumb:'教学泵房 / 泵房', title:'泵房', sub:'供水回路 · 水箱 → 泵 → 管网',
+    tank:'68%', pump:'运行', net:'0.42 MPa'},
+  site:{crumb:'教学泵房', title:'教学泵房', sub:'全站回路 · 3 台设备在线',
+    tank:'68%', pump:'运行', net:'0.42 MPa'},
+  d1:{crumb:'教学泵房 / 泵房 / 1号泵', title:'1号泵', sub:'设备 · 出口压力与目标值',
+    tank:'68%', pump:'运行', net:'0.42 MPa'},
+  d2:{crumb:'教学泵房 / 泵房 / 2号泵', title:'2号泵', sub:'设备 · 待机，出口阀关闭',
+    tank:'68%', pump:'停止', net:'0.00 MPa'},
+  t1:{crumb:'教学泵房 / 泵房 / 水箱', title:'水箱', sub:'设备 · 液位与补水',
+    tank:'68%', pump:'运行', net:'0.42 MPa'},
+  unit:{crumb:'教学泵房 / 供水单元', title:'供水单元', sub:'业务单元 · 三个成员角色',
+    tank:'68%', pump:'运行', net:'0.42 MPa'}
+};
+function renderRecent(){
+  document.getElementById('recentBody').innerHTML = RECENT.map(r =>
+    `<tr><td class="num">${r[0]}</td><td class="num">${r[1]}</td><td class="num">${r[2]}</td><td class="num">${r[3]}</td></tr>`).join('');
+}
+function render(layer){
+  const d = LAYERS[layer];
+  document.getElementById('crumb').textContent = d.crumb;
+  document.getElementById('title').textContent = d.title;
+  document.getElementById('subtitle').textContent = d.sub;
+  document.getElementById('vTank').textContent = d.tank;
+  document.getElementById('vPump').textContent = d.pump;
+  document.getElementById('vNet').textContent = d.net;
+  document.querySelectorAll('#tree button').forEach(b => b.classList.toggle('on', b.dataset.layer === layer));
+}
+document.getElementById('tree').addEventListener('click', e => {
+  const b = e.target.closest('button[data-layer]');
+  if (b) render(b.dataset.layer);
+});
+document.getElementById('bell').addEventListener('click', () => document.getElementById('drawer').classList.add('open'));
+document.getElementById('closeDrawer').addEventListener('click', () => document.getElementById('drawer').classList.remove('open'));
+document.getElementById('allHist').addEventListener('click', () => {
+  const rows = [];
+  const base = new Date('2026-11-22T21:34:00');
+  for (let i = 0; i < 24; i++) {
+    const t = new Date(base.getTime() - i * 5000).toLocaleTimeString('zh-CN', { hour12:false });
+    rows.push([t, (0.42 + Math.sin(i/3)*0.02).toFixed(2), '0.45', (12.4 + Math.cos(i/4)*.8).toFixed(1), '运行']);
+  }
+  document.getElementById('histBody').innerHTML = rows.map(r =>
+    `<tr><td class="num">${r[0]}</td><td class="num">${r[1]}</td><td class="num">${r[2]}</td>
+     <td class="num">${r[3]}</td><td>${r[4]}</td><td class="ok">有效</td></tr>`).join('');
+  document.getElementById('hist').classList.add('open');
+});
+document.getElementById('histBack').addEventListener('click', () => document.getElementById('hist').classList.remove('open'));
+renderRecent(); render('area');
+</script>
+</body>
+</html>

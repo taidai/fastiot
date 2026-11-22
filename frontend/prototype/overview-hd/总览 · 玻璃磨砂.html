@@ -1,0 +1,892 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FastIOT · 总览 · 玻璃磨砂</title>
+<style>
+  :root{
+    --radius:18px;
+    --sans:"Helvetica Neue",Arial,"Microsoft YaHei","PingFang SC",sans-serif;
+    --mono:"SFMono-Regular",Consolas,"Roboto Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%}
+  body{
+    font-family:var(--sans);min-height:100vh;padding:16px;display:flex;flex-direction:column;gap:14px;
+    background:#0a1219;color:#e8f1f6;transition:background .4s,color .4s;overflow-x:hidden;
+  }
+  /* background */
+  .bg{position:fixed;inset:0;z-index:-1;overflow:hidden;transition:background .4s}
+  .bg i{position:absolute;border-radius:50%;filter:blur(70px);opacity:.55;transition:background .4s}
+  .bg i.a{width:620px;height:620px;left:-120px;top:-140px;background:#0f5f5a}
+  .bg i.b{width:720px;height:720px;right:-160px;top:-60px;background:#1d3f7a}
+  .bg i.c{width:560px;height:560px;left:38%;bottom:-260px;background:#2a6f7d}
+  .bg:before{content:"";position:absolute;inset:0;
+    background-image:linear-gradient(rgba(255,255,255,.05) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(255,255,255,.05) 1px,transparent 1px);
+    background-size:54px 54px;
+    -webkit-mask-image:radial-gradient(1200px 700px at 50% 20%,#000 20%,transparent 80%);
+    mask-image:radial-gradient(1200px 700px at 50% 20%,#000 20%,transparent 80%)}
+  .bg:after{content:"";position:absolute;inset:0;opacity:.05;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='.6'/%3E%3C/svg%3E")}
+  .bg-plan{position:absolute;inset:0;width:100%;height:100%;color:rgba(255,255,255,.13)}
+  .bg-scene{position:absolute;inset:-10%;pointer-events:none;opacity:.58;
+    filter:blur(20px) saturate(1.15);transform:scale(1.06)}
+  .bg-scene svg{display:block;width:100%;height:100%}
+  body[data-theme="light"] .bg-scene{opacity:.62}
+  body[data-theme="tint"] .bg-scene{opacity:.38}
+  body[data-theme="light"] .bg-plan{color:rgba(18,40,60,.14)}
+  body[data-theme="tint"] .bg-plan{color:rgba(180,255,245,.16)}
+  /* themes */
+  body[data-theme="light"]{background:#cfe1ee;color:#122029}
+  body[data-theme="light"] .bg{background:linear-gradient(160deg,#d3e4f0,#c2d8e8 45%,#dcebf1)}
+  body[data-theme="light"] .bg i.a{background:#6cc3b8;opacity:1}
+  body[data-theme="light"] .bg i.b{background:#7fa9e0;opacity:1}
+  body[data-theme="light"] .bg i.c{background:#a6dde0;opacity:.95}
+  body[data-theme="light"] .bg:before{background-image:linear-gradient(rgba(20,40,60,.08) 1px,transparent 1px),linear-gradient(90deg,rgba(20,40,60,.08) 1px,transparent 1px)}
+  body[data-theme="tint"]{background:#0c2a30;color:#e9faf7}
+  body[data-theme="tint"] .bg{background:linear-gradient(150deg,#0f3b3a,#123c56 55%,#0d2a33)}
+  body[data-theme="tint"] .bg i.a{background:#1f8f86;opacity:.7}
+  body[data-theme="tint"] .bg i.b{background:#2c5f9e;opacity:.7}
+  body[data-theme="tint"] .bg i.c{background:#3aa79b;opacity:.55}
+
+  body[data-theme="dark"],body[data-theme="tint"]{
+    --ink:#e8f1f6;--muted:rgba(232,241,246,.62);--line:rgba(255,255,255,.12);
+    --glass:rgba(18,30,40,.52);--glass-strong:rgba(12,22,30,.72);
+    --border:rgba(255,255,255,.14);--accent:#4fd1c5;--alarm:#ff9b6b;--blue:#7fb2ff;
+    --shadow:0 18px 50px rgba(0,0,0,.35);--inner:inset 0 1px 0 rgba(255,255,255,.12);--popover:rgba(12,22,30,.92)
+  }
+  body[data-theme="light"]{
+    --ink:#122029;--muted:rgba(18,32,41,.6);--line:rgba(18,32,41,.14);
+    --glass:rgba(255,255,255,.42);--glass-strong:rgba(255,255,255,.8);
+    --border:rgba(255,255,255,.92);--accent:#0d6f6e;--alarm:#b8442c;--blue:#1a5b96;
+    --shadow:0 20px 48px rgba(31,58,80,.22);--inner:inset 0 1px 0 rgba(255,255,255,.95);--popover:rgba(255,255,255,.94)
+  }
+  body[data-theme="tint"]{
+    --glass:rgba(190,240,235,.12);--glass-strong:rgba(8,30,34,.7);
+    --border:rgba(180,255,245,.22);--accent:#7ce0d3;--alarm:#ffb08a;--blue:#a8d8ff;
+    --shadow:0 18px 50px rgba(0,20,25,.45);--inner:inset 0 1px 0 rgba(255,255,255,.18);--popover:rgba(8,30,34,.9)
+  }
+
+  .glass{
+    background:
+      linear-gradient(112deg,rgba(255,255,255,.36) 0%,rgba(255,255,255,.09) 36%,rgba(255,255,255,.01) 62%,rgba(255,255,255,.18) 100%),
+      var(--glass);
+    backdrop-filter:blur(32px) saturate(1.55) contrast(1.02);
+    -webkit-backdrop-filter:blur(32px) saturate(1.55) contrast(1.02);
+    border:2px solid var(--border);border-radius:var(--radius);
+    box-shadow:var(--shadow),var(--inner),inset 0 0 0 1px rgba(255,255,255,.28),
+      inset 1px 0 0 rgba(255,255,255,.45),inset 0 -1px 0 rgba(255,255,255,.25),
+      inset 0 0 18px rgba(255,255,255,.24);
+  }
+  .num{font-variant-numeric:tabular-nums}
+  button{font:inherit;color:inherit}
+  .link{background:none;border:0;font-size:12px;color:var(--ink);text-decoration:underline;cursor:pointer;padding:0}
+  /* masthead */
+  header.mast{display:grid;grid-template-columns:180px 1fr auto auto auto;align-items:center;gap:20px;padding:12px 18px;position:relative;z-index:30}
+  .brand{font-weight:700;font-size:16px;letter-spacing:.02em}
+  .brand span{font-weight:400;color:var(--muted);margin-left:8px;font-size:11px;letter-spacing:.14em}
+  .proj{font-size:12.5px;color:var(--muted)}
+  .proj b{color:var(--ink);font-weight:600}
+  .meta{font-size:11px;color:var(--muted)}
+  .bell{border:1px solid var(--border);background:rgba(255,255,255,.06);padding:7px 12px;font-size:12px;
+    cursor:pointer;display:flex;gap:8px;align-items:center;border-radius:12px;backdrop-filter:blur(10px)}
+  body[data-theme="light"] .bell{background:rgba(255,255,255,.6)}
+  .bell b{color:var(--alarm);font-size:14px}
+  /* frame */
+  .frame{flex:1;display:grid;grid-template-columns:200px 1fr 320px;gap:14px;min-height:0}
+  /* index */
+  nav.index{padding:16px 0;display:flex;flex-direction:column;overflow:auto}
+  .idx-head{font-size:10px;letter-spacing:.18em;color:var(--muted);padding:0 18px 10px;display:flex;justify-content:space-between}
+  nav.index button{border:0;background:none;text-align:left;font-size:12.5px;color:var(--ink);
+    padding:9px 18px;border-left:3px solid transparent;cursor:pointer;line-height:1.4;border-radius:0}
+  nav.index button i{font-style:normal;color:var(--muted);margin-right:8px;font-size:10.5px}
+  nav.index button em{font-style:normal;float:right;color:var(--alarm);font-size:11px}
+  nav.index button:hover{background:rgba(255,255,255,.06)}
+  body[data-theme="light"] nav.index button:hover{background:rgba(22,36,46,.05)}
+  nav.index button.on{border-left-color:var(--accent);font-weight:600;background:rgba(255,255,255,.07)}
+  body[data-theme="light"] nav.index button.on{background:rgba(255,255,255,.65)}
+  nav.index .gap{height:1px;background:var(--line);margin:12px 18px}
+  nav.index .layer-meta{padding:2px 18px;font-size:11px;color:var(--muted);line-height:1.9}
+  /* stage */
+  main.stage{display:flex;flex-direction:column;gap:14px;min-width:0;overflow:auto;padding-right:2px}
+  .hero{padding:16px 20px 4px}
+  .crumb{font-size:11px;color:var(--muted);letter-spacing:.06em}
+  .headline{display:flex;justify-content:space-between;align-items:baseline;gap:16px;margin:4px 0 0}
+  h1{margin:0;font-size:34px;letter-spacing:-.02em;font-weight:700}
+  .online{font-size:12px;color:var(--muted);white-space:nowrap}
+  .online b{color:var(--accent);font-weight:600}
+  .metrics{display:grid;grid-template-columns:repeat(6,1fr);margin-top:14px;padding:12px 0 10px;border-top:1px solid var(--line)}
+  .metric{padding:4px 12px;border-left:1px solid var(--line)}
+  .metric:first-child{border-left:0;padding-left:0}
+  .metric .k{font-size:10.5px;color:var(--muted)}
+  .metric .v{font-size:25px;font-weight:600;margin-top:4px;letter-spacing:-.01em}
+  .metric .v small{font-size:10.5px;font-weight:400;color:var(--muted);margin-left:3px}
+  .metric.alert .v{color:var(--alarm)}
+  /* chain panel */
+  .chain-wrap{padding:6px 20px 14px}
+  .chain{position:relative;display:grid;grid-template-columns:1fr 40px 1fr 40px 1fr;align-items:center;padding:16px 0 6px}
+  .chain:before{content:"";position:absolute;left:0;right:0;top:50%;height:1px;
+    background:linear-gradient(90deg,transparent,var(--line) 12%,var(--line) 88%,transparent)}
+  .node{position:relative;z-index:1;padding:10px 12px;background:rgba(255,255,255,.04);border:1px solid var(--line);
+    border-radius:14px;backdrop-filter:blur(8px)}
+  body[data-theme="light"] .node{background:rgba(255,255,255,.55)}
+  .node .name{font-size:11.5px;color:var(--muted)}
+  .node .val{font-size:28px;font-weight:600;line-height:1.1;margin-top:2px;white-space:nowrap}
+  .node .exp{font-size:10.5px;color:var(--muted);margin-top:4px}
+  .node.live{border-color:rgba(79,209,197,.45);box-shadow:0 0 24px rgba(79,209,197,.15)}
+  body[data-theme="light"] .node.live{border-color:rgba(14,124,123,.4);box-shadow:0 0 20px rgba(14,124,123,.12)}
+  .node.live .val{color:var(--accent)}
+  .chain .arrow{position:relative;z-index:1;height:1px;margin:0 4px;
+    background:linear-gradient(90deg,transparent,var(--accent));opacity:.7}
+  .chain .arrow:after{content:"";position:absolute;right:-1px;top:-3.5px;border-left:7px solid var(--accent);
+    border-top:3.5px solid transparent;border-bottom:3.5px solid transparent}
+  /* lower */
+  .lower{display:grid;grid-template-columns:1.3fr 1fr;gap:14px}
+  .panel{padding:14px 16px}
+  h2{font-size:11.5px;letter-spacing:.08em;color:var(--muted);margin:0 0 8px;font-weight:600;
+    display:flex;justify-content:space-between;align-items:baseline}
+  h2 .acts{letter-spacing:0;display:flex;gap:10px}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{text-align:left;font-size:10.5px;letter-spacing:.04em;color:var(--muted);font-weight:600;
+    padding:6px 8px;border-bottom:1px solid var(--line)}
+  td{padding:8px;border-bottom:1px solid var(--line)}
+  tr:last-child td{border-bottom:0}
+  td.name{font-weight:600}
+  .ok{color:var(--accent)}
+  /* tabs */
+  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:6px}
+  .tabs button{background:none;border:0;border-bottom:2px solid transparent;font-size:12.5px;
+    padding:7px 12px;cursor:pointer;color:var(--muted)}
+  .tabs button.on{color:var(--ink);border-bottom-color:var(--accent);font-weight:600}
+  /* daily */
+  .daily{padding:12px 18px;display:grid;grid-template-columns:repeat(4,1fr) 2fr;gap:0;align-items:end;margin-top:auto}
+  .dfig{padding:2px 14px;border-left:1px solid var(--line)}
+  .dfig:first-child{border-left:0;padding-left:0}
+  .dfig span{display:block;font-size:10px;letter-spacing:.06em;color:var(--muted)}
+  .dfig b{font-size:21px;font-weight:600}
+  .dfig b small{font-size:10px;font-weight:400;color:var(--muted);margin-left:2px}
+  .bars-wrap{padding-left:14px;border-left:1px solid var(--line)}
+  .bcap{font-size:10px;color:var(--muted);margin-bottom:6px}
+  .bars{display:flex;align-items:flex-end;gap:2px;height:54px}
+  .bars i{flex:1;background:var(--accent);opacity:.28;border-radius:2px 2px 0 0}
+  .bars i.on{opacity:.85}
+  .colophon{padding:2px 4px 0;display:flex;justify-content:space-between;font-size:9.5px;color:var(--muted)}
+  /* side */
+  aside.side{padding:16px 18px;display:flex;flex-direction:column;gap:18px;overflow:auto}
+  aside h2{display:flex;justify-content:space-between;align-items:baseline}
+  aside h2 b{font-size:25px;color:var(--alarm)}
+  .alarm{border-top:1px solid var(--line);padding:10px 0;font-size:12.5px;position:relative}
+  .alarm:first-of-type{border-top:0;padding-top:2px}
+  .alarm .t{font-weight:600;padding-right:52px}
+  .alarm .m{font-size:10.5px;color:var(--muted);margin-top:2px}
+  .alarm .ack{position:absolute;right:0;top:10px;border:1px solid var(--border);background:rgba(255,255,255,.06);
+    font-size:10.5px;padding:3px 8px;cursor:pointer;color:var(--muted);border-radius:8px}
+  .alarm.done .t{font-weight:400;color:var(--muted);text-decoration:line-through}
+  .run{display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:7px 0;border-top:1px solid var(--line)}
+  .run:first-of-type{border-top:0}
+  .run .r{color:var(--muted);font-size:10.5px}
+  .run .r.done{color:var(--accent)}
+  .run .r.skip{color:var(--alarm)}
+  .handover{margin-top:auto;border-top:1px solid var(--line);padding-top:10px;font-size:12px;line-height:1.75}
+  /* overlays */
+  .drawer{position:fixed;top:16px;right:16px;bottom:16px;width:380px;max-width:92vw;z-index:10;
+    transform:translateX(calc(100% + 24px));transition:transform .25s ease;padding:20px;overflow:auto;
+    background:var(--glass-strong);backdrop-filter:blur(26px);border:1px solid var(--border);border-radius:18px;
+    box-shadow:var(--shadow)}
+  .drawer.open{transform:none}
+  .drawer h2{font-size:12px;letter-spacing:.08em;display:flex;justify-content:space-between;color:var(--ink)}
+  .drawer button.x{background:rgba(255,255,255,.06);border:1px solid var(--border);color:var(--ink);
+    padding:3px 9px;cursor:pointer;font:inherit;border-radius:8px}
+  .drawer .alarm{border-color:var(--line)}
+  .drawer .act{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+  .drawer .act button{background:rgba(255,255,255,.06);border:1px solid var(--border);color:var(--ink);
+    font:inherit;font-size:11px;padding:5px 9px;cursor:pointer;border-radius:8px}
+  .drawer .note{font-size:11px;color:var(--muted);line-height:1.7;margin-top:14px}
+  .op-rows .row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line);font-size:12.5px}
+  .op-result{margin-top:10px;font-size:11px;color:var(--muted);min-height:18px}
+  /* history */
+  .hist{position:fixed;inset:16px;z-index:12;display:none;overflow:auto;padding:18px 20px;
+    background:var(--glass-strong);backdrop-filter:blur(26px);border:1px solid var(--border);border-radius:18px;
+    box-shadow:var(--shadow)}
+  .hist.open{display:block}
+  .hist-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .hist-head h1{font-size:24px;margin:0}
+  .hist-head .spacer{flex:1}
+  .hist-sub{font-size:11px;color:var(--muted);margin:4px 0 12px}
+  .hist-bar{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+  .chips{display:flex;gap:4px;flex-wrap:wrap}
+  .chips button{border:1px solid var(--border);background:rgba(255,255,255,.06);padding:4px 10px;
+    font-size:11px;cursor:pointer;color:var(--muted);border-radius:8px}
+  .chips button.on{border-color:var(--accent);color:var(--ink);font-weight:600;background:rgba(79,209,197,.12)}
+  .hist-table{max-height:calc(100vh - 230px);overflow:auto;border:1px solid var(--line);border-radius:12px;
+    background:rgba(255,255,255,.03)}
+  .hist-table th{position:sticky;top:0;background:var(--glass-strong);z-index:1;backdrop-filter:blur(18px)}
+  .hist-table td,.hist-table th{font-size:11.5px;white-space:nowrap}
+  .hist-chart{border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.03);padding:14px 16px}
+  .hist-chart svg{display:block;width:100%;height:420px}
+  .hist-foot{display:flex;justify-content:space-between;font-size:10.5px;color:var(--muted);margin-top:8px}
+  /* appearance popover */
+  .appearance{position:relative}
+  .tweaks-btn{border:1px solid var(--border);background:rgba(255,255,255,.06);color:var(--ink);
+    font-size:11px;padding:6px 12px;border-radius:10px;cursor:pointer;backdrop-filter:blur(10px)}
+  body[data-theme="light"] .tweaks-btn{background:rgba(255,255,255,.55)}
+  .tweaks{position:absolute;top:calc(100% + 8px);right:0;width:238px;padding:12px;z-index:40;display:none;
+    background:var(--popover);backdrop-filter:blur(30px);border:1px solid var(--border);
+    border-radius:14px;box-shadow:var(--shadow)}
+  .tweaks.open{display:block}
+  .tw-head{font-size:10px;letter-spacing:.12em;color:var(--muted);margin-bottom:8px}
+  .tw-chips{display:flex;gap:4px;margin-bottom:12px}
+  .tw-chips button{border:1px solid var(--border);background:rgba(255,255,255,.05);color:var(--muted);
+    font-size:11px;padding:4px 9px;border-radius:8px;cursor:pointer}
+  .tw-chips button.on{border-color:var(--accent);color:var(--ink);background:rgba(79,209,197,.12)}
+  .tw-alpha{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted)}
+  .tw-alpha input{flex:1;accent-color:var(--accent);min-width:0}
+  .tw-alpha b{color:var(--ink);font-size:11px;min-width:34px;text-align:right}
+  .tweaks .link{margin-top:10px;font-size:10.5px}
+  .toast{position:fixed;left:50%;bottom:64px;transform:translateX(-50%) translateY(14px);z-index:20;
+    background:var(--glass-strong);backdrop-filter:blur(18px);border:1px solid var(--border);color:var(--ink);
+    font-size:12px;padding:9px 14px;border-radius:12px;opacity:0;transition:.2s;pointer-events:none}
+  .toast.show{opacity:1;transform:translateX(-50%)}
+  /* reference light glass */
+  body[data-theme="light"]{
+    --ink:#172c3b;--muted:rgba(23,44,59,.56);--line:rgba(67,104,130,.13);
+    --glass:rgba(255,255,255,.58);--glass-strong:rgba(255,255,255,.88);
+    --border:rgba(255,255,255,.78);--accent:#0c7d84;--alarm:#b85b35;--blue:#2877b7;
+    --shadow:0 22px 55px rgba(45,83,110,.15);--inner:inset 0 1px 0 rgba(255,255,255,.95);--popover:rgba(255,255,255,.96)
+  }
+  body[data-theme="light"] .bg{background:linear-gradient(145deg,#eef4f8 0%,#d9e8f0 48%,#f1f7fa 100%)}
+  body[data-theme="light"] .bg i.a{background:#95d5d2;opacity:.55}
+  body[data-theme="light"] .bg i.b{background:#98bfe8;opacity:.65}
+  body[data-theme="light"] .bg i.c{background:#bfe8e7;opacity:.65}
+  body[data-theme="light"] .bg-plan{color:rgba(52,94,119,.12)}
+  body[data-theme="light"] .glass{border-radius:20px}
+  body[data-theme="light"] .mast{background:var(--glass)}
+  body[data-theme="light"] .index{background:var(--glass)}
+  body[data-theme="light"] .hero{background:var(--glass)}
+  body[data-theme="light"] .metric{background:rgba(255,255,255,.58);border:1px solid rgba(255,255,255,.9);
+    border-radius:14px;padding:10px 12px;margin:0 6px;
+    box-shadow:0 8px 24px rgba(54,92,120,.07),inset 0 0 0 1px rgba(255,255,255,.2),inset 0 0 12px rgba(255,255,255,.3)}
+  body[data-theme="light"] .metric:first-child{margin-left:0}
+  body[data-theme="light"] .metric:last-child{margin-right:0}
+  body[data-theme="light"] .metric .v{font-size:24px;color:#183247}
+  body[data-theme="light"] .metric .k{display:flex;align-items:center;gap:7px;font-size:10.5px}
+  body[data-theme="light"] .metric .k svg{width:16px;height:16px;stroke:#3b8aa8;stroke-width:1.6;fill:none}
+  body[data-theme="light"] .chain-wrap{padding:0;overflow:hidden;background:rgba(255,255,255,.38)}
+  body[data-theme="light"] .chain-wrap .scene{display:block;width:100%;height:280px}
+  body[data-theme="light"] .side{background:var(--glass)}
+  body[data-theme="light"] .daily{background:var(--glass)}
+  body[data-theme="light"] .panel{background:var(--glass)}
+  .scene-stage{position:relative;height:280px;overflow:hidden;border-radius:0 0 20px 20px}
+  .scene-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px 4px;
+    color:#294b62;font-size:14px;font-weight:600}
+  .scene-head small{font-size:10px;font-weight:400;color:#698598;margin-left:10px}
+  .scene-head .tools{display:flex;gap:4px;font-size:10px;font-weight:400}
+  .scene-head .tools span{padding:4px 9px;border:1px solid rgba(255,255,255,.9);border-radius:8px;
+    background:rgba(255,255,255,.55);color:#426c86}
+  .scene-head .tools span.on{background:rgba(255,255,255,.95);color:#1b536f}
+  .scene-label{position:absolute;z-index:2;padding:8px 12px;
+    background:linear-gradient(135deg,rgba(255,255,255,.32),rgba(255,255,255,.08)),rgba(255,255,255,.56);
+    backdrop-filter:blur(18px) saturate(1.3);border:1.5px solid rgba(255,255,255,.88);border-radius:12px;
+    box-shadow:0 8px 22px rgba(54,92,120,.1),inset 0 1px 0 rgba(255,255,255,.85),inset 0 0 10px rgba(255,255,255,.3);color:#23465a;font-size:11px}
+  .scene-label .name{display:flex;align-items:center;gap:7px;color:#426174}
+  .scene-label .v{display:block;font-size:21px;font-weight:600;margin-top:2px;color:#15354c}
+  .scene-label .v small{font-size:10px;font-weight:400;color:#52728a;margin-left:3px}
+  .scene-label.a{left:4%;top:17%}
+  .scene-label.b{left:33%;bottom:10%}
+  .scene-label.c{right:4%;top:20%}
+  .scene-tools{position:absolute;right:12px;bottom:10px;z-index:2;display:flex;gap:10px;
+    font-size:10px;color:#4c7188}
+  .scene-legend{position:absolute;left:12px;bottom:10px;z-index:2;display:flex;gap:14px;
+    font-size:10px;color:#4c7188}
+  .scene-legend i{display:inline-block;width:16px;height:2px;background:#3c9da5;margin-right:5px;vertical-align:middle}
+  .scene-legend i.off{background:#9eb2bd}
+  /* responsive */
+  @media (max-width:1150px){
+    .frame{grid-template-columns:170px 1fr}
+    aside.side{display:none}
+    header.mast{grid-template-columns:1fr auto}
+    .proj,.meta,.appearance{display:none}
+  }
+  @media (max-width:760px){
+    body{padding:10px;gap:10px}
+    .frame{display:block}
+    nav.index{position:sticky;top:8px;z-index:6;display:flex;flex-direction:row;overflow-x:auto;
+      padding:6px;margin-bottom:10px;border-radius:14px}
+    .idx-head,.layer-meta,.index .gap{display:none}
+    nav.index button{white-space:nowrap;border-left:0;border-bottom:2px solid transparent;padding:8px 10px;font-size:12px}
+    nav.index button.on{border-bottom-color:var(--accent);background:transparent}
+    .stage{overflow:visible;gap:10px}
+    .hero{padding:14px}
+    h1{font-size:29px}
+    .metrics{grid-template-columns:repeat(3,1fr);padding-top:10px}
+    .metric{padding:2px 8px}
+    .metric:nth-child(4){border-left:0;padding-left:0}
+    .metric .v{font-size:20px}
+    .chain-wrap{padding:4px 14px 12px}
+    .chain{grid-template-columns:1fr;gap:8px;padding:8px 0}
+    .chain:before,.chain .arrow{display:none}
+    .node{padding:8px 10px}
+    .node .val{font-size:24px}
+    .lower{grid-template-columns:1fr;gap:10px}
+    .daily{grid-template-columns:1fr 1fr;gap:8px 0;margin-top:0}
+    .bars-wrap{grid-column:1 / -1;border-left:0;padding-left:0}
+    .colophon{flex-direction:column;gap:3px}
+    aside.side{display:block;margin-top:10px}
+    .drawer{top:8px;right:8px;bottom:8px;left:8px;width:auto;max-width:none}
+    .hist{inset:8px;padding:14px}
+    .hist-head h1{font-size:20px}
+    .theme-switch{bottom:10px}
+  }
+</style>
+</head>
+<body data-theme="light">
+<div class="bg"><i class="a"></i><i class="b"></i><i class="c"></i>
+  <svg class="bg-plan" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+    <g fill="none" stroke="currentColor" stroke-width="1.5">
+      <circle cx="1120" cy="640" r="210"/><circle cx="1120" cy="640" r="74"/>
+      <path d="M0 706 H 520 V 566 H 900 V 706 H 1440"/>
+      <path d="M172 900 V 372 H 520"/>
+      <rect x="622" y="168" width="280" height="148" rx="6"/>
+      <circle cx="292" cy="196" r="92"/>
+      <path d="M200 196 h184 M292 104 v184"/>
+      <path d="M1240 300 V 120 H 980"/>
+    </g>
+  </svg>
+</div>
+
+<header class="mast glass">
+  <div class="brand">FastIOT<span>总览</span></div>
+  <div class="proj">项目 <b>教学泵房</b></div>
+  <div class="meta" id="meta">更新于 21:34:02 · 通信正常 · 数据质量 99.2% · 采样 5 秒</div>
+  <div class="appearance">
+    <button class="tweaks-btn" id="tweaksBtn" aria-expanded="false">外观</button>
+    <div class="tweaks" id="tweaks" role="dialog" aria-label="外观设置">
+      <div class="tw-head">外观</div>
+      <div class="tw-chips" id="themeChips">
+        <button data-theme-btn="light" class="on">日间</button>
+        <button data-theme-btn="dark">夜间</button>
+        <button data-theme-btn="tint">青玻璃</button>
+      </div>
+      <label class="tw-alpha">透明度
+        <input type="range" id="alphaRange" min="20" max="85" step="1" value="42">
+        <b id="alphaVal">42%</b>
+      </label>
+      <button class="link" id="alphaReset">恢复默认</button>
+    </div>
+  </div>
+  <button class="bell" id="bell">告警中心 <b id="bellN">2</b></button>
+</header>
+
+<div class="frame">
+  <nav class="index glass" id="tree">
+    <div class="idx-head"><span>台账</span><span>06</span></div>
+    <button data-layer="site"><i>01</i>现场 · 教学泵房</button>
+    <button data-layer="area" class="on"><i>02</i>区域 · 泵房</button>
+    <button data-layer="d1"><i>03</i>设备 · 1号泵</button>
+    <button data-layer="d2"><i>04</i>设备 · 2号泵<em>1</em></button>
+    <button data-layer="t1"><i>05</i>设备 · 水箱<em>1</em></button>
+    <div class="gap"></div>
+    <button data-layer="unit"><i>06</i>单元 · 供水单元</button>
+    <div class="gap"></div>
+    <div class="layer-meta" id="layerMeta">设备 3 · 未绑定 0<br>告警 2 · 今日执行 3<br>按配界面显示</div>
+  </nav>
+
+  <main class="stage">
+    <section class="hero glass">
+      <div class="crumb" id="crumb">教学泵房 / 泵房</div>
+      <div class="headline">
+        <h1 id="title">泵房</h1>
+        <div class="online" id="online">在线 <b>3 / 3</b></div>
+      </div>
+      <section class="metrics" id="metrics"></section>
+    </section>
+
+    <div id="primary"></div>
+
+    <section class="daily glass" id="daily">
+      <div class="dfig"><span>今日电量</span><b>124 <small>kWh</small></b></div>
+      <div class="dfig"><span>运行时长</span><b>6.2 <small>h</small></b></div>
+      <div class="dfig"><span>通信成功率</span><b>99.2 <small>%</small></b></div>
+      <div class="dfig"><span>数据新鲜度</span><b>2 <small>秒</small></b></div>
+      <div class="bars-wrap"><div class="bcap">24 小时出口压力</div>
+        <div class="bars" id="bars"></div>
+      </div>
+    </section>
+    <div class="colophon"><span id="colophon">FastIOT · 教学泵房 · 第 02 层</span><span>数据来自本站项目包；未配置的层用默认块</span></div>
+  </main>
+
+  <aside class="side glass">
+    <section>
+      <h2>待处理 <b id="alarmN">2</b></h2>
+      <div id="alarmList"></div>
+    </section>
+    <section>
+      <h2>今日执行</h2>
+      <div class="run"><span>14:00 饮水线冲洗</span><span class="r done">完成</span></div>
+      <div class="run"><span>09:00 备用泵试转</span><span class="r done">完成</span></div>
+      <div class="run"><span>07:00 采暖预循环</span><span class="r skip">跳过</span></div>
+      <div class="run" style="color:var(--muted);font-size:10.5px">回水 36℃，无需预循环</div>
+    </section>
+    <section class="handover">
+      <h2>交接</h2>
+      <div>上一班 张工：2号泵检修后已恢复；夜间注意液位。</div>
+    </section>
+  </aside>
+</div>
+
+<div class="drawer" id="alarmDrawer">
+  <h2><span>告警中心 · <b id="drawerN">2</b> 条待处理</span><button class="x" data-close>关闭</button></h2>
+  <div id="drawerList"></div>
+  <p class="note">确认接手不等于设备恢复；超时未回读显示“结果未知”，不伪装成功。</p>
+</div>
+
+<div class="drawer" id="opDrawer">
+  <h2><span id="opTitle">操作 · 1号泵</span><button class="x" data-close>关闭</button></h2>
+  <div class="op-rows">
+    <div class="row"><span>当前值</span><span class="num">0.42 MPa</span></div>
+    <div class="row"><span>目标值</span><span class="num">0.45 MPa</span></div>
+    <div class="row"><span>运行状态</span><span>运行 · 自动</span></div>
+  </div>
+  <div class="act" style="margin-top:12px">
+    <button data-op="启动">启动</button>
+    <button data-op="停止">停止</button>
+    <button data-op="下发目标值 0.45 MPa">下发目标值</button>
+    <button data-op="接管自动">接管自动</button>
+  </div>
+  <div class="op-result" id="opResult"></div>
+  <p class="note">下发只是请求；回读确认后才算完成。接管不等于设备恢复。</p>
+</div>
+
+<div class="hist" id="hist">
+  <div class="hist-head">
+    <button class="link" id="histBack">← 返回</button>
+    <h1 id="histTitle">1号泵 · 出口压力</h1>
+    <span class="spacer"></span>
+    <button class="link" id="histExport">导出 CSV</button>
+  </div>
+  <div class="hist-sub" id="histSub">最近 15 分钟 · 5 秒/行 · 保留期 30 天 · 缺失段不补值</div>
+  <div class="hist-bar">
+    <div class="chips" id="rangeChips"></div>
+    <div class="chips" id="granChips"></div>
+    <div class="chips" id="viewChips"></div>
+  </div>
+  <div id="histBody"></div>
+  <div class="hist-foot"><span>数据质量 99.2% · 共 30 行</span><span>导出上限 2000 行</span></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const ALARMS = [
+  { id:'a1', title:'2号泵 出口压力低', level:'预警', at:'3 分钟前', device:'2号泵' },
+  { id:'a2', title:'水箱 液位偏低', level:'提示', at:'12 分钟前', device:'水箱' }
+];
+const ACKED = {};
+const DATA = {
+  site:{ no:'01', crumb:'教学泵房', title:'教学泵房', online:'3 / 3',
+    kpis:[['出口压力','0.42','MPa'],['总功率','12.4','kW'],['在线设备','3 / 3',''],
+      ['今日电量','124','kWh'],['告警','2','条',1],['通信成功率','99.2','%']],
+    chain:[{name:'水箱',val:'68%',exp:'液位 2.4 m · 容积 20 m³'},
+      {name:'1号泵',val:'运行',exp:'0.42 MPa · 12.4 A · 6.2 h',live:1},
+      {name:'供水管网',val:'0.42 MPa',exp:'流量 36 m³/h · 今日 86 m³'}],
+    list:'devices' },
+  area:{ no:'02', crumb:'教学泵房 / 泵房', title:'泵房', online:'3 / 3',
+    kpis:[['出口压力','0.42','MPa'],['总功率','12.4','kW'],['在线设备','3 / 3',''],
+      ['今日电量','124','kWh'],['告警','2','条',1],['通信成功率','99.2','%']],
+    chain:[{name:'水箱',val:'68%',exp:'液位 2.4 m · 容积 20 m³'},
+      {name:'1号泵',val:'运行',exp:'0.42 MPa · 12.4 A · 6.2 h',live:1},
+      {name:'供水管网',val:'0.42 MPa',exp:'流量 36 m³/h · 今日 86 m³'}],
+    list:'devices' },
+  d1:{ no:'03', crumb:'教学泵房 / 泵房 / 1号泵', title:'1号泵', online:'在线',
+    kpis:[['出口压力','0.42','MPa'],['出口流量','36','m³/h'],['运行状态','运行',''],
+      ['今日运行','6.2','h'],['电流','12.4','A'],['最近变化','2 分钟前','']],
+    device:true },
+  d2:{ no:'04', crumb:'教学泵房 / 泵房 / 2号泵', title:'2号泵', online:'在线',
+    kpis:[['出口压力','0.00','MPa'],['出口流量','0','m³/h'],['运行状态','停止',''],
+      ['今日运行','0.8','h'],['电流','0.0','A'],['最近变化','18 分钟前','']],
+    device:true },
+  t1:{ no:'05', crumb:'教学泵房 / 泵房 / 水箱', title:'水箱', online:'在线',
+    kpis:[['液位','68','%'],['容积','20','m³'],['补水状态','关闭',''],
+      ['今日补水','4.2','m³'],['温度','18.6','°C'],['最近变化','6 分钟前','']],
+    device:true },
+  unit:{ no:'06', crumb:'教学泵房 / 供水单元', title:'供水单元', online:'3 / 3',
+    kpis:[['供水压力','0.42','MPa'],['瞬时流量','36','m³/h'],['成员在线','3 / 3',''],
+      ['今日供水','86','m³'],['今日电量','124','kWh'],['通信成功率','99.2','%']],
+    list:'members' }
+};
+const DEVICES = [
+  ['1号泵','离心泵','在线','0.42 MPa','正常','2 分钟前'],
+  ['2号泵','离心泵','在线','停止','正常','2 分钟前'],
+  ['水箱','水箱','在线','68%','正常','2 分钟前']
+];
+const POINTS = [
+  ['出口压力','0.42','MPa','有效'],['目标压力','0.45','MPa','有效'],
+  ['运行状态','运行','','有效'],['电流','12.4','A','有效'],['故障','无','','有效']
+];
+const PARAMS = [
+  ['来源模板','离心泵 v1.3'],['型号','CDL-32'],['点位数','12'],['单位','kPa / MPa / A'],
+  ['最近验证','2026-11-19 · 张工']
+];
+const MEMBERS = [
+  ['驱动泵（必需）','1号泵','0.42 MPa','在线'],
+  ['出口压力（必需）','PT-01','0.42 MPa','在线'],
+  ['液位反馈（必需）','LT-01','68%','在线']
+];
+let current = 'area', tab = 'live';
+let histRange = '15分钟', histGran = '5秒', histView = '数据表', histTitleText = '1号泵 · 出口压力';
+let opLayer = 'd1';
+const $ = id => document.getElementById(id);
+
+function pending(){ return ALARMS.filter(a => !ACKED[a.id]) }
+function toast(text){
+  const el = $('toast'); el.textContent = text; el.classList.add('show')
+  clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.remove('show'), 1800)
+}
+function metricIcon(i){
+  const paths = [
+    '<path d="M4 12a8 8 0 1 1 16 0"/><path d="M12 12l4-4"/><path d="M12 4v2M4 12h2M18 12h2"/>',
+    '<path d="M13 2L5 13h6l-1 9 8-12h-6z"/>',
+    '<path d="M4 20V7l8-4 8 4v13"/><path d="M8 20v-6h8v6M8 9h2M14 9h2M8 12h2M14 12h2"/>',
+    '<rect x="4" y="7" width="15" height="11" rx="2"/><path d="M19 10h2v5h-2M8 10v5M12 10v5M16 10v5"/>',
+    '<path d="M6 16v-5a6 6 0 0 1 12 0v5l2 3H4z"/><path d="M10 21h4"/>',
+    '<path d="M4 18v-4M9 18V9M14 18V5M19 18V2"/>'
+  ]
+  return `<svg viewBox="0 0 24 24" aria-hidden="true">${paths[i] || paths[0]}</svg>`
+}
+function renderMetrics(d){
+  $('metrics').innerHTML = d.kpis.map((k, i) => `<div class="metric${k[3] ? ' alert' : ''}">
+    <div class="k">${metricIcon(i)}${k[0]}</div><div class="v num">${k[1]}${k[2] ? `<small>${k[2]}</small>` : ''}</div></div>`).join('')
+}
+function renderAlarms(){
+  const list = pending()
+  $('bellN').textContent = list.length; $('alarmN').textContent = list.length; $('drawerN').textContent = list.length
+  $('alarmList').innerHTML = list.length ? list.map(a => `<div class="alarm">
+      <div class="t">${a.title}</div><div class="m">${a.level} · ${a.at} · 待接手</div>
+      <button class="ack" data-ack="${a.id}">接手</button></div>`).join('')
+    : '<div class="alarm"><div class="t">没有待处理报警</div><div class="m">设备与数据正常。</div></div>'
+  $('drawerList').innerHTML = list.length ? list.map(a => `<div class="alarm">
+      <div class="t">${a.title}</div><div class="m">${a.level} · ${a.at} · ${a.device}</div>
+      <div class="act"><button data-ack="${a.id}">确认接手</button>
+        <button data-locate="${a.device}">定位到设备</button>
+        <button data-history="${a.device}">看历史</button></div></div>`).join('')
+    : '<p class="note">没有待处理报警。</p>'
+}
+function sceneSvg(){
+  const tree = (x,y,s=1) => `<g transform="translate(${x} ${y}) scale(${s})">
+    <ellipse cx="0" cy="4" rx="12" ry="4" fill="#7897a4" opacity=".16"/>
+    <path d="M0 0 V-26" stroke="#6b7778" stroke-width="3"/>
+    <ellipse cx="0" cy="-29" rx="12" ry="17" fill="#4c967d"/>
+    <ellipse cx="-5" cy="-35" rx="8" ry="11" fill="#63aa89"/>
+    <ellipse cx="5" cy="-29" rx="7" ry="12" fill="#3b876e"/>
+  </g>`
+  const trees = [[66,214,.8],[96,176,.7],[125,122,.75],[176,85,.65],[252,70,.7],[352,72,.65],
+    [422,90,.8],[514,78,.7],[598,120,.85],[690,163,.8],[732,218,.85],[660,251,.75],
+    [548,260,.65],[475,270,.7],[342,260,.8],[225,250,.65],[124,244,.8],[72,244,.75]].map(t => tree(...t)).join('')
+  const panel = (x,y,w=22,h=11) => `<polygon points="${x},${y} ${x+w},${y-5} ${x+w+10},${y+1} ${x+10},${y+6}"
+    fill="#2f78ad" stroke="#76b3d2" stroke-width=".7"/>`
+  const panels = Array.from({length:5}, (_,r) => Array.from({length:7}, (_,c) =>
+    panel(170 + c*24 + r*4, 80 + r*13 - c*1.3)).join('')).join('')
+  return `<svg class="scene" viewBox="0 0 800 300" preserveAspectRatio="xMidYMid meet" aria-label="三维厂区能流图">
+    <defs>
+      <linearGradient id="roof" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f7fbfd"/><stop offset="1" stop-color="#d4e2e9"/></linearGradient>
+      <linearGradient id="wall" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#fbfdfd"/><stop offset="1" stop-color="#dce8ee"/></linearGradient>
+      <linearGradient id="tank" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#c2d4de"/><stop offset=".4" stop-color="#f7fbfd"/><stop offset="1" stop-color="#b2c7d4"/></linearGradient>
+      <filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#56788b" flood-opacity=".18"/></filter>
+    </defs>
+    <polygon points="48,205 398,112 760,202 410,283" fill="#d9e7ed" stroke="#a4bdc9" stroke-width="1.2"/>
+    <polygon points="48,205 48,214 410,292 410,283" fill="#b8ccd7"/>
+    <polygon points="410,283 760,202 760,211 410,292" fill="#a9c1ce"/>
+    <path d="M80 214 L400 125 730 205 405 274 Z" fill="none" stroke="#a8c1ce" stroke-dasharray="4 4"/>
+    ${trees}
+    <!-- solar building -->
+    <g filter="url(#soft)">
+      <polygon points="138,110 292,69 354,96 200,139" fill="url(#roof)" stroke="#a9bfcb"/>
+      <polygon points="138,110 200,139 200,189 138,158" fill="#e4edf2" stroke="#aec3cf"/>
+      <polygon points="200,139 354,96 354,145 200,189" fill="url(#wall)" stroke="#aec3cf"/>
+      ${panels}
+      <g fill="#88b2c7"><rect x="222" y="146" width="17" height="14" transform="skewY(-16)"/>
+        <rect x="256" y="135" width="17" height="14" transform="skewY(-16)"/>
+        <rect x="290" y="125" width="17" height="14" transform="skewY(-16)"/></g>
+      <path d="M200 189 L354 145" stroke="#a9c0cd"/>
+    </g>
+    <!-- water tank -->
+    <g filter="url(#soft)">
+      <ellipse cx="108" cy="164" rx="30" ry="10" fill="#d4e3eb" stroke="#9cb8c8"/>
+      <path d="M78 164 V207 C78 213 92 218 108 218 C124 218 138 213 138 207 V164" fill="url(#tank)" stroke="#9cb8c8"/>
+      <ellipse cx="108" cy="207" rx="30" ry="10" fill="#c3d7e1" stroke="#9cb8c8"/>
+      <ellipse cx="108" cy="164" rx="30" ry="10" fill="#eef6f9" stroke="#9cb8c8"/>
+      <path d="M85 190 Q108 197 131 190" fill="none" stroke="#56a5b4" stroke-width="2"/>
+      <path d="M85 195 Q108 202 131 195" fill="none" stroke="#56a5b4" stroke-width="1" opacity=".6"/>
+    </g>
+    <!-- pump house -->
+    <g filter="url(#soft)">
+      <polygon points="365,135 455,110 512,133 422,160" fill="#f7fbfd" stroke="#a9bfcb"/>
+      <polygon points="365,135 422,160 422,198 365,173" fill="#e1ebf0" stroke="#a9bfcb"/>
+      <polygon points="422,160 512,133 512,171 422,198" fill="url(#wall)" stroke="#a9bfcb"/>
+      <path d="M365 135 L422 160 L512 133 L455 110 Z" fill="#eaf2f6" stroke="#a9bfcb"/>
+      <g stroke="#5c96b3" stroke-width="2"><path d="M440 165 v16 M456 160 v16 M472 155 v16"/></g>
+      <path d="M389 150 v20 M402 156 v20" stroke="#8eb4c6" stroke-width="5"/>
+    </g>
+    <!-- containers -->
+    <g filter="url(#soft)">
+      <g><polygon points="250,176 286,166 312,177 276,188" fill="#f7fbfd" stroke="#adc2ce"/>
+        <polygon points="250,176 276,188 276,216 250,204" fill="#dde9ef" stroke="#adc2ce"/>
+        <polygon points="276,188 312,177 312,205 276,216" fill="#f2f8fa" stroke="#adc2ce"/>
+        <path d="M282 190 v22 M290 187 v22 M298 184 v22" stroke="#b4c9d4"/></g>
+      <g><polygon points="294,187 330,177 356,188 320,199" fill="#f7fbfd" stroke="#adc2ce"/>
+        <polygon points="294,187 320,199 320,227 294,215" fill="#dde9ef" stroke="#adc2ce"/>
+        <polygon points="320,199 356,188 356,216 320,227" fill="#f2f8fa" stroke="#adc2ce"/>
+        <path d="M326 201 v22 M334 198 v22 M342 195 v22" stroke="#b4c9d4"/></g>
+      <g><polygon points="338,198 374,188 400,199 364,210" fill="#f7fbfd" stroke="#adc2ce"/>
+        <polygon points="338,198 364,210 364,238 338,226" fill="#dde9ef" stroke="#adc2ce"/>
+        <polygon points="364,210 400,199 400,227 364,238" fill="#f2f8fa" stroke="#adc2ce"/>
+        <path d="M370 212 v22 M378 209 v22 M386 206 v22" stroke="#b4c9d4"/></g>
+    </g>
+    <!-- pipe network -->
+    <g fill="none" stroke-linecap="round">
+      <path d="M138 198 C190 214 238 225 276 222" stroke="#fff" stroke-width="5"/>
+      <path d="M138 198 C190 214 238 225 276 222" stroke="#4ca8b3" stroke-width="2" stroke-dasharray="5 4"/>
+      <path d="M400 222 C440 215 462 196 468 175" stroke="#fff" stroke-width="5"/>
+      <path d="M400 222 C440 215 462 196 468 175" stroke="#4ca8b3" stroke-width="2" stroke-dasharray="5 4"/>
+      <path d="M512 156 C580 155 622 174 680 188" stroke="#fff" stroke-width="5"/>
+      <path d="M512 156 C580 155 622 174 680 188" stroke="#4ca8b3" stroke-width="2" stroke-dasharray="5 4"/>
+    </g>
+    <g fill="#fff" stroke="#4ca8b3" stroke-width="2">
+      <circle cx="138" cy="198" r="5"/><circle cx="400" cy="222" r="5"/><circle cx="512" cy="156" r="5"/><circle cx="680" cy="188" r="5"/>
+    </g>
+    <!-- substation -->
+    <g filter="url(#soft)">
+      <polygon points="628,158 662,148 690,159 656,170" fill="#f6fafc" stroke="#a9bfcb"/>
+      <polygon points="628,158 656,170 656,196 628,184" fill="#dce8ee" stroke="#a9bfcb"/>
+      <polygon points="656,170 690,159 690,185 656,196" fill="#eff6f9" stroke="#a9bfcb"/>
+      <path d="M642 150 v-18 M654 146 v-18 M666 151 v-18" stroke="#5d7788" stroke-width="2"/>
+      <path d="M636 132 h12 M648 128 h12 M660 133 h12" stroke="#5d7788" stroke-width="2"/>
+    </g>
+  </svg>`
+}
+function chainHtml(d){
+  const nodes = d.chain || []
+  const pump = nodes[1] || {val:'运行', exp:''}
+  return `<section class="chain-wrap glass">
+    <div class="scene-head"><span>站点能源流 · 三维视图<small>教学泵房 · 供水</small></span>
+      <div class="tools"><span>能流图</span><span class="on">三维</span><span>俯视</span><span>全屏</span></div></div>
+    <div class="scene-stage">${sceneSvg()}
+    <div class="scene-label a"><div class="name">水箱</div><span class="v">68<small>%</small></span></div>
+    <div class="scene-label b"><div class="name">1号泵</div><span class="v">${pump.val}<small>0.42 MPa · 12.4 A</small></span></div>
+    <div class="scene-label c"><div class="name">供水管网</div><span class="v">0.42<small>MPa</small></span></div>
+    <div class="scene-legend"><span><i></i>供水</span><span><i class="off"></i>未接入</span></div>
+    <div class="scene-tools">三维视图 · 俯视</div>
+  </div></section>`
+}
+function devicesTable(){
+  return `<table><thead><tr><th>设备</th><th>类型</th><th>状态</th><th>主要值</th><th>通信</th><th>更新</th></tr></thead>
+    <tbody>${DEVICES.map(r => `<tr><td class="name">${r[0]}</td><td>${r[1]}</td><td class="ok">${r[2]}</td>
+      <td class="num">${r[3]}</td><td>${r[4]}</td><td>${r[5]}</td></tr>`).join('')}</tbody></table>`
+}
+function pointsTable(){
+  return `<table><thead><tr><th>点位</th><th>值</th><th>单位</th><th>质量</th></tr></thead>
+    <tbody>${POINTS.map(r => `<tr><td class="name">${r[0]}</td><td class="num">${r[1]}</td>
+      <td>${r[2]}</td><td class="ok">${r[3]}</td></tr>`).join('')}</tbody></table>`
+}
+function paramsTable(){
+  return `<table><tbody>${PARAMS.map(r => `<tr><td class="name">${r[0]}</td><td>${r[1]}</td></tr>`).join('')}</tbody></table>`
+}
+function membersTable(){
+  return `<table><thead><tr><th>角色</th><th>绑定</th><th>当前值</th><th>状态</th></tr></thead>
+    <tbody>${MEMBERS.map(r => `<tr><td class="name">${r[0]}</td><td>${r[1]}</td>
+      <td class="num">${r[2]}</td><td class="ok">${r[3]}</td></tr>`).join('')}</tbody></table>`
+}
+function recentTable(count = 8){
+  const rows = Array.from({ length:count }, (_, i) => {
+    const t = new Date(new Date('2026-11-22T21:34:00').getTime() - i * 5000)
+      .toLocaleTimeString('zh-CN', { hour12:false })
+    return [t, (0.42 + Math.sin(i/3)*0.02).toFixed(2), '0.45',
+      (12.4 + Math.cos(i/4)*0.8).toFixed(1), (68 - i*0.2).toFixed(1)]
+  })
+  return `<table><thead><tr><th>时间</th><th>出口压力</th><th>目标</th><th>电流 A</th><th>液位 %</th></tr></thead>
+    <tbody>${rows.map(r => `<tr><td class="num">${r[0]}</td><td class="num">${r[1]}</td>
+      <td class="num">${r[2]}</td><td class="num">${r[3]}</td><td class="num">${r[4]}</td></tr>`).join('')}</tbody></table>`
+}
+function renderPrimary(d){
+  if (d.device) {
+    $('primary').innerHTML = `
+      <section class="panel glass">
+        <div class="tabs">
+          <button data-tab="live" class="${tab === 'live' ? 'on' : ''}">实时数据</button>
+          <button data-tab="params" class="${tab === 'params' ? 'on' : ''}">设备参数</button>
+        </div>
+        ${tab === 'params' ? paramsTable() : pointsTable()}
+      </section>
+      <div class="lower">
+        <section class="panel glass">
+          <h2>操作</h2>
+          <button class="link" data-op-open>打开操作抽屉</button>
+          <p style="font-size:12px;color:var(--muted);line-height:1.75;margin:8px 0 10px">
+            启动、停止、下发目标值与接管自动都在抽屉里完成；下发后等待回读。</p>
+          <h2>操作记录</h2>
+          <div class="run"><span>10:42 · 启动</span><span class="r done">已回读</span></div>
+          <div class="run"><span>10:40 · 确认报警 2号泵</span><span class="r done">已接手</span></div>
+          <div class="run"><span>09:58 · 下发目标值 0.45 MPa</span><span class="r done">已回读</span></div>
+        </section>
+        <section class="panel glass"><h2>最近数据 <button class="link" data-history>查看全部</button></h2>${recentTable(5)}</section>
+      </div>`
+    return
+  }
+  const left = d.list === 'members'
+    ? `<section class="panel glass"><h2>成员</h2>${membersTable()}</section>`
+    : `<section class="panel glass"><h2>设备清单</h2>${devicesTable()}
+        <h2 style="margin-top:12px">最近变化</h2>
+        <div class="run"><span>1号泵 出口压力 0.44 → 0.42 MPa</span><span class="r">2 分钟前</span></div>
+        <div class="run"><span>水箱 液位 71 → 68%</span><span class="r">6 分钟前</span></div>
+        <div class="run"><span>2号泵 启动请求已回读</span><span class="r">18 分钟前</span></div>
+      </section>`
+  $('primary').innerHTML = chainHtml(d) + `<div class="lower">${left}
+    <section class="panel glass"><h2>最近数据 <button class="link" data-history>查看全部</button></h2>${recentTable(5)}</section></div>`
+}
+function render(key){
+  current = key
+  const d = DATA[key]
+  $('crumb').textContent = d.crumb
+  $('title').textContent = d.title
+  $('online').innerHTML = d.device ? `状态 <b>${d.online}</b>` : `在线 <b>${d.online}</b>`
+  $('colophon').textContent = `FastIOT · 教学泵房 · 第 ${d.no} 层`
+  $('layerMeta').innerHTML = `设备 3 · 未绑定 0<br>告警 ${pending().length} · 今日执行 3<br>按配界面显示`
+  renderMetrics(d); renderPrimary(d); renderAlarms()
+  document.querySelectorAll('#tree button[data-layer]').forEach(b =>
+    b.classList.toggle('on', b.dataset.layer === key))
+}
+function renderBars(){
+  const vals = [42,50,46,58,64,60,68,72,66,58,54,60,66,70,74,68,62,56,60,64,70,66,62,58]
+  $('bars').innerHTML = vals.map((h, i) => `<i class="${i === 14 ? 'on' : ''}" style="height:${h}%"></i>`).join('')
+}
+/* interactions */
+document.getElementById('tree').addEventListener('click', e => {
+  const b = e.target.closest('button[data-layer]')
+  if (b) { tab = 'live'; render(b.dataset.layer) }
+})
+$('bell').addEventListener('click', () => $('alarmDrawer').classList.add('open'))
+document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', e =>
+  e.target.closest('.drawer').classList.remove('open')))
+document.addEventListener('click', e => {
+  const ack = e.target.closest('[data-ack]')
+  if (ack) { ACKED[ack.dataset.ack] = true; render(current); toast('已接手；确认接手不等于设备恢复') }
+  const loc = e.target.closest('[data-locate]')
+  if (loc) {
+    const map = { '2号泵':'d2', '水箱':'t1', '1号泵':'d1' }
+    $('alarmDrawer').classList.remove('open')
+    if (map[loc.dataset.locate]) render(map[loc.dataset.locate])
+  }
+  const histBtn = e.target.closest('[data-history]')
+  if (histBtn) openHist(e.target.dataset.history || `${DATA[current].title} · 出口压力`)
+  const tabBtn = e.target.closest('[data-tab]')
+  if (tabBtn) { tab = tabBtn.dataset.tab; render(current) }
+  const opOpen = e.target.closest('[data-op-open]')
+  if (opOpen) { opLayer = current; openOp() }
+  const op = e.target.closest('[data-op]')
+  if (op) {
+    $('opResult').textContent = `已发出：${op.dataset.op} · 等待回读…`
+    setTimeout(() => { $('opResult').textContent = `已回读：${op.dataset.op}` }, 900)
+  }
+})
+function openOp(){
+  const d = DATA[opLayer] || DATA.d1
+  $('opTitle').textContent = `操作 · ${d.title}`
+  $('opResult').textContent = ''
+  $('opDrawer').classList.add('open')
+}
+/* history */
+function histRows(){
+  const base = new Date('2026-11-22T21:34:00')
+  return Array.from({ length:30 }, (_, i) => {
+    const t = new Date(base.getTime() - i * 5000).toLocaleTimeString('zh-CN', { hour12:false })
+    return [t, (0.42 + Math.sin(i/3)*0.02).toFixed(2), '0.45',
+      (12.4 + Math.cos(i/4)*0.8).toFixed(1), '运行', '有效']
+  })
+}
+function renderHist(){
+  $('histTitle').textContent = histTitleText
+  $('histSub').textContent = `最近 ${histRange} · ${histGran === '自动' ? '自动粒度' : histGran + '/行'} · 保留期 30 天 · 缺失段不补值`
+  $('rangeChips').innerHTML = ['15分钟','1小时','24小时','3天','7天'].map(r =>
+    `<button class="${histRange === r ? 'on' : ''}" data-range="${r}">${r}</button>`).join('')
+  $('granChips').innerHTML = ['自动','1秒','5秒','30秒','1分钟'].map(g =>
+    `<button class="${histGran === g ? 'on' : ''}" data-gran="${g}">${g}</button>`).join('')
+  $('viewChips').innerHTML = ['数据表','曲线'].map(v =>
+    `<button class="${histView === v ? 'on' : ''}" data-view="${v}">${v}</button>`).join('')
+  if (histView === '曲线') {
+    const pts = histRows().map((r, i) => `${20 + i * 30},${300 - (parseFloat(r[1]) - 0.35) * 1800}`).join(' ')
+    $('histBody').innerHTML = `<div class="hist-chart"><svg viewBox="0 0 960 340" preserveAspectRatio="none">
+      <g stroke="rgba(127,178,255,.15)" stroke-width="1">
+        <line x1="20" y1="80" x2="940" y2="80"/><line x1="20" y1="170" x2="940" y2="170"/>
+        <line x1="20" y1="260" x2="940" y2="260"/></g>
+      <line x1="20" y1="174" x2="940" y2="174" stroke="var(--alarm)" stroke-width="1" stroke-dasharray="5 5" opacity=".5"/>
+      <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="1.6"/>
+      </svg>
+      <div class="hist-foot"><span>0.35</span><span>0.40</span><span>0.45</span><span>0.50</span></div></div>`
+  } else {
+    $('histBody').innerHTML = `<div class="hist-table"><table>
+      <thead><tr><th>时间</th><th>出口压力 MPa</th><th>目标 MPa</th><th>电流 A</th><th>运行状态</th><th>质量</th></tr></thead>
+      <tbody>${histRows().map(r => `<tr>${r.map((c, i) => `<td class="${i === 1 || i === 2 || i === 3 ? 'num' : ''}">${c}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table></div>`
+  }
+}
+function openHist(title){
+  histTitleText = title || `${DATA[current].title} · 出口压力`
+  $('hist').classList.add('open'); renderHist()
+}
+$('histBack').addEventListener('click', () => $('hist').classList.remove('open'))
+$('histExport').addEventListener('click', () => toast('原型：导出 CSV，最多 2000 行'))
+document.addEventListener('click', e => {
+  const r = e.target.closest('[data-range]'); if (r) { histRange = r.dataset.range; renderHist() }
+  const g = e.target.closest('[data-gran]'); if (g) { histGran = g.dataset.gran; renderHist() }
+  const v = e.target.closest('[data-view]'); if (v) { histView = v.dataset.view; renderHist() }
+})
+/* appearance: theme + glass transparency */
+const THEME_BASE = { light:'255,255,255', dark:'18,30,40', tint:'190,240,235' }
+const THEME_FACTOR = { light:1, dark:.9, tint:.42 }
+const DEFAULTS = { theme:'light', alpha:42 }
+function loadPref(k){ try { return localStorage.getItem(k) } catch (e) { return null } }
+function savePref(k, v){ try { localStorage.setItem(k, v) } catch (e) {} }
+const appearance = {
+  theme: loadPref('fastiot-overview-theme') || DEFAULTS.theme,
+  alpha: Number(loadPref('fastiot-overview-alpha') || DEFAULTS.alpha),
+}
+function applyAppearance(){
+  document.body.dataset.theme = appearance.theme
+  const base = THEME_BASE[appearance.theme]
+  const a = Math.min(0.92, appearance.alpha / 100 * THEME_FACTOR[appearance.theme])
+  document.body.style.setProperty('--glass', `rgba(${base},${a.toFixed(2)})`)
+  document.body.style.setProperty('--glass-strong', `rgba(${base},${Math.min(0.96, a + 0.3).toFixed(2)})`)
+  document.querySelectorAll('[data-theme-btn]').forEach(b =>
+    b.classList.toggle('on', b.dataset.themeBtn === appearance.theme))
+  $('alphaVal').textContent = appearance.alpha + '%'
+  $('alphaRange').value = appearance.alpha
+  savePref('fastiot-overview-theme', appearance.theme)
+  savePref('fastiot-overview-alpha', appearance.alpha)
+}
+document.querySelectorAll('[data-theme-btn]').forEach(b => b.addEventListener('click', () => {
+  appearance.theme = b.dataset.themeBtn; applyAppearance()
+}))
+$('alphaRange').addEventListener('input', e => {
+  appearance.alpha = Number(e.target.value); applyAppearance()
+})
+$('alphaReset').addEventListener('click', () => {
+  appearance.theme = DEFAULTS.theme; appearance.alpha = DEFAULTS.alpha; applyAppearance()
+})
+$('tweaksBtn').addEventListener('click', () => {
+  const t = $('tweaks'); t.classList.toggle('open')
+  $('tweaksBtn').setAttribute('aria-expanded', String(t.classList.contains('open')))
+})
+document.addEventListener('click', e => {
+  if (!e.target.closest('.appearance')) {
+    $('tweaks').classList.remove('open')
+    $('tweaksBtn').setAttribute('aria-expanded', 'false')
+  }
+})
+applyAppearance()
+document.querySelector('.bg').insertAdjacentHTML('beforeend', `<div class="bg-scene" aria-hidden="true">${sceneSvg().replace('xMidYMid meet', 'xMidYMid slice')}</div>`)
+renderBars(); render('area')
+</script>
+</body>
+</html>
