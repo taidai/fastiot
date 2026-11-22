@@ -1,0 +1,51 @@
+import { chromium } from 'playwright-core'
+const url = 'file:///C:/Users/chent/Desktop/2026%E6%88%90%E6%9E%9C/AAAAA%E5%BC%80%E6%BA%90/easyems/frontend/prototype/overview-hd/%E6%80%BB%E8%A7%88%20%C2%B7%20%E7%8E%BB%E7%92%83%E7%A3%A8%E7%A0%82.html'
+const out = 'C:/Users/chent/Desktop/2026成果/AAAAA开源/easyems/frontend/prototype/overview-hd/'
+const b = await chromium.launch({ channel:'msedge', headless:true })
+const p = await b.newPage({ viewport:{width:1440,height:1000} })
+const errors=[]; p.on('pageerror', e=>errors.push(String(e)))
+await p.goto(url)
+const results=[]
+async function check(name, fn){ try{ await fn(); results.push('PASS '+name) }catch(e){ results.push('FAIL '+name+': '+e.message.split('\n')[0]) } }
+await check('超时结果未知', async()=>{
+  await p.click('[data-layer="d1"]')
+  await p.click('[data-op-open]')
+  await p.click('[data-scenario="timeout"]')
+  await p.click('[data-op="启动"]')
+  await p.waitForTimeout(1100)
+  if(!(await p.textContent('#opResult')).includes('结果未知')) throw new Error('未显示未知')
+  await p.screenshot({path:out+'op-timeout.png'})
+})
+await check('拒绝与离线不写', async()=>{
+  await p.click('[data-scenario="denied"]')
+  await p.click('[data-op="启动"]')
+  if(!(await p.textContent('#opResult')).includes('已拒绝')) throw new Error('拒绝未显示')
+  await p.click('[data-scenario="offline"]')
+  if(!(await p.textContent('#opCurrent')).includes('无最新值')) throw new Error('离线仍显示旧值')
+  await p.click('[data-op="启动"]')
+  if(!(await p.textContent('#opResult')).includes('未下发')) throw new Error('离线仍下发')
+})
+await check('告警恢复与再次触发不重复', async()=>{
+  await p.locator('#opDrawer [data-close]').click()
+  await p.click('#bell')
+  await p.locator('[data-recover="a1"]').click()
+  await p.waitForTimeout(100)
+  if(!(await p.textContent('#drawerList')).includes('已恢复 刚刚')) throw new Error('未恢复')
+  await p.locator('[data-retrigger="a1"]').click()
+  await p.waitForTimeout(100)
+  if(!(await p.textContent('#drawerList')).includes('第 2 次')) throw new Error('未标次数')
+  const cards = await p.locator('#drawerList .alarm:not(.done)', { hasText: '2号泵' }).count()
+  if(cards !== 1) throw new Error('重复建卡 '+cards)
+  await p.screenshot({path:out+'alarm-lifecycle.png'})
+})
+await check('历史缺失与断线', async()=>{
+  await p.locator('#drawerList [data-history]').first().click()
+  await p.waitForTimeout(150)
+  const text = await p.textContent('#histBody')
+  if(!text.includes('失效') || !text.includes('断线')) throw new Error('缺质量状态')
+  if(!text.includes('—')) throw new Error('缺失仍补值')
+  await p.screenshot({path:out+'history-gaps.png'})
+})
+console.log(results.join('\n'))
+console.log(errors.length ? 'ERRORS '+errors.join('|') : 'no errors')
+process.exit(results.some(x=>x.startsWith('FAIL')) ? 1 : 0)

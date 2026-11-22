@@ -191,7 +191,7 @@
   .run .r.skip{color:var(--alarm)}
   .handover{margin-top:auto;border-top:1px solid var(--line);padding-top:10px;font-size:12px;line-height:1.75}
   /* overlays */
-  .drawer{position:fixed;top:16px;right:16px;bottom:16px;width:380px;max-width:92vw;z-index:10;
+  .drawer{position:fixed;top:16px;right:16px;bottom:16px;width:380px;max-width:92vw;z-index:40;
     transform:translateX(calc(100% + 24px));transition:transform .25s ease;padding:20px;overflow:auto;
     background:var(--glass-strong);backdrop-filter:blur(26px);border:1px solid var(--border);border-radius:18px;
     box-shadow:var(--shadow)}
@@ -207,7 +207,7 @@
   .op-rows .row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line);font-size:12.5px}
   .op-result{margin-top:10px;font-size:11px;color:var(--muted);min-height:18px}
   /* history */
-  .hist{position:fixed;inset:16px;z-index:12;display:none;overflow:auto;padding:18px 20px;
+  .hist{position:fixed;inset:16px;z-index:40;display:none;overflow:auto;padding:18px 20px;
     background:var(--glass-strong);backdrop-filter:blur(26px);border:1px solid var(--border);border-radius:18px;
     box-shadow:var(--shadow)}
   .hist.open{display:block}
@@ -445,9 +445,16 @@
 <div class="drawer" id="opDrawer">
   <h2><span id="opTitle">操作 · 1号泵</span><button class="x" data-close>关闭</button></h2>
   <div class="op-rows">
-    <div class="row"><span>当前值</span><span class="num">0.42 MPa</span></div>
+    <div class="row"><span>当前值</span><span class="num" id="opCurrent">0.42 MPa</span></div>
     <div class="row"><span>目标值</span><span class="num">0.45 MPa</span></div>
-    <div class="row"><span>运行状态</span><span>运行 · 自动</span></div>
+    <div class="row"><span>运行状态</span><span id="opState">运行 · 自动</span></div>
+  </div>
+  <div class="chips" id="opScenario" style="margin:10px 0">
+    <span class="src">场景</span>
+    <button data-scenario="success" class="on">回读成功</button>
+    <button data-scenario="timeout">超时</button>
+    <button data-scenario="denied">拒绝</button>
+    <button data-scenario="offline">离线</button>
   </div>
   <div class="act" style="margin-top:12px">
     <button data-op="启动">启动</button>
@@ -480,10 +487,14 @@
 
 <script>
 const ALARMS = [
-  { id:'a1', title:'2号泵 出口压力低', level:'预警', at:'3 分钟前', device:'2号泵' },
-  { id:'a2', title:'水箱 液位偏低', level:'提示', at:'12 分钟前', device:'水箱' }
+  { id:'a1', title:'2号泵 出口压力低', level:'预警', at:'3 分钟前', device:'2号泵', occurrences:1 },
+  { id:'a2', title:'水箱 液位偏低', level:'提示', at:'12 分钟前', device:'水箱', occurrences:1 }
 ];
 const ACKED = {};
+const ALARM_HISTORY = [
+  { id:'a3', title:'1号泵 振动偏高', level:'提示', at:'昨天 22:10', device:'1号泵', recoveredAt:'昨天 22:26', occurrences:1 }
+];
+let opScenario = 'success';
 const DATA = {
   site:{ no:'01', crumb:'教学泵房', title:'教学泵房', online:'3 / 3',
     kpis:[['出口压力','0.42','MPa'],['总功率','12.4','kW'],['在线设备','3 / 3',''],
@@ -566,12 +577,34 @@ function renderAlarms(){
       <div class="t">${a.title}</div><div class="m">${a.level} · ${a.at} · 待接手</div>
       <button class="ack" data-ack="${a.id}">接手</button></div>`).join('')
     : '<div class="alarm"><div class="t">没有待处理报警</div><div class="m">设备与数据正常。</div></div>'
-  $('drawerList').innerHTML = list.length ? list.map(a => `<div class="alarm">
-      <div class="t">${a.title}</div><div class="m">${a.level} · ${a.at} · ${a.device}</div>
+  $('drawerList').innerHTML = (list.length ? list.map(a => `<div class="alarm">
+      <div class="t">${a.title}${a.occurrences > 1 ? `（第 ${a.occurrences} 次）` : ''}</div><div class="m">${a.level} · ${a.at} · ${a.device}</div>
       <div class="act"><button data-ack="${a.id}">确认接手</button>
+        <button data-recover="${a.id}">标记恢复</button>
         <button data-locate="${a.device}">定位到设备</button>
         <button data-history="${a.device}">看历史</button></div></div>`).join('')
-    : '<p class="note">没有待处理报警。</p>'
+    : '<p class="note">没有待处理报警。</p>')
+    + `<h2 style="margin-top:18px">历史</h2>` + ALARM_HISTORY.map(a => `<div class="alarm done">
+      <div class="t">${a.title}${a.occurrences > 1 ? `（第 ${a.occurrences} 次）` : ''}</div>
+      <div class="m">${a.level} · ${a.at} · 已恢复 ${a.recoveredAt}</div>
+      <div class="act"><button data-retrigger="${a.id}">再次触发</button></div></div>`).join('')
+}
+function recoverAlarm(id){
+  const index = ALARMS.findIndex(a => a.id === id)
+  if (index < 0) return
+  const [alarm] = ALARMS.splice(index, 1)
+  ACKED[id] = true
+  ALARM_HISTORY.unshift({ ...alarm, recoveredAt:'刚刚' })
+  render(current); toast('已恢复；记录进入历史')
+}
+function retriggerAlarm(id){
+  if (ALARMS.some(a => a.id === id)) { toast('已有未恢复告警，不重复创建'); return }
+  const index = ALARM_HISTORY.findIndex(a => a.id === id)
+  if (index < 0) return
+  const [old] = ALARM_HISTORY.splice(index, 1)
+  ALARMS.push({ ...old, at:'刚刚', recoveredAt:null, occurrences:(old.occurrences || 1) + 1 })
+  delete ACKED[id]
+  render(current); toast('再次触发：沿用同一告警，不重复建卡')
 }
 function sceneSvg(){
   const tree = (x,y,s=1) => `<g transform="translate(${x} ${y}) scale(${s})">
@@ -786,14 +819,36 @@ document.addEventListener('click', e => {
   if (opOpen) { opLayer = current; openOp() }
   const op = e.target.closest('[data-op]')
   if (op) {
+    if (opScenario === 'offline') { $('opResult').textContent = '设备离线 · 无最新值，未下发'; return }
+    if (opScenario === 'denied') { $('opResult').textContent = `已拒绝：${op.dataset.op} · 当前条件不允许`; return }
+    if (opScenario === 'timeout') {
+      $('opResult').textContent = `已发出：${op.dataset.op} · 等待回读…`
+      setTimeout(() => { $('opResult').textContent = '结果未知 · 超时未回读，不伪装成功' }, 900)
+      return
+    }
     $('opResult').textContent = `已发出：${op.dataset.op} · 等待回读…`
     setTimeout(() => { $('opResult').textContent = `已回读：${op.dataset.op}` }, 900)
   }
+  const scenario = e.target.closest('[data-scenario]')
+  if (scenario) {
+    opScenario = scenario.dataset.scenario
+    document.querySelectorAll('[data-scenario]').forEach(b => b.classList.toggle('on', b === scenario))
+    $('opCurrent').textContent = opScenario === 'offline' ? '—（无最新值）' : '0.42 MPa'
+    $('opState').textContent = opScenario === 'offline' ? '离线' : '运行 · 自动'
+    $('opResult').textContent = ''
+  }
+  const recover = e.target.closest('[data-recover]')
+  if (recover) recoverAlarm(recover.dataset.recover)
+  const retrigger = e.target.closest('[data-retrigger]')
+  if (retrigger) retriggerAlarm(retrigger.dataset.retrigger)
 })
 function openOp(){
   const d = DATA[opLayer] || DATA.d1
   $('opTitle').textContent = `操作 · ${d.title}`
   $('opResult').textContent = ''
+  $('opCurrent').textContent = opScenario === 'offline' ? '—（无最新值）' : '0.42 MPa'
+  $('opState').textContent = opScenario === 'offline' ? '离线' : '运行 · 自动'
+  document.querySelectorAll('[data-scenario]').forEach(b => b.classList.toggle('on', b.dataset.scenario === opScenario))
   $('opDrawer').classList.add('open')
 }
 /* history */
@@ -801,9 +856,26 @@ function histRows(){
   const base = new Date('2026-11-22T21:34:00')
   return Array.from({ length:30 }, (_, i) => {
     const t = new Date(base.getTime() - i * 5000).toLocaleTimeString('zh-CN', { hour12:false })
+    if (i === 7) return [t, '—', '—', '—', '—', '失效']
+    if (i === 8) return [t, '—', '—', '—', '—', '断线']
     return [t, (0.42 + Math.sin(i/3)*0.02).toFixed(2), '0.45',
       (12.4 + Math.cos(i/4)*0.8).toFixed(1), '运行', '有效']
   })
+}
+function histSegments(){
+  const segments = []
+  let current = []
+  histRows().forEach((r, i) => {
+    const value = Number.parseFloat(r[1])
+    if (r[1] === '—' || Number.isNaN(value)) {
+      if (current.length) segments.push(current)
+      current = []
+    } else {
+      current.push(`${20 + i * 30},${300 - (value - 0.35) * 1800}`)
+    }
+  })
+  if (current.length) segments.push(current)
+  return segments
 }
 function renderHist(){
   $('histTitle').textContent = histTitleText
@@ -815,19 +887,20 @@ function renderHist(){
   $('viewChips').innerHTML = ['数据表','曲线'].map(v =>
     `<button class="${histView === v ? 'on' : ''}" data-view="${v}">${v}</button>`).join('')
   if (histView === '曲线') {
-    const pts = histRows().map((r, i) => `${20 + i * 30},${300 - (parseFloat(r[1]) - 0.35) * 1800}`).join(' ')
+    const lines = histSegments().map(points =>
+      `<polyline points="${points.join(' ')}" fill="none" stroke="var(--accent)" stroke-width="1.6"/>`).join('')
     $('histBody').innerHTML = `<div class="hist-chart"><svg viewBox="0 0 960 340" preserveAspectRatio="none">
       <g stroke="rgba(127,178,255,.15)" stroke-width="1">
         <line x1="20" y1="80" x2="940" y2="80"/><line x1="20" y1="170" x2="940" y2="170"/>
         <line x1="20" y1="260" x2="940" y2="260"/></g>
       <line x1="20" y1="174" x2="940" y2="174" stroke="var(--alarm)" stroke-width="1" stroke-dasharray="5 5" opacity=".5"/>
-      <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="1.6"/>
+      ${lines}
       </svg>
       <div class="hist-foot"><span>0.35</span><span>0.40</span><span>0.45</span><span>0.50</span></div></div>`
   } else {
     $('histBody').innerHTML = `<div class="hist-table"><table>
       <thead><tr><th>时间</th><th>出口压力 MPa</th><th>目标 MPa</th><th>电流 A</th><th>运行状态</th><th>质量</th></tr></thead>
-      <tbody>${histRows().map(r => `<tr>${r.map((c, i) => `<td class="${i === 1 || i === 2 || i === 3 ? 'num' : ''}">${c}</td>`).join('')}</tr>`).join('')}</tbody>
+      <tbody>${histRows().map(r => `<tr>${r.map((c, i) => `<td class="${i === 1 || i === 2 || i === 3 ? 'num' : ''}${i === 5 && c !== '有效' ? ' off' : ''}">${c}</td>`).join('')}</tr>`).join('')}</tbody>
       </table></div>`
   }
 }

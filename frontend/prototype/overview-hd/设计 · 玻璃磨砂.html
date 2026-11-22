@@ -417,6 +417,10 @@
     .hist-head h1{font-size:20px}
     .drawer-right{width:calc(100% - 20px);right:10px}
   }
+  .pipeline button{border:1px solid var(--line);border-radius:999px;padding:3px 9px;
+    background:rgba(255,255,255,.48);font-size:11.5px;color:var(--faint);cursor:pointer}
+  .pipeline button.ok{background:#e6f3ee;border-color:#cfe6dc;color:var(--mint)}
+  .pipeline button.cur{border-color:var(--accent);color:var(--accent)}
 </style>
 </head>
 <body>
@@ -604,9 +608,12 @@ const state = {
   selD:'site-pump', newFor:null, step:null, published:false, pendingKind:null,
   screens:{}, cfgDraft:null, bindBlock:null,
   siteTpl:'pump', scope:'sub',
-  sim:{ p:0.62, level:46, held:45, clock:'09:00', valid:true, permit:true },
+  sim:{ p:0.62, level:46, held:45, clock:'09:00', valid:true, permit:true, current:12.4, soc:76 },
   simRan:false, rules:{}, editRule:null, ruleDraft:null,
+  machines:{}, machineSim:{}, editTransition:null, machineDraft:null,
+  agg:{ op:'avg', window:'15m', quality:'ignore', evaluated:false, result:null },
   devProfile:{}, devChannel:{}, devMapped:{},
+  accessStage:'profile', safeWrite:false, verifyLog:{},
   treeQuery:'', batchMode:false, batchSel:{}, batchResult:{}, batchChannel:'ch1',
   csvText:'设备,型号,通道,站号\nPCS7,储能变流器,ch1,17\nBMS7,电池管理,ch1,47\nPCS8,储能变流器,ch1,17',
   csvPreview:null, focusSearch:null,
@@ -629,6 +636,9 @@ function setProject(name){
   state.project = name; state.page = 'ledger'; state.step = null; state.published = false
   state.treeQuery = ''; state.batchSel = {}; state.batchResult = {}; state.batchMode = false
   state.selD = ''; state.csvPreview = null; state.rules = {}; state.editRule = null; state.ruleDraft = null; state.simRan = false
+  state.accessStage = 'profile'; state.safeWrite = false; state.verifyLog = {}
+  state.machines = {}; state.machineSim = {}; state.editTransition = null; state.machineDraft = null
+  state.agg = { op:'avg', window:'15m', quality:'ignore', evaluated:false, result:null }
   closeMenu(); render()
   toast('已切换项目：' + name)
 }
@@ -771,6 +781,56 @@ function treeHtml(node, depth){
     </button>
     ${(node.children || []).map(c => treeHtml(c, depth + 1)).join('')}`
 }
+const AGG_MEMBERS = [
+  {name:'1号泵 电流', value:12.4, unit:'A', quality:'有效'},
+  {name:'2号泵 电流', value:0, unit:'A', quality:'有效'},
+  {name:'水箱液位', value:68, unit:'%', quality:'失效'},
+]
+function computeAggregate(){
+  const valid = AGG_MEMBERS.filter(m => m.quality === '有效')
+  const members = state.agg.quality === 'ignore' ? valid : AGG_MEMBERS
+  const values = members.map(m => m.value)
+  let value = 0
+  if (state.agg.op === 'sum') value = values.reduce((a,b) => a+b, 0)
+  if (state.agg.op === 'avg') value = values.length ? values.reduce((a,b) => a+b, 0) / values.length : null
+  if (state.agg.op === 'min') value = values.length ? Math.min(...values) : null
+  if (state.agg.op === 'max') value = values.length ? Math.max(...values) : null
+  if (state.agg.op === 'count') value = members.length
+  state.agg.result = {
+    value,
+    quality: state.agg.quality === 'degrade' && valid.length < AGG_MEMBERS.length ? '降级' : '有效',
+    members: members.map(m => m.name),
+  }
+  state.agg.evaluated = true; render()
+}
+function aggregatePage(){
+  const r = state.agg.result
+  const windowText = state.agg.window === 'instant' ? '瞬时 · 随采集周期' : `${state.agg.window} 窗口已关闭 · 滞后 ≤ ${state.agg.window}`
+  return `<div class="variant-head"><b>聚合计算</b><span>多个点怎么合成一个值？</span></div>
+    <div class="two-col">
+      <div class="card"><h5>聚合定义</h5>
+        <div class="row"><span>算子</span><div class="chips">${['sum','avg','min','max','count'].map(op =>
+          `<button class="${state.agg.op === op ? 'active' : ''}" onclick="state.agg.op='${op}';state.agg.evaluated=false;render()">${op}</button>`).join('')}</div></div>
+        <div class="row"><span>窗口</span><div class="chips">${['instant','5m','15m','1h'].map(w =>
+          `<button class="${state.agg.window === w ? 'active' : ''}" onclick="state.agg.window='${w}';state.agg.evaluated=false;render()">${w === 'instant' ? '瞬时' : w}</button>`).join('')}</div></div>
+        <div class="row"><span>质量策略</span><div class="chips">${['ignore','count','degrade'].map(q =>
+          `<button class="${state.agg.quality === q ? 'active' : ''}" onclick="state.agg.quality='${q}';state.agg.evaluated=false;render()">${{ignore:'忽略失效',count:'计入失效',degrade:'降级'}[q]}</button>`).join('')}</div></div>
+        <h5>成员</h5>
+        <table class="mini-table"><thead><tr><th>成员</th><th>值</th><th>质量</th></tr></thead>
+          <tbody>${AGG_MEMBERS.map(m => `<tr><td>${m.name}</td><td>${m.value} ${m.unit}</td><td>${m.quality}</td></tr>`).join('')}</tbody></table>
+        <div class="actions"><button class="primary" onclick="computeAggregate()">计算聚合点</button></div>
+      </div>
+      <div class="card"><h5>聚合点 · 区域电流</h5>
+        ${state.agg.evaluated && r ? `
+          <div class="row"><span>当前值</span><span class="src"><b>${r.value === null ? '—' : r.value.toFixed(1)} A</b></span></div>
+          <div class="row"><span>质量</span><span class="chip ${r.quality === '降级' ? 'warn' : 'ok'}">${r.quality}</span></div>
+          <div class="row"><span>窗口</span><span class="src">${windowText}</span></div>
+          <div class="row"><span>成员</span><span class="src">${r.members.join('、')}</span></div>
+          <p class="note">窗口值可参与规则，但必须标明滞后；联锁与保护只使用瞬时点。失效成员按质量策略处理，不补零。</p>`
+          : '<p class="note">先选算子、窗口与质量策略，再计算；这里展示的是节点上的只读聚合点，不是临时统计数字。</p>'}
+      </div>
+    </div>`
+}
 function go(key){ state.page = key; state.newFor = null; state.pendingKind = null; render() }
 function renderStage(){
   if (state.workbench === 'device') {
@@ -781,6 +841,7 @@ function renderStage(){
       return
     }
     if (state.page === 'ledger') { $('stage').innerHTML = stepView(); return }
+    if (state.page === 'aggregate') { $('stage').innerHTML = aggregatePage(); return }
     const def = PAGES.device.find(p => p.key === state.page)
     const note = GLOBAL_NOTES[state.page] || '这是跨节点的全局工具。'
     $('stage').innerHTML = `${contextStrip()}${placeholder(def.label, def.q, note)}`
@@ -1758,16 +1819,16 @@ function treeStep(){
     </div>`
 }
 const PROFILES = [
-  {key:'pump13', name:'离心泵 v1.3', points:12, commands:2, note:'启停 + 目标压力'},
-  {key:'pump14', name:'离心泵 v1.4（测试）', points:14, commands:2, note:'新增振动与温度'},
+  {key:'pump13', name:'离心泵 v1.3', points:12, commands:2, required:5, optional:1, safe:'目标压力', note:'启停 + 目标压力'},
+  {key:'pump14', name:'离心泵 v1.4（测试）', points:14, commands:2, required:6, optional:1, safe:'目标压力', note:'新增振动与温度'},
 ]
 const PCS_PROFILES = [
-  {key:'pcs21', name:'储能变流器 PCS-100 v2.1', points:18, commands:3, note:'启停、功率设定、并网'},
-  {key:'pcs20', name:'储能变流器 PCS-100 v2.0', points:16, commands:2, note:'旧版，无无功调节'},
+  {key:'pcs21', name:'储能变流器 PCS-100 v2.1', points:18, commands:3, required:5, optional:1, safe:'有功功率', note:'启停、功率设定、并网'},
+  {key:'pcs20', name:'储能变流器 PCS-100 v2.0', points:16, commands:2, required:5, optional:1, safe:'有功功率', note:'旧版，无无功调节'},
 ]
 const BMS_PROFILES = [
-  {key:'bms215', name:'电池管理 BMS-215 v2.1', points:20, commands:1, note:'SOC / SOH / 单体电压'},
-  {key:'bms210', name:'电池管理 BMS-215 v2.0', points:18, commands:1, note:'旧版，无绝缘检测'},
+  {key:'bms215', name:'电池管理 BMS-215 v2.1', points:20, commands:1, required:5, optional:1, safe:'', note:'SOC / SOH / 单体电压'},
+  {key:'bms210', name:'电池管理 BMS-215 v2.0', points:18, commands:1, required:5, optional:1, safe:'', note:'旧版，无绝缘检测'},
 ]
 const CHANNELS = [
   {key:'ch1', name:'Modbus TCP · 192.168.1.10:502', online:true, last:'2 秒前', note:'1 号端口'},
@@ -1797,15 +1858,38 @@ const BMS_MAP = [
   {name:'告警字', addr:'40105', unit:'—', scale:'位', dir:'只读'},
   {name:'绝缘电阻', addr:'40106', unit:'kΩ', scale:'×1', dir:'只读'},
 ]
+const POINT_DETAILS = {
+  '出口压力':{type:'float',required:true},
+  '目标压力':{type:'float',required:true,safe:true},
+  '运行状态':{type:'enum',required:true,enum:'停止 / 启动中 / 运行 / 故障'},
+  '电流':{type:'float',required:true},
+  '故障':{type:'bool',required:false},
+  '水箱液位':{type:'float',required:false},
+  '振动':{type:'float',required:false},
+  '有功功率':{type:'float',required:true,safe:true},
+  '直流电压':{type:'float',required:true},
+  '直流电流':{type:'float',required:true},
+  '温度':{type:'float',required:true},
+  '告警字':{type:'bitset',required:false},
+  'SOC':{type:'float',required:true},
+  'SOH':{type:'float',required:false},
+  '单体电压':{type:'float',required:true},
+  '绝缘电阻':{type:'float',required:false},
+}
+function withPointMeta(points){
+  return points.map(p => ({ ...POINT_DETAILS[p.name], ...p, enum:POINT_DETAILS[p.name]?.enum || '' }))
+}
 function profilesFor(node){
   if (node.name.startsWith('PCS')) return PCS_PROFILES
   if (node.name.startsWith('BMS')) return BMS_PROFILES
   return PROFILES
 }
 function pointMapFor(node){
-  if (node.name.startsWith('PCS')) return PCS_MAP
-  if (node.name.startsWith('BMS')) return BMS_MAP
-  return POINT_MAP
+  const key = devProfileOf(node)
+  let points = node.name.startsWith('PCS') ? PCS_MAP : node.name.startsWith('BMS') ? BMS_MAP : POINT_MAP
+  if (key === 'pump14') points = [...points, {name:'振动', addr:'40107', unit:'mm/s', scale:'×0.01', dir:'只读'}]
+  if (key === 'bms210') points = points.filter(p => p.name !== '绝缘电阻')
+  return withPointMeta(points)
 }
 function stationFor(node, index){
   const m = String(node.name).match(/\d+/)
@@ -1820,16 +1904,25 @@ function devMapped(node){ return node.status !== '未绑定' || !!state.devMappe
 function autoMatchPoints(node){
   state.devMapped[node.id] = true
   if (!state.devChannel[node.id]) state.devChannel[node.id] = 'ch1'
-  render(); toast('已按型号推荐匹配 6 个点位；核对后运行验证')
+  render(); toast(`已按 Profile 匹配 ${pointMapFor(node).length} 个点位；核对后运行验证`)
 }
 function runVerify(node){
   if (!devChannelOf(node)) { toast('先选通道'); return }
+  const channel = CHANNELS.find(c => c.key === devChannelOf(node))
+  if (!channel || !channel.online) { toast('通道离线，验证未通过'); return }
   if (!devMapped(node)) { toast('先把点位映射补齐'); return }
+  const safePoint = pointMapFor(node).find(p => p.safe)
+  if (state.safeWrite && !safePoint) { toast('这个型号没有声明安全写点，L3 不可执行'); return }
+  const required = pointMapFor(node).filter(p => p.required).length
   const prefix = (node.meta || '').split(' · ')[0] || '设备'
   const station = stationFor(node, 0)
   node.status = '在线'
   node.meta = `${prefix} · Modbus 站号 ${station}`
-  render(); toast('验证通过：连通、读值、写回读；设备已接入')
+  state.verifyLog[node.id] = {
+    at:'2026-11-22 21:34', who:'张工', l1:'通过 · 12 ms', l2:`通过 · ${required}/${required} 必需点`,
+    l3: state.safeWrite ? `通过 · ${safePoint.name} 回读一致` : '未执行（默认不写）',
+  }
+  render(); toast(state.safeWrite ? 'L1/L2/L3 均通过，设备已接入' : 'L1/L2 通过，设备已接入；L3 未执行')
 }
 function accessStep(){
   const root = ledger()
@@ -1849,47 +1942,107 @@ function accessStep(){
       <div class="actions"><button class="primary" onclick="setStep('strategy')">下一步：配策略 →</button></div>
     </div>`
 }
+function setAccessStage(stage){ state.accessStage = stage; render() }
 function deviceAccess(node){
   const bound = node.status !== '未绑定'
   const profiles = profilesFor(node)
   const points = pointMapFor(node)
   const channel = CHANNELS.find(c => c.key === devChannelOf(node))
   const mapped = devMapped(node)
+  const stage = state.accessStage
+  const profile = profiles.find(p => p.key === devProfileOf(node)) || profiles[0]
+  const body = stage === 'channel' ? channelWorkspace(node)
+    : stage === 'points' ? pointsWorkspace(node)
+    : stage === 'verify' ? verifyWorkspace(node)
+    : profileWorkspace(node, profile)
   return `<div class="panel-head"><h3>${esc(node.name)}</h3><span class="tag">设备</span>
-      <span class="tag ${bound ? 'ok' : 'warn'}">${bound ? '已接入' : '未绑定'}</span></div>
+      <span class="tag ${bound ? 'ok' : 'warn'}">${bound ? '已接入' : '未绑定'}</span>
+      <span class="src">${profile.name} · ${channel ? channel.note : '未选通道'} · ${mapped ? points.length + '/' + points.length + ' 点位' : '未映射'}</span></div>
     <div class="pipeline">
-      <span class="ok">选型号</span><i>→</i>
-      <span class="${channel ? 'ok' : 'cur'}">选通道</span><i>→</i>
-      <span class="${mapped ? 'ok' : 'cur'}">核对点位 ${mapped ? `${points.length}/${points.length}` : `0/${points.length}`}</span><i>→</i>
-      <span class="${bound ? 'ok' : ''}">验证</span>
+      <button class="ok" data-stage="profile">选型号</button><i>→</i>
+      <button class="${channel ? 'ok' : 'cur'}" data-stage="channel">选通道</button><i>→</i>
+      <button class="${mapped ? 'ok' : 'cur'}" data-stage="points">核对点位 ${mapped ? `${points.length}/${points.length}` : `0/${points.length}`}</button><i>→</i>
+      <button class="${bound ? 'ok' : ''}" data-stage="verify">验证</button>
     </div>
-    <div class="acc-grid">
-      <div class="acc-card"><h5>1 · 选型号</h5>
-        ${profiles.map(p => `<button class="pick ${devProfileOf(node) === p.key ? 'active' : ''}" onclick="setProfile('${node.id}','${p.key}')">
-          <b>${p.name}</b><small>${p.points} 点位 · ${p.commands} 命令 · ${p.note}</small></button>`).join('')}
-      </div>
-      <div class="acc-card"><h5>2 · 选通道</h5>
-        ${CHANNELS.map(c => `<button class="pick ${devChannelOf(node) === c.key ? 'active' : ''}" onclick="setChannel('${node.id}','${c.key}')">
-          <b>${c.name}</b><small>${c.note} · <span class="${c.online ? 'ok-text' : 'warn-text'}">${c.online ? '在线' : '离线'}</span> · ${c.last}</small></button>`).join('')}
-        <p class="note">一个端口一行；线路测试与扫描只读，不写设备。</p>
-      </div>
-      <div class="acc-card wide"><h5>3 · 核对点位 <span class="src">${mapped ? `${points.length}/${points.length} 已映射` : `0/${points.length} 已映射`}</span></h5>
-        <table class="mini-table"><thead><tr><th>模板点位</th><th>地址</th><th>单位</th><th>换算</th><th>读写</th><th>状态</th></tr></thead>
-          <tbody>${points.map(p => `<tr><td>${p.name}</td><td>${mapped ? p.addr : '—'}</td><td>${p.unit}</td><td>${p.scale}</td><td>${p.dir}</td>
-            <td>${mapped ? '<span class="chip ok">已映射</span>' : '<span class="chip warn">待匹配</span>'}</td></tr>`).join('')}</tbody></table>
-        <div class="actions"><button class="ghost" onclick="autoMatchPoints(findNode(ledger(),'${node.id}'))">按型号自动匹配</button></div>
-      </div>
-      <div class="acc-card wide"><h5>4 · 验证</h5>
-        <div class="row"><span>连通</span><span>${channel && channel.online ? '<span class="chip ok">通过 · 12 ms</span>' : '<span class="chip warn">未运行</span>'}</span></div>
-        <div class="row"><span>读值</span><span>${mapped && channel && channel.online ? `<span class="chip ok">通过 · ${points.length}/${points.length}</span>` : '<span class="chip">未运行</span>'}</span></div>
-        <div class="row"><span>写回读</span><span>${bound ? '<span class="chip ok">通过 · 0.45 → 0.45</span>' : '<span class="chip">未运行</span>'}</span></div>
-        <div class="actions"><button class="primary" onclick="runVerify(findNode(ledger(),'${node.id}'))">${bound ? '重新验证' : '运行验证并接入'}</button></div>
-        <p class="note">验证结论只说明这台设备接得通；项目能否交付还要看策略、界面与包。</p>
-      </div>
-    </div>`
+    ${body}`
 }
-function setProfile(id, key){ state.devProfile[id] = key; render() }
-function setChannel(id, key){ state.devChannel[id] = key; render() }
+function profileWorkspace(node, profile){
+  const profiles = profilesFor(node)
+  return `<div class="acc-grid">
+    <div class="acc-card"><h5>1 · 选型号</h5>
+      ${profiles.map(p => `<button class="pick ${devProfileOf(node) === p.key ? 'active' : ''}" onclick="setProfile('${node.id}','${p.key}')">
+        <b>${p.name}</b><small>${p.points} 点位 · ${p.commands} 命令 · 必需 ${p.required} · 可选 ${p.optional}</small></button>`).join('')}
+    </div>
+    <div class="acc-card"><h5>Profile 声明</h5>
+      <div class="row"><span>采集点</span><span class="src">${profile.points} 个 · 必需 ${profile.required} · 可选 ${profile.optional}</span></div>
+      <div class="row"><span>命令</span><span class="src">${profile.commands} 个 · ${profile.note}</span></div>
+      <div class="row"><span>安全写点</span><span class="src">${profile.safe || '未声明'}</span></div>
+      <div class="row"><span>约束</span><span class="src">未声明可写的点一律只读</span></div>
+      <p class="note">自动匹配、批量套用与验证都读取这一份 Profile；改型号后要重新核对点位。</p>
+      <div class="actions">
+        <button class="primary" onclick="setAccessStage('channel')">下一步：选通道 →</button>
+        <button class="ghost" onclick="autoMatchPoints(findNode(ledger(),'${node.id}'));setAccessStage('points')">按型号自动匹配</button>
+      </div>
+    </div>
+  </div>`
+}
+function channelWorkspace(node){
+  return `<div class="acc-grid">
+    <div class="acc-card"><h5>2 · 选通道</h5>
+      ${CHANNELS.map(c => `<button class="pick ${devChannelOf(node) === c.key ? 'active' : ''}" onclick="setChannel('${node.id}','${c.key}')">
+        <b>${c.name}</b><small>${c.note} · <span class="${c.online ? 'ok-text' : 'warn-text'}">${c.online ? '在线' : '离线'}</span> · ${c.last}</small></button>`).join('')}
+      <p class="note">一个端口一行；线路测试与扫描只读，不写设备。运行期报文与重连在通信健康里看。</p>
+    </div>
+    <div class="acc-card"><h5>本站连接</h5>
+      <div class="row"><span>站号</span><span class="src">${stationFor(node, 0)}</span></div>
+      <div class="row"><span>通道状态</span><span class="src">${CHANNELS.find(c => c.key === devChannelOf(node))?.online ? '在线 · 最近 2 秒有数据' : '未选择或离线'}</span></div>
+      <div class="row"><span>站号冲突</span><span class="src">接入与批量导入时逐台检查</span></div>
+      <div class="actions"><button class="primary" onclick="setAccessStage('points')">下一步：核对点位 →</button></div>
+    </div>
+  </div>`
+}
+function pointsWorkspace(node){
+  const points = pointMapFor(node)
+  const mapped = devMapped(node)
+  const required = points.filter(p => p.required).length
+  return `<div class="acc-card wide"><h5>3 · 核对点位 <span class="src">${mapped ? `${points.length}/${points.length} 已映射` : `0/${points.length} 已映射`} · 必需 ${required}</span></h5>
+    <table class="mini-table"><thead><tr><th>点位</th><th>要求</th><th>地址</th><th>类型</th><th>倍率</th><th>单位</th><th>读写</th><th>状态</th></tr></thead>
+      <tbody>${points.map(p => `<tr><td>${p.name}</td><td>${p.required ? '必需' : '可选'}</td><td>${mapped ? p.addr : '—'}</td><td>${p.type}</td>
+        <td>${p.scale}</td><td>${p.unit}</td><td>${p.dir}</td>
+        <td>${mapped ? '<span class="chip ok">已映射</span>' : '<span class="chip warn">待匹配</span>'}</td></tr>`).join('')}</tbody></table>
+    <p class="note">${points.filter(p => p.enum).map(p => `${p.name}：${p.enum}`).join('；') || '没有枚举点'}。必需点缺失不计入通过；可选点单独标缺口。</p>
+    <div class="actions">
+      <button class="ghost" onclick="autoMatchPoints(findNode(ledger(),'${node.id}'))">按 Profile 自动匹配</button>
+      <button class="primary" onclick="setAccessStage('verify')">下一步：验证 →</button>
+    </div>
+  </div>`
+}
+function verifyWorkspace(node){
+  const bound = node.status !== '未绑定'
+  const points = pointMapFor(node)
+  const required = points.filter(p => p.required).length
+  const safePoint = points.find(p => p.safe)
+  const log = state.verifyLog[node.id]
+  return `<div class="acc-card wide"><h5>4 · 分级验证</h5>
+    <div class="row"><span>L1 连通</span><span>${log ? `<span class="chip ok">${log.l1}</span>` : '<span class="chip">未运行</span>'}</span></div>
+    <div class="row"><span>L2 必需点读值与质量</span><span>${log ? `<span class="chip ok">${log.l2}</span>` : `<span class="chip">未运行 · ${required} 个必需点</span>`}</span></div>
+    <div class="row"><span>L3 安全点写回读</span><span>${log ? `<span class="chip ${log.l3.startsWith('通过') ? 'ok' : ''}">${log.l3}</span>` : '<span class="chip">未执行（默认不写）</span>'}</span></div>
+    ${safePoint ? `<label class="bind-opt" style="margin-top:8px"><input type="checkbox" ${state.safeWrite ? 'checked' : ''}
+      onchange="state.safeWrite=this.checked;render()"> 执行 L3：${safePoint.name} 写回读（Profile 已声明安全）</label>`
+      : '<p class="note">Profile 未声明安全写点，L3 不可执行；L1/L2 通过即可接入。</p>'}
+    <div class="actions"><button class="primary" onclick="runVerify(findNode(ledger(),'${node.id}'))">${bound ? '重新验证' : '运行验证并接入'}</button></div>
+    ${log ? `<p class="note">最近验证：${log.at} · ${log.who}。验证只证明接入质量，不代表项目可交付或允许现场控制。</p>`
+      : '<p class="note">默认只执行 L1/L2；L3 需要显式勾选，未声明可写的设备不会写。</p>'}
+  </div>`
+}
+function setProfile(id, key){
+  state.devProfile[id] = key
+  state.devMapped[id] = false
+  delete state.verifyLog[id]
+  state.safeWrite = false
+  render()
+}
+function setChannel(id, key){ state.devChannel[id] = key; delete state.verifyLog[id]; render() }
 function unitAccess(node){
   const members = node.members || []
   return `<div class="panel-head"><h3>${esc(node.name)}</h3><span class="tag">业务单元</span></div>
@@ -2256,6 +2409,121 @@ function deviceStrategies(node){
       </tbody></table>
     <div class="actions"><button class="ghost" onclick="toast('原型：设备级联锁只允许本设备动作，不允许跨设备分配')">＋ 设备级联锁</button></div>`
 }
+function machineFor(node){
+  if (!state.machines[node.id]) {
+    state.machines[node.id] = {
+      initial: isEnergy() ? '待机' : '停止',
+      transitions: isEnergy()
+        ? [
+            {from:'待机',event:'并网',guard:'许可 ∧ 无故障',to:'充电',action:'下发充电功率并回读'},
+            {from:'待机',event:'放电',guard:'许可 ∧ 无故障',to:'放电',action:'下发放电功率并回读'},
+            {from:'充电',event:'SOC ≥ 95%',guard:'SOC ≥ 95%',to:'待机',action:'停止充电'},
+            {from:'放电',event:'SOC ≤ 15%',guard:'SOC ≤ 15%',to:'待机',action:'停止放电'},
+            {from:'任意',event:'故障',guard:'—',to:'故障',action:'报警，禁止自动重启'},
+          ]
+        : [
+            {from:'停止',event:'启动',guard:'许可 ∧ 无故障',to:'启动中',action:'下发启动并等回读'},
+            {from:'启动中',event:'回读运行',guard:'电流 > 0',to:'运行',action:'记录开始时间'},
+            {from:'运行',event:'停止',guard:'—',to:'停止中',action:'下发停止'},
+            {from:'停止中',event:'回读停止',guard:'—',to:'停止',action:'记录停止时间'},
+            {from:'任意',event:'故障',guard:'—',to:'故障',action:'报警，禁止自动重启'},
+          ],
+    }
+  }
+  return state.machines[node.id]
+}
+function machineRuntime(node){
+  if (!state.machineSim[node.id]) state.machineSim[node.id] = { current:machineFor(node).initial, log:[] }
+  return state.machineSim[node.id]
+}
+function machineGuard(guard){
+  if (!guard || guard === '—') return true
+  if (guard.includes('许可') && !state.sim.permit) return false
+  if (guard.includes('无故障') && !state.sim.valid) return false
+  if (guard === '电流 > 0') return state.sim.current > 0
+  if (guard === 'SOC ≥ 95%') return state.sim.soc >= 95
+  if (guard === 'SOC ≤ 15%') return state.sim.soc <= 15
+  return true
+}
+function machineEvent(node, event){
+  const machine = machineFor(node), runtime = machineRuntime(node)
+  const transition = machine.transitions.find(t => t.from === runtime.current && t.event === event)
+    || machine.transitions.find(t => t.from === '任意' && t.event === event)
+  if (!transition) {
+    runtime.log.unshift(`${runtime.current} · ${event}：没有可用转移，保持`)
+  } else if (!machineGuard(transition.guard)) {
+    runtime.log.unshift(`${runtime.current} · ${event}：${transition.guard} 不满足，保持`)
+  } else {
+    const from = runtime.current
+    runtime.current = transition.to
+    runtime.log.unshift(`${from} → ${transition.to} · ${transition.action}`)
+  }
+  runtime.log = runtime.log.slice(0, 5)
+  render()
+}
+function resetMachine(node){
+  state.machineSim[node.id] = { current:machineFor(node).initial, log:[] }
+  render()
+}
+function editTransition(nodeId, index){
+  const machine = machineFor(findNode(ledger(), nodeId) || ledger())
+  state.editTransition = { nodeId, index }
+  state.machineDraft = index >= 0 ? {...machine.transitions[index]}
+    : {from:machine.initial,event:'新事件',guard:'—',to:machine.initial,action:'记录原因'}
+  render()
+}
+function saveTransition(){
+  const node = findNode(ledger(), state.editTransition.nodeId)
+  const machine = machineFor(node)
+  const draft = {...state.machineDraft}
+  if (!draft.event.trim() || !draft.to.trim()) { toast('事件和目标状态不能为空'); return }
+  if (state.editTransition.index >= 0) machine.transitions[state.editTransition.index] = draft
+  else machine.transitions.push(draft)
+  state.editTransition = null; state.machineDraft = null; render(); toast('转移已保存')
+}
+function deleteTransition(nodeId, index){
+  const machine = machineFor(findNode(ledger(), nodeId) || ledger())
+  if (machine.transitions.length === 1) { toast('至少保留一条转移'); return }
+  machine.transitions.splice(index, 1); render()
+}
+function machineWorkspace(node){
+  const machine = machineFor(node), runtime = machineRuntime(node)
+  const events = [...new Set(machine.transitions.map(t => t.event))]
+  return `<div class="acc-card wide"><h5>状态机 · ${isEnergy() ? '储能单元' : '离心泵'} <span class="src">当前 ${runtime.current}</span></h5>
+    <div class="chips">${events.map(event => `<button onclick="machineEvent(findNode(ledger(),'${node.id}'),'${event}')">${event}</button>`).join('')}
+      <button onclick="resetMachine(findNode(ledger(),'${node.id}'))">复位模拟</button></div>
+    <div class="sim" style="margin:8px 0">
+      <label>电流 <input type="number" step="0.1" value="${state.sim.current}" onchange="setSim('current', +this.value)"></label>
+      <label>SOC <input type="number" step="1" value="${state.sim.soc}" onchange="setSim('soc', +this.value)"></label>
+      <label class="sim-check"><input type="checkbox" ${state.sim.valid ? 'checked' : ''} onchange="setSim('valid', this.checked)"> 无故障</label>
+      <label class="sim-check"><input type="checkbox" ${state.sim.permit ? 'checked' : ''} onchange="setSim('permit', this.checked)"> 许可</label>
+    </div>
+    ${runtime.log.length ? `<div class="op-result">${runtime.log.map(line => `<div>${line}</div>`).join('')}</div>`
+      : '<p class="note">点一个事件模拟；守卫不满足时保持原状态，不把请求当成已经转移。</p>'}
+    <table class="mini-table"><thead><tr><th>当前</th><th>事件</th><th>守卫</th><th>下一状态</th><th>动作</th><th></th></tr></thead>
+      <tbody>${machine.transitions.map((t, i) => `<tr>
+        <td>${t.from}</td><td>${t.event}</td><td>${t.guard}</td><td>${t.to}</td><td>${t.action}</td>
+        <td class="row-actions"><button class="ghost" onclick="editTransition('${node.id}',${i})">编辑</button>
+          <button class="ghost" onclick="deleteTransition('${node.id}',${i})">删除</button></td></tr>`).join('')}</tbody></table>
+    <div class="actions"><button class="ghost" onclick="editTransition('${node.id}',-1)">＋ 转移</button></div>
+    ${state.editTransition && state.editTransition.nodeId === node.id ? transitionForm(node) : ''}`
+}
+function transitionForm(node){
+  const d = state.machineDraft
+  const states = [...new Set(machineFor(node).transitions.flatMap(t => [t.from, t.to]))]
+  const options = selected => states.map(s => `<option ${selected === s ? 'selected' : ''}>${s}</option>`).join('')
+  return `<div class="rule-form"><h5>编辑转移</h5>
+    <div class="rule-fields">
+      <label>当前 <select id="tFrom">${options(d.from)}</select></label>
+      <label>事件 <input id="tEvent" value="${esc(d.event)}" onchange="state.machineDraft.event=this.value"></label>
+      <label>守卫 <input id="tGuard" value="${esc(d.guard)}" onchange="state.machineDraft.guard=this.value"></label>
+      <label>下一状态 <input id="tTo" value="${esc(d.to)}" onchange="state.machineDraft.to=this.value"></label>
+      <label>动作 <input id="tAction" value="${esc(d.action)}" onchange="state.machineDraft.action=this.value"></label>
+    </div>
+    <div class="actions"><button class="primary" onclick="saveTransition()">保存转移</button>
+      <button class="ghost" onclick="state.editTransition=null;state.machineDraft=null;render()">取消</button></div>
+  </div>`
+}
 function strategyTable(node){
   const rules = rulesFor(node)
   const trace = state.simRan ? rules.map(evalRule) : null
@@ -2265,15 +2533,6 @@ function strategyTable(node){
   const scopeText = state.scope === 'sub'
     ? `本对象与下级（${devices.length} 台设备：${devices.slice(0, 6).map(d => d.name).join('、')}${devices.length > 6 ? ' 等' : ''}）`
     : '仅本对象'
-  const transitions = isEnergy()
-    ? [['待机','并网','许可 ∧ 无故障','充电 / 放电','下发功率指令并回读'],
-       ['充电','SOC ≥ 95%','—','待机','停止充电'],
-       ['放电','SOC ≤ 15%','—','待机','停止放电'],
-       ['任意','故障','—','故障','报警，禁止自动重启']]
-    : [['停止','启动','许可 ∧ 无故障','启动中','下发启动并等回读'],
-       ['启动中','回读运行','电流 > 0','运行','记录开始时间'],
-       ['运行','停止','—','停止中','下发停止'],
-       ['运行','故障','—','故障','报警，禁止自动重启']]
   return `<div class="panel-head"><h3>${esc(node.name)}</h3><span class="tag">${node.kind}</span>
       <span class="tag">${nodeStrategyLabel(node)}</span></div>
     <div class="acc-grid">
@@ -2284,16 +2543,7 @@ function strategyTable(node){
         </div>
         <p class="note">${scopeText}；下级能看到继承来源，未声明的范围不生效。</p>
       </div>
-      <div class="acc-card"><h5>状态机 · ${isEnergy() ? '储能单元' : '离心泵'}</h5>
-        <div class="pipeline">
-          <span class="ok">${isEnergy() ? '待机' : '停止'}</span><i>→</i>
-          <span class="ok">${isEnergy() ? '充电' : '启动中'}</span><i>→</i>
-          <span class="cur">${isEnergy() ? '放电' : '运行'}</span><i>→</i>
-          <span>${isEnergy() ? '待机' : '停止中'}</span>
-        </div>
-        <table class="mini-table"><thead><tr><th>当前</th><th>事件</th><th>守卫</th><th>下一状态</th><th>动作</th></tr></thead>
-          <tbody>${transitions.map(t => `<tr>${t.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>
-      </div>
+      ${machineWorkspace(node)}
     </div>
     <h5 style="margin:14px 0 6px">决策表 · 有序，首命中</h5>
     ${state.editRule && state.editRule.nodeId === node.id ? ruleForm(node) : ''}
@@ -2790,6 +3040,10 @@ function industryPage(){
     </div>`
 }
 
+document.addEventListener('click', e => {
+  const stage = e.target.closest('[data-stage]')
+  if (stage) setAccessStage(stage.dataset.stage)
+})
 render()
 </script>
 </body>

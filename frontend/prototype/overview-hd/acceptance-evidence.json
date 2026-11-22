@@ -1,0 +1,57 @@
+{
+  "generatedAt": "2026-11-22T21:34:00",
+  "project": "教学泵房",
+  "version": "未发布",
+  "preflight": {
+    "status": "passed",
+    "reason": null
+  },
+  "package": {
+    "nodes": 6,
+    "devices": {
+      "total": 3,
+      "unbound": 0
+    },
+    "screens": 0,
+    "rules": 4,
+    "dependencies": [
+      "ems@1.0.0",
+      "泵 Profile v1.3"
+    ]
+  },
+  "importStep": "idle",
+  "mappingDiff": [
+    {
+      "device": "PCS7",
+      "required": "有功功率",
+      "mapped": true
+    }
+  ],
+  "audit": [
+    {
+      "at": "10:42",
+      "actor": "张工",
+      "action": "启动 2号泵",
+      "result": "已回读"
+    },
+    {
+      "at": "10:40",
+      "actor": "李工",
+      "action": "确认报警 2号泵 出口压力低",
+      "result": "已接手"
+    },
+    {
+      "at": "09:58",
+      "actor": "张工",
+      "action": "发布版本 v2026.11.19-1",
+      "result": "成功"
+    }
+  ],
+  "permissions": {
+    "operator": {
+      "start": "允许（仅泵房）",
+      "editPoints": "拒绝",
+      "publish": "拒绝"
+    }
+  }
+}

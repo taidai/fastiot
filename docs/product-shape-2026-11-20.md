@@ -3,7 +3,7 @@
 - 日期：2026-11-20
 - 尺子："一个可重复交付的 IoT/SCADA 底座：用物模型描述对象、用决策表与状态机表达策略、用项目包保证交付可复现；EMS 作为付费行业包叠加在上面。"
 - 标记：**[现]** 代码或文档已有 ｜ **[应]** 从这句话推出、当前缺失 ｜ **[否]** 明确不做 ｜ 未标注的段落为推导
-- 结论已于 2026-11-21 采纳，取舍记录见 [ADR 0002](adr/0002-delivery-workbench-three-surfaces.md)、[ADR 0003](adr/0003-industry-package-activation-only.md)、[ADR 0004](adr/0004-model-page-ledger-tree.md)、[ADR 0005](adr/0005-three-workbenches.md)、[ADR 0006](adr/0006-aggregate-points.md)、[ADR 0007](adr/0007-step-driven-device-workbench.md)、[ADR 0008](adr/0008-customer-scada-per-layer.md) 与 [ADR 0009](adr/0009-screen-configurator.md)。
+- 结论已于 2026-11-21 采纳，取舍记录见 [ADR 0002](adr/0002-delivery-workbench-three-surfaces.md)、[ADR 0003](adr/0003-industry-package-activation-only.md)、[ADR 0004](adr/0004-model-page-ledger-tree.md)、[ADR 0005](adr/0005-three-workbenches.md)、[ADR 0006](adr/0006-aggregate-points.md)、[ADR 0007](adr/0007-step-driven-device-workbench.md)、[ADR 0008](adr/0008-customer-scada-per-layer.md)、[ADR 0009](adr/0009-screen-configurator.md)、[ADR 0010](adr/0010-four-part-rules.md) 与 [ADR 0011](adr/0011-profile-driven-access.md)。
 
 ## 一、逐段推导
 

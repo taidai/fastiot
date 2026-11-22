@@ -43,6 +43,7 @@ await step('第3步 自动匹配与验证接入', async () => {
   await page.click('text=按型号自动匹配')
   await page.waitForTimeout(80)
   if (!(await page.textContent('.stage')).includes('6/6 已映射')) throw new Error('映射未生效')
+  await page.click('[data-stage="verify"]')
   await page.click('text=运行验证并接入')
   await page.waitForTimeout(100)
   const head = await page.textContent('.panel-head')
@@ -52,7 +53,7 @@ await step('第3步 自动匹配与验证接入', async () => {
 })
 
 await step('第3步 未映射时拦住验证', async () => {
-  await page.evaluate(() => { state.step = 'access'; state.selD = 'bms2'; state.devMapped = {}; render() })
+  await page.evaluate(() => { state.step = 'access'; state.selD = 'bms2'; state.devMapped = {}; state.accessStage = 'verify'; render() })
   await page.waitForTimeout(80)
   await page.click('text=运行验证并接入')
   await page.waitForTimeout(80)

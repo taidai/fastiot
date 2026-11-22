@@ -189,6 +189,9 @@
   .sim label{display:flex;flex-direction:column;gap:4px;font-size:11.5px;color:var(--faint)}
   .sim label b{color:var(--ink);font-size:14px}
   .sim input[type=range]{width:180px;accent-color:var(--accent)}
+  .sim select{border:1px solid var(--line);border-radius:8px;padding:4px 8px;font:inherit;font-size:12px;background:#fff}
+  .sim label.sim-check{display:flex;flex-direction:row;align-items:center;gap:6px;font-size:12px}
+  .sim label.sim-check input{accent-color:var(--accent)}
   .sim-result{display:flex;flex-direction:column;gap:4px;border:1px solid #cfe6dc;background:#eef8f3;
     border-radius:10px;padding:10px 12px;margin-top:10px;font-size:12.5px}
   .search-row{display:flex;align-items:center;gap:10px;margin-top:12px}
@@ -520,7 +523,9 @@ const state = {
   project:'教学泵房', workbench:'device', page:'ledger', ems:true,
   selD:'site-pump', newFor:null, step:null, published:false, pendingKind:null,
   screens:{}, cfgDraft:null, bindBlock:null,
-  siteTpl:'pump', scope:'sub', sim:{ p:0.62, level:46 }, simRan:false, rules:{}, editRule:null,
+  siteTpl:'pump', scope:'sub',
+  sim:{ p:0.62, level:46, held:45, clock:'09:00', valid:true, permit:true },
+  simRan:false, rules:{}, editRule:null, ruleDraft:null,
   devProfile:{}, devChannel:{}, devMapped:{},
   treeQuery:'', batchMode:false, batchSel:{}, batchResult:{}, batchChannel:'ch1',
   csvText:'设备,型号,通道,站号\nPCS7,储能变流器,ch1,17\nBMS7,电池管理,ch1,47\nPCS8,储能变流器,ch1,17',
@@ -543,7 +548,7 @@ function closeMenu(){ $('projectMenu').classList.remove('open') }
 function setProject(name){
   state.project = name; state.page = 'ledger'; state.step = null; state.published = false
   state.treeQuery = ''; state.batchSel = {}; state.batchResult = {}; state.batchMode = false
-  state.selD = ''; state.csvPreview = null; state.rules = {}; state.editRule = null; state.simRan = false
+  state.selD = ''; state.csvPreview = null; state.rules = {}; state.editRule = null; state.ruleDraft = null; state.simRan = false
   closeMenu(); render()
   toast('已切换项目：' + name)
 }
@@ -1954,9 +1959,11 @@ function importCsv(){
   state.csvPreview = null
   render(); toast(`已导入并接入 ${rows.length} 台`)
 }
-const METRICS = {
-  pressure:{ label:'出口压力', unit:'MPa' },
-  level:{ label:'液位', unit:'%' },
+const SOURCES = {
+  pressure:{ label:'出口压力', unit:'MPa', numeric:true },
+  level:{ label:'液位', unit:'%', numeric:true },
+  valid:{ label:'采集有效', numeric:false },
+  permit:{ label:'运行许可', numeric:false },
 }
 const ACTIONS = {
   stop_all:'停止全部泵并报警',
@@ -1964,51 +1971,121 @@ const ACTIONS = {
   derate:'降频',
   notify:'通知值班',
 }
-function rulesFor(node){
-  if (!state.rules[node.id]) state.rules[node.id] = [
-    { metric:'level', op:'<', value:10, action:'stop_all' },
-    { metric:'pressure', op:'<', value:0.35, action:'start_pump' },
-    { metric:'pressure', op:'>', value:0.55, action:'derate', param:35 },
+function defaultRules(){
+  return [
+    { conditions:[{ source:'valid', value:true }, { source:'level', op:'<', value:10, join:'AND' }],
+      hold:0, window:'always', actions:[{ type:'stop_all' }, { type:'notify' }] },
+    { conditions:[{ source:'valid', value:true }, { source:'pressure', op:'<', value:0.35, join:'AND' }],
+      hold:30, window:'always', actions:[{ type:'start_pump' }] },
+    { conditions:[{ source:'valid', value:true }, { source:'pressure', op:'>', value:0.55, join:'AND' }],
+      hold:30, window:'always', actions:[{ type:'derate', param:35 }] },
+    { conditions:[{ source:'valid', value:true }, { source:'level', op:'>', value:50, join:'AND' }],
+      hold:0, window:'daily14', actions:[{ type:'notify' }] },
   ]
+}
+function rulesFor(node){
+  if (!state.rules[node.id]) state.rules[node.id] = defaultRules()
   return state.rules[node.id]
 }
-function ruleValue(rule){ return rule.metric === 'level' ? state.sim.level : state.sim.p }
-function rulePass(rule){ const v = ruleValue(rule); return rule.op === '<' ? v < rule.value : v > rule.value }
+function sourceOf(c){ return SOURCES[c.source] || SOURCES.pressure }
 function unitSuffix(unit){ return unit === '%' ? '%' : ' ' + unit }
-function ruleText(rule){
-  const m = METRICS[rule.metric]
-  return `${m.label} ${rule.op === '<' ? '&lt;' : '&gt;'} ${rule.value}${unitSuffix(m.unit)}`
+function condValue(c){
+  if (c.source === 'pressure') return state.sim.p
+  if (c.source === 'level') return state.sim.level
+  if (c.source === 'valid') return state.sim.valid
+  if (c.source === 'permit') return state.sim.permit
+  return 0
 }
-function actionText(rule){
-  if (rule.action === 'derate') return `降频到 ${rule.param || 35} Hz`
-  return ACTIONS[rule.action] || rule.action
+function condPass(c){
+  const v = condValue(c)
+  if (!sourceOf(c).numeric) return c.value === true ? v : !v
+  return c.op === '<' ? v < c.value : v > c.value
 }
-function ruleReason(rule){
-  const m = METRICS[rule.metric], v = ruleValue(rule)
-  return `${m.label} ${v}${unitSuffix(m.unit)} ${rule.op === '<' ? '≥' : '≤'} ${rule.value}${unitSuffix(m.unit)}`
+function condText(c){
+  const s = sourceOf(c)
+  if (!s.numeric) return `${s.label} = ${c.value ? '是' : '否'}`
+  return `${s.label} ${c.op === '<' ? '&lt;' : '&gt;'} ${c.value}${unitSuffix(s.unit)}`
+}
+function condReason(c){
+  const s = sourceOf(c)
+  if (!s.numeric) return `${s.label} 为${condValue(c) ? '是' : '否'}，与期望不符`
+  const v = condValue(c)
+  return `${s.label} ${v}${unitSuffix(s.unit)} ${c.op === '<' ? '≥' : '≤'} ${c.value}${unitSuffix(s.unit)}`
+}
+function conditionsText(rule){
+  return rule.conditions.map((c, i) => (i ? ` <span class="src">${c.join}</span> ` : '') + condText(c)).join('')
+}
+function actionText(a){
+  if (a.type === 'derate') return `降频到 ${a.param || 35} Hz`
+  return ACTIONS[a.type] || a.type
+}
+function actionsText(rule){
+  return rule.actions.map(a => (a.delay ? `等 ${a.delay}s → ` : '') + actionText(a)).join(' → ')
+}
+function windowText(w){ return { always:'常驻', daily14:'每日 14:00', range16:'16:00–16:05' }[w] || w }
+function windowMatch(w){
+  if (w === 'always') return true
+  if (w === 'daily14') return state.sim.clock === '14:00'
+  if (w === 'range16') return state.sim.clock >= '16:00' && state.sim.clock <= '16:05'
+  return true
+}
+function evalRule(rule){
+  const results = rule.conditions.map(condPass)
+  let ok = results[0]
+  for (let i = 1; i < results.length; i++) {
+    ok = rule.conditions[i].join === 'OR' ? (ok || results[i]) : (ok && results[i])
+  }
+  const failed = rule.conditions.find((c, i) => !results[i])
+  const reasons = []
+  if (!ok && failed) reasons.push(condReason(failed))
+  if (ok && state.sim.held < rule.hold) reasons.push(`已持续 ${state.sim.held}s &lt; ${rule.hold}s`)
+  if (ok && !windowMatch(rule.window)) reasons.push(`不在时间窗（${windowText(rule.window)}）`)
+  return { pass: ok && state.sim.held >= rule.hold && windowMatch(rule.window), reasons }
 }
 function ruleDuplicate(rules, rule, index){
-  return rules.some((r, i) => i !== index && r.metric === rule.metric && r.op === rule.op && r.value === rule.value)
+  const key = r => JSON.stringify(r.conditions.map(c => [c.source, c.op, c.value, c.join || '']))
+  return rules.some((r, i) => i !== index && key(r) === key(rule))
 }
+function hitIndex(rules){ return rules.findIndex(rule => evalRule(rule).pass) }
 function runSim(){
   state.simRan = true
-  const hit = rulesFor(findNode(ledger(), state.selD) || ledger()).findIndex(rulePass)
-  render(); toast(hit < 0 ? '没有规则命中：条件都不满足，本次不动作' : `命中第 ${hit + 1} 行`)
+  const hit = hitIndex(rulesFor(findNode(ledger(), state.selD) || ledger()))
+  render(); toast(hit < 0 ? '没有规则命中：条件、持续或时间窗不满足' : `命中第 ${hit + 1} 行`)
 }
 function setSim(key, value){ state.sim[key] = value; state.simRan = false; render() }
-function editRule(nodeId, index){ state.editRule = { nodeId, index }; render() }
+function editRule(nodeId, index){
+  const rules = rulesFor(findNode(ledger(), nodeId) || ledger())
+  const base = index >= 0 ? rules[index] : {
+    conditions:[{ source:'pressure', op:'>', value:0.5, join:'AND' }],
+    hold:0, window:'always', actions:[{ type:'notify' }],
+  }
+  state.editRule = { nodeId, index }
+  state.ruleDraft = JSON.parse(JSON.stringify(base))
+  render()
+}
+function draftCond(i, patch){ Object.assign(state.ruleDraft.conditions[i], patch); render() }
+function addCond(){
+  state.ruleDraft.conditions.push({ source:'pressure', op:'>', value:0.5, join:'AND' })
+  render()
+}
+function removeCond(i){
+  if (state.ruleDraft.conditions.length === 1) { toast('至少留一个条件'); return }
+  state.ruleDraft.conditions.splice(i, 1); render()
+}
+function draftAction(i, patch){ Object.assign(state.ruleDraft.actions[i], patch); render() }
+function addAction(){ state.ruleDraft.actions.push({ type:'notify', delay:0 }); render() }
+function removeAction(i){
+  if (state.ruleDraft.actions.length === 1) { toast('至少留一个动作'); return }
+  state.ruleDraft.actions.splice(i, 1); render()
+}
+function draftMeta(patch){ Object.assign(state.ruleDraft, patch); render() }
 function saveRule(){
   const node = findNode(ledger(), state.editRule.nodeId)
   const rules = rulesFor(node)
-  const rule = {
-    metric: $('rMetric').value, op: $('rOp').value,
-    value: Number($('rValue').value), action: $('rAction').value,
-  }
-  if (!Number.isFinite(rule.value)) { toast('阈值要填数字'); return }
-  if (rule.action === 'derate') rule.param = Number($('rParam').value) || 35
   const index = state.editRule.index
-  if (index >= 0) rules[index] = rule; else rules.push(rule)
-  state.editRule = null; state.simRan = false; render(); toast('规则已保存')
+  if (index >= 0) rules[index] = state.ruleDraft; else rules.push(state.ruleDraft)
+  state.editRule = null; state.ruleDraft = null; state.simRan = false
+  render(); toast('规则已保存')
 }
 function deleteRule(nodeId, index){
   const rules = rulesFor(findNode(ledger(), nodeId) || ledger())
@@ -2023,27 +2100,59 @@ function moveRule(nodeId, index, dir){
   state.simRan = false; render()
 }
 function ruleForm(node){
-  const rules = rulesFor(node)
   const index = state.editRule.index
-  const rule = index >= 0 ? rules[index] : { metric:'pressure', op:'>', value:0.5, action:'notify' }
+  const rule = state.ruleDraft
   return `<div class="rule-form">
-    <h5>${index >= 0 ? `编辑第 ${index + 1} 行` : '新增规则'}</h5>
-    <div class="rule-fields">
-      <label>条件
-        <select id="rMetric">${Object.entries(METRICS).map(([key, m]) => `<option value="${key}" ${rule.metric === key ? 'selected' : ''}>${m.label}</option>`).join('')}</select>
-        <select id="rOp"><option ${rule.op === '<' ? 'selected' : ''}>&lt;</option><option ${rule.op === '>' ? 'selected' : ''}>&gt;</option></select>
-        <input id="rValue" type="number" step="0.01" value="${rule.value}">
-      </label>
-      <label>动作
-        <select id="rAction">${Object.entries(ACTIONS).map(([key, label]) => `<option value="${key}" ${rule.action === key ? 'selected' : ''}>${label}</option>`).join('')}</select>
-        <input id="rParam" type="number" step="1" value="${rule.param || 35}" title="降频目标 Hz">
-      </label>
-    </div>
-    <div class="actions">
+    <h5>${index >= 0 ? `编辑第 ${index + 1} 行` : '新增规则'} · 条件组</h5>
+    ${rule.conditions.map((c, i) => {
+      const s = sourceOf(c)
+      const join = i ? `<select onchange="draftCond(${i},{join:this.value})">
+        <option ${c.join === 'AND' ? 'selected' : ''}>AND</option>
+        <option ${c.join === 'OR' ? 'selected' : ''}>OR</option></select>` : ''
+      const valueInput = s.numeric
+        ? `<select onchange="draftCond(${i},{op:this.value})">
+             <option value="<" ${c.op === '<' ? 'selected' : ''}>&lt;</option>
+             <option value=">" ${c.op === '>' ? 'selected' : ''}>&gt;</option></select>
+           <input type="number" step="0.01" value="${c.value}" onchange="draftCond(${i},{value:Number(this.value)})">`
+        : `<select onchange="draftCond(${i},{value:this.value === 'yes'})">
+             <option value="yes" ${c.value === true ? 'selected' : ''}>是</option>
+             <option value="no" ${c.value === false ? 'selected' : ''}>否</option></select>`
+      return `<div class="rule-fields" style="margin-bottom:6px">
+        ${join}
+        <select onchange="draftCond(${i},{source:this.value, ...(SOURCES[this.value].numeric ? {op:'>', value:0.5} : {value:true})})">
+          ${Object.entries(SOURCES).map(([key, v]) => `<option value="${key}" ${c.source === key ? 'selected' : ''}>${v.label}</option>`).join('')}
+        </select>
+        ${valueInput}
+        <span class="spacer"></span>
+        <button class="ghost" onclick="removeCond(${i})">移除</button>
+      </div>`
+    }).join('')}
+    <button class="ghost" onclick="addCond()">＋ 条件</button>
+    <h5>持续时长</h5>
+    <div class="chips">${[0, 30, 120].map(n => `<button class="${rule.hold === n ? 'active' : ''}"
+      onclick="draftMeta({hold:${n}})">${n ? n + ' 秒' : '瞬时'}</button>`).join('')}</div>
+    <h5>时间窗</h5>
+    <div class="chips">${['always','daily14','range16'].map(w => `<button class="${rule.window === w ? 'active' : ''}"
+      onclick="draftMeta({window:'${w}'})">${windowText(w)}</button>`).join('')}</div>
+    <h5>动作序列</h5>
+    ${rule.actions.map((a, i) => `<div class="rule-fields" style="margin-bottom:6px">
+      <span class="src">${i + 1}</span>
+      <select onchange="draftAction(${i},{type:this.value})">
+        ${Object.entries(ACTIONS).map(([key, label]) => `<option value="${key}" ${a.type === key ? 'selected' : ''}>${label}</option>`).join('')}
+      </select>
+      ${a.type === 'derate' ? `<input type="number" step="1" value="${a.param || 35}" title="降频目标 Hz"
+        onchange="draftAction(${i},{param:Number(this.value)})">` : ''}
+      <label class="src">延时 <input type="number" step="1" value="${a.delay || 0}" style="width:64px"
+        onchange="draftAction(${i},{delay:Number(this.value)})"> 秒</label>
+      <span class="spacer"></span>
+      <button class="ghost" onclick="removeAction(${i})">移除</button>
+    </div>`).join('')}
+    <button class="ghost" onclick="addAction()">＋ 动作</button>
+    <div class="actions" style="margin-top:10px">
       <button class="primary" onclick="saveRule()">保存规则</button>
-      <button class="ghost" onclick="state.editRule=null;render()">取消</button>
+      <button class="ghost" onclick="state.editRule=null;state.ruleDraft=null;render()">取消</button>
     </div>
-    <p class="note">条件按行序求值，首命中后不再看后面的行；降频参数只对“降频”动作生效。</p>
+    <p class="note">条件组按 AND/OR 从左到右求值，不嵌套；持续与时间窗都参与判断；每个动作都要回读。</p>
   </div>`
 }
 function strategyStep(){
@@ -2069,8 +2178,8 @@ function deviceStrategies(node){
 }
 function strategyTable(node){
   const rules = rulesFor(node)
-  const trace = state.simRan ? rules.map(rulePass) : null
-  const hit = trace ? trace.findIndex(Boolean) : null
+  const trace = state.simRan ? rules.map(evalRule) : null
+  const hit = trace ? trace.findIndex(t => t.pass) : null
   const devices = []
   ;(function walk(n){ if (n.kind === '设备') devices.push(n); (n.children || []).forEach(walk) })(node)
   const scopeText = state.scope === 'sub'
@@ -2108,16 +2217,18 @@ function strategyTable(node){
     </div>
     <h5 style="margin:14px 0 6px">决策表 · 有序，首命中</h5>
     ${state.editRule && state.editRule.nodeId === node.id ? ruleForm(node) : ''}
-    <table class="mini-table rules-table"><thead><tr><th>#</th><th>条件</th><th>动作</th><th>评估</th><th></th></tr></thead>
+    <table class="mini-table rules-table"><thead><tr><th>#</th><th>条件组</th><th>持续</th><th>时间窗</th><th>动作序列</th><th>评估</th><th></th></tr></thead>
       <tbody>${rules.map((rule, i) => {
         const dup = ruleDuplicate(rules, rule, i)
         const evalText = trace === null ? (dup ? '<span class="chip warn">条件重复</span>' : '')
-          : trace[i] ? '<span class="chip ok">命中</span>'
-          : `<span class="src">跳过 · ${ruleReason(rule)}</span>`
+          : trace[i].pass ? '<span class="chip ok">命中</span>'
+          : `<span class="src">跳过 · ${trace[i].reasons.join('；')}</span>`
         return `<tr class="${hit === i ? 'hit' : ''}">
           <td>${i + 1}</td>
-          <td>${ruleText(rule)}${dup ? ' <span class="chip warn">重复</span>' : ''}</td>
-          <td>${actionText(rule)}</td>
+          <td>${conditionsText(rule)}${dup ? ' <span class="chip warn">重复</span>' : ''}</td>
+          <td>${rule.hold ? rule.hold + 's' : '瞬时'}</td>
+          <td>${windowText(rule.window)}</td>
+          <td>${actionsText(rule)}</td>
           <td>${evalText}</td>
           <td class="row-actions">
             <button class="ghost" onclick="moveRule('${node.id}',${i},-1)">↑</button>
@@ -2133,12 +2244,20 @@ function strategyTable(node){
         <input type="range" min="0.2" max="0.7" step="0.01" value="${state.sim.p}" oninput="setSim('p', +this.value)"></label>
       <label>液位 <b>${state.sim.level}</b> %
         <input type="range" min="0" max="100" step="1" value="${state.sim.level}" oninput="setSim('level', +this.value)"></label>
+      <label>条件已持续 <b>${state.sim.held}</b> 秒
+        <input type="range" min="0" max="180" step="1" value="${state.sim.held}" oninput="setSim('held', +this.value)"></label>
+      <label>模拟时刻
+        <select onchange="setSim('clock', this.value)">${['09:00','14:00','16:02'].map(t => `<option ${state.sim.clock === t ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+      <label class="sim-check"><input type="checkbox" ${state.sim.valid ? 'checked' : ''}
+        onchange="setSim('valid', this.checked)"> 采集有效</label>
+      <label class="sim-check"><input type="checkbox" ${state.sim.permit ? 'checked' : ''}
+        onchange="setSim('permit', this.checked)"> 运行许可</label>
       <button class="primary" onclick="runSim()">运行模拟</button>
     </div>
     ${hit === null ? '' : hit < 0
-      ? '<p class="note">没有规则命中：本次不动作，也不下发任何命令。</p>'
-      : `<div class="sim-result"><b>命中第 ${hit + 1} 行：${actionText(rules[hit])}</b>
-          <span class="src">下发 ${rules[hit].action === 'derate' ? `频率 45 → ${rules[hit].param || 35} Hz` : '动作请求'} · 回读确认后记为完成；未回读显示结果未知。</span></div>`}`
+      ? '<p class="note">没有规则命中：条件、持续或时间窗不满足，本次不动作，也不下发任何命令。</p>'
+      : `<div class="sim-result"><b>命中第 ${hit + 1} 行：${actionsText(rules[hit])}</b>
+          <span class="src">动作按序列逐条下发并回读；未回读显示结果未知。条件需持续 ${rules[hit].hold ? rules[hit].hold + ' 秒' : '瞬时'}，时间窗 ${windowText(rules[hit].window)}。</span></div>`}`
 }
 function uiStep(){
   const root = ledger()
