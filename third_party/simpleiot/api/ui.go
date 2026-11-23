@@ -64,14 +64,25 @@ func (h *uiHandler) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 	p := path.Clean("/" + req.URL.Path)
 	if p != "/" && p != "/index.html" {
 		name := strings.TrimPrefix(p, "/")
-		if st, err := fs.Stat(h.fsys, name); err == nil && !st.IsDir() {
-			if strings.HasPrefix(p, "/_app/immutable/") {
-				// hashed file names; a new build makes new names
-				res.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		if st, err := fs.Stat(h.fsys, name); err == nil {
+			if st.IsDir() {
+				page, indexErr := fs.ReadFile(h.fsys, path.Join(name, "index.html"))
+				if indexErr == nil {
+					nestedScriptSrc := strings.Join(append([]string{scriptSrc}, uiScriptHashes(page)...), " ")
+					res.Header().Set("Content-Security-Policy", contentSecurityPolicy(nestedScriptSrc))
+					res.Header().Set("Cache-Control", "no-cache")
+					http.ServeContent(res, req, "index.html", time.Time{}, bytes.NewReader(page))
+					return
+				}
+			} else {
+				if strings.HasPrefix(p, "/_app/immutable/") {
+					// hashed file names; a new build makes new names
+					res.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				}
+				req.URL.Path = p
+				h.files.ServeHTTP(res, req)
+				return
 			}
-			req.URL.Path = p
-			h.files.ServeHTTP(res, req)
-			return
 		} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			http.Error(res, "Internal Server Error", http.StatusInternalServerError)
 			return

@@ -1,0 +1,30 @@
+{
+  "pages": [
+    {
+      "path": "pages/login/index",
+      "style": { "navigationBarTitleText": "登录 · FastIOT" }
+    },
+    {
+      "path": "pages/overview/index",
+      "style": { "navigationBarTitleText": "总览 · FastIOT" }
+    },
+    {
+      "path": "pages/design/index",
+      "style": { "navigationBarTitleText": "设计 · FastIOT" }
+    },
+    {
+      "path": "pages/delivery/index",
+      "style": { "navigationBarTitleText": "交付 · FastIOT" }
+    },
+    {
+      "path": "pages/history/index",
+      "style": { "navigationBarTitleText": "历史数据 · FastIOT" }
+    }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "FastIOT",
+    "navigationBarBackgroundColor": "#eef4f8",
+    "backgroundColor": "#eef4f8"
+  }
+}

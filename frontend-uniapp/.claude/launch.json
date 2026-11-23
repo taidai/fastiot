@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "uniapp-dev",
+      "runtimeExecutable": "C:\\Program Files\\Git\\bin\\bash.exe",
+      "runtimeArgs": ["-lc", "FASTEMS_API=http://127.0.0.1:4409 npm run dev:h5 -- --host 127.0.0.1"],
+      "port": 5174
+    }
+  ]
+}

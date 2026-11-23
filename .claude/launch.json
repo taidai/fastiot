@@ -2,6 +2,19 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "fastiot-backend-debug",
+      "runtimeExecutable": "docker",
+      "runtimeArgs": ["run", "--rm", "--name", "fastiot-debug-backend", "-e", "FASTEMS_ADMIN_PASSWORD=admin1234567", "-e", "FASTEMS_SEED_DEMO=0", "-e", "CGO_ENABLED=0", "-p", "127.0.0.1:4409:8080", "-p", "127.0.0.1:4222:4222", "-v", "fastiot-debug-data2:/data", "-v", "fastems-gomod:/go/pkg/mod", "-v", "fastiot-go-build:/root/.cache/go-build", "-v", "C:/Users/chent/Desktop/2026成果/AAAAA开源/easyems:/src", "-w", "/src", "golang:1.27.3", "go", "run", "./cmd/fastiot", "-port", "8080", "-data", "/data"],
+      "port": 4409
+    },
+    {
+      "name": "uniapp-dev",
+      "runtimeExecutable": "C:\\Program Files\\Git\\bin\\bash.exe",
+      "runtimeArgs": ["-lc", "cd '/c/Users/chent/Desktop/2026成果/AAAAA开源/easyems/frontend-uniapp' && FASTEMS_API=http://127.0.0.1:4409 npm run dev:h5 -- --host 127.0.0.1"],
+      "port": 5174,
+      "autoPort": false
+    },
+    {
       "name": "fastiot-ui-dev",
       "runtimeExecutable": "C:\\Program Files\\Git\\bin\\bash.exe",
       "runtimeArgs": ["-lc", "cd '/c/Users/chent/Desktop/2026成果/AAAAA开源/easyems/frontend' && FASTEMS_API=http://127.0.0.1:4409 npm run dev -- --host 127.0.0.1 --port 5180 --strictPort"],

@@ -45,8 +45,10 @@ func TestUIScriptHashes(t *testing.T) {
 
 func TestUIFallback(t *testing.T) {
 	page := "<html><script>start()</script></html>"
+	uniappPage := "<html><script>uniapp()</script></html>"
 	fsys := fstest.MapFS{
 		"index.html":                {Data: []byte(page)},
+		"uniapp/index.html":         {Data: []byte(uniappPage)},
 		"siot-logo.svg":             {Data: []byte("<svg/>")},
 		"_app/version.json":         {Data: []byte("{}")},
 		"_app/immutable/entry/a.js": {Data: []byte("a()")},
@@ -62,6 +64,7 @@ func TestUIFallback(t *testing.T) {
 		{"/", http.StatusOK, page, "no-cache"},
 		{"/sign-in", http.StatusOK, page, "no-cache"},
 		{"/nodes/abc-123", http.StatusOK, page, "no-cache"},
+		{"/uniapp/", http.StatusOK, uniappPage, "no-cache"},
 		{"/siot-logo.svg", http.StatusOK, "<svg/>", ""},
 		{"/_app/version.json", http.StatusOK, "{}", ""},
 		{"/_app/immutable/entry/a.js", http.StatusOK, "a()", "public, max-age=31536000, immutable"},
@@ -81,6 +84,11 @@ func TestUIFallback(t *testing.T) {
 		}
 		if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, uiScriptHashes([]byte(page))[0]) {
 			t.Errorf("%v: policy %q does not allow the page script", c.path, csp)
+		}
+		if c.path == "/uniapp/" {
+			if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, uiScriptHashes([]byte(uniappPage))[0]) {
+				t.Errorf("%v: policy %q does not allow the nested page script", c.path, csp)
+			}
 		}
 	}
 
