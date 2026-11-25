@@ -239,6 +239,7 @@ export default function App() {
   const [password, setPassword] = useState("")
   const [busy, setBusy] = useState(false)
   const [selectedRule, setSelectedRule] = useState("")
+  const [newRuleScope, setNewRuleScope] = useState<"" | "self" | "descendants">("")
   // ruleAnchor remembers the rule that was open before a copy, so deleting the
   // copy falls back to the source instead of the first rule in the list.
   const ruleAnchor = useRef("")
@@ -706,12 +707,14 @@ export default function App() {
       {page === "rules" && canConfigure && <section className="rules-page">
         <div className="page-toolbar">
           <div className="rule-tabs">{rules.map((rule) => <button key={rule.id} className={currentRule?.id === rule.id ? "active" : ""} onClick={() => selectRule(rule.id)}>{nameOf(rule)}</button>)}</div>
-          {canConfigure && <button className="primary-button" disabled={busy} onClick={() => void (async () => {
+          {canConfigure && <select aria-label="新规则作用范围" disabled={busy} value={newRuleScope} onChange={event => setNewRuleScope(event.target.value as "self" | "descendants")}><option value="" disabled>选择作用范围</option><option value="self">本对象</option><option value="descendants">含下级</option></select>}
+          {canConfigure && <button className="primary-button" disabled={busy || !newRuleScope} onClick={() => void (async () => {
+            if (!newRuleScope) return
             const previous = selectedRule
             setSelectedRule("__creating__")
             const ok = await run(async () => {
               const result = await request<{ id: string }>(token, "/rules", "POST", {
-                parent: view.roots[0], description: `新决策表 ${rules.length + 1}`, document: emptyDocument,
+                parent: view.roots[0], description: `新决策表 ${rules.length + 1}`, document: { ...emptyDocument, scope: newRuleScope },
               })
               setSelectedRule(result.id)
             })

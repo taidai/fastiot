@@ -70,6 +70,8 @@ export type ScenarioResult = {
   detail?: string
 }
 export type Document = {
+  scope?: "self" | "descendants"
+  revision?: string
   table: { rows: Row[] }
   bindings: { points: Record<string, Target>; actions: Record<string, Target> }
   scenarios?: Scenario[]
