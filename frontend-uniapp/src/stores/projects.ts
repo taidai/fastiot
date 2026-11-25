@@ -21,14 +21,16 @@ function persist() {
   if (!PREVIEW_MODE && projectContext.user) uni.setStorageSync(storageKey(), { project: projectContext.id, layer: projectContext.layer })
 }
 function activate(id: string, layer = '') {
-  projectContext.generation++
   projectContext.id = id
   projectContext.layer = layer
+  // Synchronous generation subscribers must see the completed transition.
+  projectContext.generation++
   uni.$emit('project-context-changed')
 }
 export function resetProjectContext() {
   loading = undefined
-  ownerToken = ''
+  // Establish ownership before notifying readers, including reentrant ones.
+  ownerToken = PREVIEW_MODE ? '' : (uni.getStorageSync('fastems-token') || '') as string
   projectContext.projects = []
   projectContext.user = ''
   activate('')
@@ -38,7 +40,8 @@ export function resetProjectContext() {
 export async function ensureProjectContext() {
   if (PREVIEW_MODE) return
   const token = (uni.getStorageSync('fastems-token') || '') as string
-  if (ownerToken !== token) { resetProjectContext(); ownerToken = token }
+  if (!token) throw new ApiError('会话已改变，请重新登录', 401, 'session_changed')
+  if (ownerToken !== token) resetProjectContext()
   if (projectContext.id) return
   if (!loading) {
     const generation = projectContext.generation
