@@ -26,13 +26,13 @@ The worktree starts at the current committed source plus only task-related pendi
 | 08 | [L3 安全写回读验证](08.md) | 07 | pending |
 | 09 | [按层总览与可信实时数据](09.md) | 02 | integrated — b74d6e2 |
 | 10 | [历史查询、断线曲线与 CSV](10.md) | 02 | integrated — b399379 |
-| 11 | [告警生命周期与交接持久化](11.md) | 09, 10 | queued — frontier open |
-| 12 | [今日电量、运行时长与健康统计](12.md) | 09, 10 | queued — frontier open |
+| 11 | [告警生命周期与交接持久化](11.md) | 09, 10 | in progress — isolated worktree |
+| 12 | [今日电量、运行时长与健康统计](12.md) | 09, 10 | in progress — isolated worktree |
 | 13 | [四段式规则与显式作用范围](13.md) | 07 | pending |
 | 14 | [状态机定义、模拟与受控执行](14.md) | 07 | pending |
-| 15 | [持续运行的聚合点](15.md) | 09, 10 | queued — frontier open |
+| 15 | [持续运行的聚合点](15.md) | 09, 10 | in progress — isolated worktree |
 | 16 | [今日执行统一查询](16.md) | 13, 14 | pending |
-| 17 | [配界面保存到客户总览](17.md) | 09 | queued — frontier open |
+| 17 | [配界面保存到客户总览](17.md) | 09 | in progress — isolated worktree |
 | 18 | [派生输入与已配置画面的联动验收](18.md) | 13, 14, 15, 17 | pending |
 | 19 | [账号、对象范围与只读权限演练](19.md) | 02 | integrated — de84402 |
 | 20 | [真实预检、不可变发布与包导出](20.md) | 06, 13, 14, 17 | pending |
