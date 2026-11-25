@@ -758,9 +758,14 @@ func (c *Client) recordCheck(outcome rule.Outcome, now time.Time, active *active
 				continue
 			}
 			for _, action := range row.Actions {
-				report.Actions = append(report.Actions, CheckAction{
-					Output: action.ActionID, Requested: action.Value, Applied: action.Value,
-				})
+				check := CheckAction{Output: action.ActionID, Requested: action.Value, Applied: action.Value}
+				if action.Notification != nil {
+					check.Kind, check.Status = "notify", string(outcome.State)
+					if outcome.State == rule.StateAlreadyFired {
+						check.Status, check.Reason = "unknown", "no recorded notification creation receipt"
+					}
+				}
+				report.Actions = append(report.Actions, check)
 			}
 		}
 	}
@@ -774,6 +779,10 @@ func (c *Client) recordCheck(outcome rule.Outcome, now time.Time, active *active
 	report.SourceRevision = c.documentRevision()
 	if active.sequence != nil {
 		report.ExecutionID = active.sequence.executionID
+	} else if outcome.State == rule.StateAlreadyFired {
+		if err := c.restoreNotificationReceipts(&report); err != nil {
+			return err
+		}
 	}
 	for i := range report.Actions {
 		if report.Actions[i].Kind == "notify" {
@@ -802,6 +811,56 @@ func (c *Client) recordCheck(outcome rule.Outcome, now time.Time, active *active
 		return fmt.Errorf("record check: %w", err)
 	}
 	c.lastCheck = text
+	return nil
+}
+
+// A primed engine does not re-run an interrupted sequence. Keep only its
+// previously recorded notification facts, tied to the same reserved execution.
+// A reservation without a creation receipt remains unknown, never created.
+func (c *Client) restoreNotificationReceipts(report *CheckReport) error {
+	hasNotification := false
+	for _, action := range report.Actions {
+		hasNotification = hasNotification || action.Kind == "notify"
+	}
+	if !hasNotification {
+		return nil
+	}
+	nodes, err := siotclient.GetNodes(c.nc, c.config.Parent, c.config.ID, "", false)
+	if err != nil {
+		return fmt.Errorf("read previous notification facts: %w", err)
+	}
+	if len(nodes) != 1 {
+		return nil
+	}
+	var reserved ExecutionReservation
+	reservation, _ := nodes[0].Points.Text("lastExecution", "")
+	if json.Unmarshal([]byte(reservation), &reserved) != nil || reserved.ID == "" || reserved.Row != report.Row || reserved.Revision != report.SourceRevision {
+		return nil
+	}
+	report.ExecutionID = reserved.ID
+	var previous CheckReport
+	text, _ := nodes[0].Points.Text("lastCheck", "")
+	if json.Unmarshal([]byte(text), &previous) != nil || previous.RuleID != report.RuleID || previous.Row != report.Row || previous.SourceRevision != report.SourceRevision || previous.ExecutionID != reserved.ID || len(previous.Actions) != len(report.Actions) {
+		return nil
+	}
+	for i, action := range previous.Actions {
+		if report.Actions[i].Kind != "notify" || action.Kind != "notify" || action.Output != report.Actions[i].Output || action.CommandID != "" || action.Target.NodeID != "" {
+			continue
+		}
+		switch action.Status {
+		case "created":
+			if action.NotificationID == "" || action.Confirmation != "durable_record" {
+				continue
+			}
+		case "failed", "unknown", "skipped":
+			if action.NotificationID != "" {
+				continue
+			}
+		default:
+			continue
+		}
+		report.Actions[i] = action
+	}
 	return nil
 }
 
