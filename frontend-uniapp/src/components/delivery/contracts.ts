@@ -7,6 +7,18 @@ export type AccessPolicy = {
   actions?: string[]
 }
 
+export type AuthorizationCheck = { operation: string; action: string; allowed: boolean; reason: string }
+export type AuthorizationExplanation = { read_only: true; user_id: string; target_id: string; checks: AuthorizationCheck[] }
+
+export function authorizationText(check?: Pick<AuthorizationCheck, "allowed" | "reason">): string {
+  if (!check) return "未检查"
+  if (check.allowed) return "授权允许"
+  if (check.reason === "forbidden" || check.reason === "source_forbidden") return "拒绝 · 对象范围未授权"
+  if (["admin_required", "operator_required", "operation_not_allowed"].includes(check.reason)) return "拒绝 · 动作未授权"
+  if (check.reason === "no_access") return "拒绝 · 账号无有效范围"
+  return `拒绝 · ${check.reason}`
+}
+
 const ACTION_ORDER = [
   "configure", "write_value", "command", "rule_publish", "alarm_ack", "alarm_maintain",
   "delete", "export", "account_manage", "audit_view", "site_settings",

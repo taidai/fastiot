@@ -181,6 +181,7 @@ var routeRequirements = []routeRequirement{
 	actionRoute(http.MethodDelete, "alarm-types", Configure, "admin_required").queryTargetError("root", 400, "invalid_root"),
 	actionRoute(http.MethodPost, "users", AccountManage, "admin_required").bodyTargetError("parent", 400, "invalid_user"),
 	actionRoute(http.MethodGet, "users", AccountManage, "admin_required"),
+	actionRoute(http.MethodGet, "users/*/authorization", AccountManage, "admin_required").queryTarget("target"),
 	actionRoute(http.MethodPut, "users/*", AccountManage, "admin_required"),
 	actionRoute(http.MethodPost, "users/*/password", AccountManage, "admin_required"),
 	authenticatedRoute(http.MethodGet, "ems/screen/*").pathTarget(2),
