@@ -53,6 +53,10 @@ export type Profile = {
     id: string
     name: string
     point?: string
+    value?: number
+    readback?: string
+    readback_value?: number
+    timeout_ms?: number
     parameters?: { name: string; label?: string; point?: string }[]
   }[]
 }
@@ -146,6 +150,34 @@ export type ProfileApplyResponse = {
   applied: number
 }
 
+export type BatchBindingRow = {
+  line: number
+  device: string
+  model: string
+  channel: string
+  station: number
+  device_id?: string
+  profile_id?: string
+  channel_id?: string
+  valid: boolean
+  status: "ready" | "mapped" | "blocked" | "failed"
+  errors: string[]
+  created_points: number
+  mapped: number
+  missing: string[]
+}
+
+export type BatchAccessResponse = { dry_run: boolean; rows: BatchBindingRow[]; applied: number }
+
+export function batchCSV(devices: { id: string; name: string }[], profileID: string, channelID: string, startStation: number) {
+  const cell = (value: string | number) => {
+    const text = String(value)
+    return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+  }
+  const rows = devices.map((device, index) => [device.id, profileID, channelID, startStation + index].map(cell).join(","))
+  return ["设备,型号,通道,站号", ...rows].join("\n")
+}
+
 function normalizedName(value: string) {
   return value.trim().replace(/[\s　]/g, "").replace(/／/g, "/").toLowerCase()
 }
@@ -186,6 +218,23 @@ export function canConfigureAccess(snapshot: Snapshot | null) {
   if (snapshot.user.actions) return snapshot.user.actions.includes("configure")
   if (policy.actions?.length) return policy.actions.includes("configure")
   return policy.role === "admin" || policy.role === "implementer"
+}
+
+export function canCommandAccess(snapshot: Snapshot | null) {
+  if (!snapshot) return false
+  const policy = snapshot.user.policy
+  if (policy.admin) return true
+  if (snapshot.user.actions) return snapshot.user.actions.includes("command")
+  if (policy.actions?.length) return policy.actions.includes("command")
+  return ["admin", "implementer", "operator"].includes(policy.role)
+}
+
+export function safeVerificationCommands(profile: Pick<Profile, "point_specs" | "command_specs">) {
+  const points = new Map((profile.point_specs || []).map(point => [point.name, point]))
+  return (profile.command_specs || []).filter(command => {
+    const point = points.get(command.point || "")
+    return !!point && point.read_only === false && point.note?.split(/\s+/).includes("L3_SAFE") && !!command.readback && (command.parameters?.length || 0) === 0 && typeof command.value === "number" && Number.isFinite(command.value)
+  })
 }
 
 export function verificationError(config: Pick<UnitModelConfig, "profile_id" | "verified" | "verifier" | "verified_at" | "device_serial" | "point_map">, missingRequired: string[] = []) {

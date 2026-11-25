@@ -1,7 +1,7 @@
 <template>
-  <view class="page" :style="glassStyle">
-    <TopBar active="overview" :project="projectName" meta="历史数据" :pending="unackedAlarms.length" :alpha="alpha"
-      @navigate="navigate" @bell="alarmOpen = true" @alpha="setAlpha" />
+  <view class="page" :class="appearance.theme === 'light' ? '' : `theme-${appearance.theme}`">
+    <TopBar active="overview" :project="projectName" meta="历史数据" :pending="unackedAlarms.length" :alpha="appearance.alpha"
+      :theme="appearance.theme" themes :show-workbench="false" show-appearance show-bell @navigate="navigate" @bell="alarmOpen = true" @alpha="setAlpha" @theme="setTheme" @reset="resetAppearance" />
     <view class="history glass">
       <view class="hist-head">
         <button class="ghost" @click="back">← 返回</button>
@@ -33,6 +33,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue"
+import "../overview/theme.css"
 import { onHide, onLoad, onShow } from "@dcloudio/uni-app"
 import TopBar from "../../components/TopBar.vue"
 import AlarmCenter from "../../components/AlarmCenter.vue"
@@ -42,6 +43,8 @@ import { downloadText, request } from "../../api/client"
 import { acknowledgeAlarm, closeAlarm, loadHistory, nameOf, requireAuth, session, startPolling, stopPolling } from "../../stores/session"
 import type { HistoryRecord } from "../../types/api"
 import { businessName, unitOf } from "../overview/overview"
+import { DEFAULT_APPEARANCE, applyAppearanceDocument, normalizeAppearance } from "../overview/appearance"
+import type { Appearance, AppearanceTheme } from "../overview/appearance"
 
 const point = ref("")
 const range = ref("15m")
@@ -60,8 +63,19 @@ const exportMessage = ref("")
 const alarmOpen = ref(false)
 const alarmBusy = ref("")
 const alarmError = ref("")
-const alpha = ref(Number(uni.getStorageSync("fastiot-overview-alpha") || 42))
-const glassStyle = computed(() => ({ "--glass": `rgba(255,255,255,${(alpha.value / 100).toFixed(2)})` }))
+function storedAppearance(): Appearance {
+  const stored = uni.getStorageSync("fastiot-overview-appearance")
+  if (stored) {
+    try { return normalizeAppearance(typeof stored === "string" ? JSON.parse(stored) : stored) }
+    catch { return { ...DEFAULT_APPEARANCE } }
+  }
+  return normalizeAppearance({ alpha: Number(uni.getStorageSync("fastiot-overview-alpha") || 42) })
+}
+const appearance = ref<Appearance>(storedAppearance())
+function persistAppearance() { uni.setStorageSync("fastiot-overview-appearance", JSON.stringify(appearance.value)) }
+function setAlpha(value: number) { appearance.value = normalizeAppearance({ ...appearance.value, alpha: value }); persistAppearance(); applyAppearanceDocument(appearance.value) }
+function setTheme(value: AppearanceTheme) { appearance.value = normalizeAppearance({ ...appearance.value, theme: value }); persistAppearance(); applyAppearanceDocument(appearance.value) }
+function resetAppearance() { appearance.value = { ...DEFAULT_APPEARANCE }; persistAppearance(); applyAppearanceDocument(appearance.value) }
 let authorized = false
 let querySerial = 0
 let exportSerial = 0
@@ -88,7 +102,6 @@ const ranges = [
   { key: "3d", label: "3天" }, { key: "7d", label: "7天" },
 ]
 const granules = [{ key: "raw", label: "原始" }, { key: "5m", label: "5分钟平均" }, { key: "1h", label: "1小时平均" }]
-function setAlpha(value: number) { alpha.value = value; uni.setStorageSync("fastiot-overview-alpha", value) }
 function period(key: string) {
   const minutes = ({ "15m": 15, "1h": 60, "24h": 1440, "3d": 4320, "7d": 10080 } as Record<string, number>)[key] || 15
   const end = new Date()
@@ -165,6 +178,7 @@ onLoad(options => { point.value = (options?.point as string) || "" })
 onMounted(() => {
   authorized = requireAuth()
   if (!authorized) return
+  applyAppearanceDocument(appearance.value)
   if (!point.value && pointOptions.value.length) point.value = pointOptions.value[0].id
   void load()
 })
@@ -176,7 +190,7 @@ onHide(() => { querySerial += 1; exportSerial += 1; exportBusy.value = false; st
 </script>
 
 <style scoped>
-.page { padding: 16px; overflow-x: hidden; }
+.page { min-height: 100vh; padding: 16px; overflow-x: hidden; }
 .history { margin-top: 14px; padding: 18px 20px; min-width: 0; }
 .hist-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .title-wrap { display: flex; align-items: baseline; gap: 8px; min-width: 0; }

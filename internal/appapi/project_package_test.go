@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -53,6 +54,90 @@ func TestPackagePointRewrite(t *testing.T) {
 	}}
 	if points := packagePoints(outside, idMap, new([]packageStrip), new([]string)); len(points) != 0 {
 		t.Fatalf("external reference kept: %#v", points)
+	}
+}
+
+func TestPackageStateMachineRewrite(t *testing.T) {
+	idMap := map[string]string{"old-unit": "new-unit", "old-io": "new-io"}
+	document := decision.StateMachineDocument{
+		Schema:   1,
+		Revision: 3,
+		Draft: decision.StateMachineDefinition{
+			InitialState: "stopped",
+			Scope:        "self",
+			States:       []string{"stopped", "running"},
+			Bindings: decision.BindingSet{
+				Points:  map[string]decision.Target{"p1": {NodeID: "old-unit", PointType: data.PointTypeValue}},
+				Actions: map[string]decision.Target{"a1": {NodeID: "old-io", PointType: data.PointTypeValueSet}},
+			},
+		},
+		CurrentState:  "running",
+		LastExecution: &decision.StateMachineExecution{At: time.Now(), Event: "start", Status: "confirmed"},
+	}
+	encoded, _ := json.Marshal(document)
+	node := data.NodeEdge{ID: "sm", Type: stateMachineType, Points: data.Points{
+		data.NewPointString(stateMachineDocumentPoint, "", string(encoded)),
+	}}
+	points := packagePoints(node, idMap, new([]packageStrip), new([]string))
+	if len(points) != 1 {
+		t.Fatalf("points = %d, want 1", len(points))
+	}
+	var rewritten decision.StateMachineDocument
+	if err := json.Unmarshal([]byte(points[0].Txt()), &rewritten); err != nil {
+		t.Fatal(err)
+	}
+	if rewritten.Draft.Bindings.Points["p1"].NodeID != "new-unit" {
+		t.Fatalf("draft point binding = %q, want new-unit", rewritten.Draft.Bindings.Points["p1"].NodeID)
+	}
+	if rewritten.Draft.Bindings.Actions["a1"].NodeID != "new-io" {
+		t.Fatalf("draft action binding = %q, want new-io", rewritten.Draft.Bindings.Actions["a1"].NodeID)
+	}
+	if rewritten.CurrentState != "stopped" {
+		t.Fatalf("current state = %q, want reset to initial stopped", rewritten.CurrentState)
+	}
+	if rewritten.LastExecution != nil {
+		t.Fatalf("last execution not stripped: %#v", rewritten.LastExecution)
+	}
+}
+
+func TestPackageStateMachineReferences(t *testing.T) {
+	document := decision.StateMachineDocument{
+		Draft: decision.StateMachineDefinition{
+			InitialState: "stopped",
+			States:       []string{"stopped"},
+			Bindings: decision.BindingSet{
+				Points: map[string]decision.Target{"p1": {NodeID: "unit-1"}},
+			},
+		},
+		Applied: &decision.StateMachineDefinition{
+			InitialState: "stopped",
+			States:       []string{"stopped"},
+			Bindings: decision.BindingSet{
+				Points: map[string]decision.Target{"p1": {NodeID: "unit-2"}},
+			},
+		},
+	}
+	encoded, _ := json.Marshal(document)
+	node := data.NodeEdge{ID: "sm", Type: stateMachineType}
+	refs := packageReferences(node, data.NewPointString(stateMachineDocumentPoint, "", string(encoded)))
+	if !slices.Contains(refs, "unit-1") || !slices.Contains(refs, "unit-2") {
+		t.Fatalf("state machine references = %v, want unit-1 and unit-2", refs)
+	}
+}
+
+func TestPackageContentCounts(t *testing.T) {
+	nodes := []packageNode{
+		{Ref: "n1", Type: NodeTypeSite, Points: data.Points{data.NewPointString("description", "", "站点")}},
+		{Ref: "n2", Type: data.NodeTypeModbusIO, Parent: "n1"},
+		{Ref: "n3", Type: "decisionTable", Parent: "n1"},
+		{Ref: "n4", Type: "stateMachine", Parent: "n1"},
+		{Ref: "n5", Type: NodeTypeEnergyUnit, Parent: "n1", Points: data.Points{
+			data.NewPointString(capabilityRulePoint, "", `{"id":"capability"}`),
+		}},
+	}
+	points, strategies := packageContentCounts(nodes)
+	if points != 1 || strategies != 3 {
+		t.Fatalf("counts = %d points, %d strategies; want 1 and 3", points, strategies)
 	}
 }
 
@@ -212,6 +297,9 @@ func TestProjectPackageRoundTrip(t *testing.T) {
 	if exported.Name != "一期工程" || !reflect.DeepEqual(exported.Dependencies, wantDependencies) {
 		t.Fatalf("package meta = %#v", exported)
 	}
+	if exported.PointCount != 1 || exported.StrategyCount != 2 {
+		t.Fatalf("package content counts = points %d, strategies %d; want 1 physical point and 2 strategies", exported.PointCount, exported.StrategyCount)
+	}
 	encoded, _ := json.Marshal(exported)
 	for _, forbidden := range []string{"10.20.30.40", "secret-value", "old-site-engineer", "SN-OLD-001", siteA, plantA, unitA, channelA, ioA, ruleA} {
 		if strings.Contains(string(encoded), forbidden) {
@@ -251,6 +339,9 @@ func TestProjectPackageRoundTrip(t *testing.T) {
 	if imported.SiteID == "" || imported.SiteID == siteA || imported.Model < 3 || imported.Channels != 1 || imported.Rules != 1 {
 		t.Fatalf("import result = %#v", imported)
 	}
+	if len(imported.NodeIDs) != imported.Created {
+		t.Fatalf("import node IDs = %d, created = %d; runtime guidance needs the exact imported scope", len(imported.NodeIDs), imported.Created)
+	}
 	subtrees, err := handlerB.loadSubtree(imported.SiteID)
 	if err != nil {
 		t.Fatal(err)
@@ -284,6 +375,9 @@ func TestProjectPackageRoundTrip(t *testing.T) {
 		t.Fatalf("imported io points = %d", len(ios))
 	}
 	newIO := ios[0]
+	if !slices.Contains(imported.NodeIDs, newChannel.ID) || !slices.Contains(imported.NodeIDs, newIO.ID) {
+		t.Fatalf("import node IDs do not include the rebound channel and point: %#v", imported.NodeIDs)
+	}
 
 	if setpoint, _ := newDevice.Points.Text(PointTypePowerSetpoint, ""); setpoint != newIO.ID {
 		t.Fatalf("power setpoint = %q, want %q", setpoint, newIO.ID)

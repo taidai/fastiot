@@ -87,6 +87,8 @@ type projectPackage struct {
 	Operator      string              `json:"operator"`
 	Dependencies  []packageDependency `json:"dependencies"`
 	Nodes         []packageNode       `json:"nodes"`
+	PointCount    int                 `json:"point_count"`
+	StrategyCount int                 `json:"strategy_count"`
 	Screens       []packageScreen     `json:"screens"`
 	Stripped      []packageStrip      `json:"stripped"`
 	Warnings      []string            `json:"warnings"`
@@ -107,6 +109,7 @@ type importProjectResult struct {
 	Rules     int            `json:"rules"`
 	Profiles  []string       `json:"profiles"`
 	VersionID string         `json:"version_id,omitempty"`
+	NodeIDs   []string       `json:"node_ids"`
 	Ignored   []packageStrip `json:"ignored"`
 	Warnings  []string       `json:"warnings"`
 }
@@ -278,6 +281,10 @@ func packageReferences(node data.NodeEdge, p data.Point) []string {
 		if node.Type != "decisionTable" {
 			return nil
 		}
+	case stateMachineDocumentPoint:
+		if node.Type != stateMachineType {
+			return nil
+		}
 	default:
 		return nil
 	}
@@ -355,6 +362,25 @@ func packageReferences(node data.NodeEdge, p data.Point) []string {
 		for _, target := range document.Bindings.Actions {
 			refs = append(refs, target.NodeID)
 		}
+	case stateMachineDocumentPoint:
+		var document decision.StateMachineDocument
+		if json.Unmarshal([]byte(p.Txt()), &document) != nil {
+			return nil
+		}
+		for _, target := range document.Draft.Bindings.Points {
+			refs = append(refs, target.NodeID)
+		}
+		for _, target := range document.Draft.Bindings.Actions {
+			refs = append(refs, target.NodeID)
+		}
+		if document.Applied != nil {
+			for _, target := range document.Applied.Bindings.Points {
+				refs = append(refs, target.NodeID)
+			}
+			for _, target := range document.Applied.Bindings.Actions {
+				refs = append(refs, target.NodeID)
+			}
+		}
 	}
 	out := refs[:0]
 	for _, ref := range refs {
@@ -410,6 +436,23 @@ func packagePoints(node data.NodeEdge, idMap map[string]string, strips *[]packag
 		points = append(points, *rewritten)
 	}
 	return points
+}
+
+func packageContentCounts(nodes []packageNode) (points, strategies int) {
+	for _, node := range nodes {
+		switch node.Type {
+		case data.NodeTypeModbusIO, data.NodeTypeVariable, NodeTypeOpcuaPoint:
+			points++
+		case "decisionTable", "stateMachine":
+			strategies++
+		}
+		for _, point := range node.Points {
+			if point.Type == capabilityRulePoint && point.Tombstone%2 == 0 {
+				strategies++
+			}
+		}
+	}
+	return points, strategies
 }
 
 func addPackageWarning(warnings *[]string, message string) {
@@ -703,6 +746,55 @@ func rewritePackagePoint(node data.NodeEdge, p data.Point, idMap map[string]stri
 		}
 		document.Bindings.Points = rewriteTargets(document.Bindings.Points)
 		document.Bindings.Actions = rewriteTargets(document.Bindings.Actions)
+		encoded, _ := json.Marshal(document)
+		rewritten := data.NewPointString(p.Type, p.Key, string(encoded))
+		return &rewritten, true, unresolved
+	case stateMachineDocumentPoint:
+		if node.Type != stateMachineType {
+			return &point, true, nil
+		}
+		var document decision.StateMachineDocument
+		if json.Unmarshal([]byte(p.Txt()), &document) != nil {
+			return &point, true, nil
+		}
+		var unresolved []string
+		rewriteDefinition := func(def *decision.StateMachineDefinition) {
+			points := make(map[string]decision.Target, len(def.Bindings.Points))
+			for key, target := range def.Bindings.Points {
+				if target.NodeID == "" {
+					points[key] = target
+					continue
+				}
+				if mapped, ok := idMap[target.NodeID]; ok {
+					target.NodeID = mapped
+					points[key] = target
+				} else {
+					unresolved = append(unresolved, target.NodeID)
+				}
+			}
+			def.Bindings.Points = points
+			actions := make(map[string]decision.Target, len(def.Bindings.Actions))
+			for key, target := range def.Bindings.Actions {
+				if target.NodeID == "" {
+					actions[key] = target
+					continue
+				}
+				if mapped, ok := idMap[target.NodeID]; ok {
+					target.NodeID = mapped
+					actions[key] = target
+				} else {
+					unresolved = append(unresolved, target.NodeID)
+				}
+			}
+			def.Bindings.Actions = actions
+		}
+		rewriteDefinition(&document.Draft)
+		if document.Applied != nil {
+			rewriteDefinition(document.Applied)
+		}
+		// 运行状态不随包迁移：重置到初始状态并剥离执行证据。
+		document.CurrentState = document.Draft.InitialState
+		document.LastExecution = nil
 		encoded, _ := json.Marshal(document)
 		rewritten := data.NewPointString(p.Type, p.Key, string(encoded))
 		return &rewritten, true, unresolved
@@ -1006,6 +1098,7 @@ func (h *Handler) exportProjectPackage(identity Identity, siteID string) (projec
 			}
 		}
 	}
+	pkg.PointCount, pkg.StrategyCount = packageContentCounts(pkg.Nodes)
 	for id := range profiles {
 		version, ok := h.profileVersion(id)
 		if !ok {
@@ -1284,13 +1377,14 @@ func (h *Handler) importProjectPackage(identity Identity, pkg projectPackage, pa
 
 	result := importProjectResult{
 		SiteID: idMap[siteRef], Name: projectName, Created: len(created),
-		Profiles: make([]string, 0, len(profilesUsed)), Ignored: ignored, Warnings: warnings,
+		Profiles: make([]string, 0, len(profilesUsed)), NodeIDs: make([]string, 0, len(created)), Ignored: ignored, Warnings: warnings,
 	}
 	for id := range profilesUsed {
 		result.Profiles = append(result.Profiles, id)
 	}
 	sort.Strings(result.Profiles)
 	for _, node := range prepared {
+		result.NodeIDs = append(result.NodeIDs, node.ID)
 		switch node.Type {
 		case data.NodeTypeModbus:
 			result.Channels++

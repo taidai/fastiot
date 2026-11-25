@@ -15,10 +15,16 @@ export type Condition = {
   weekday_mask?: number
 }
 
-export type Action = { action_id: string; value: number }
+export type Readback = {
+  target?: Target
+  timeout_ms: number
+  tolerance?: number
+}
+export type Action = { action_id: string; value: number; delay_ms?: number; readback?: Readback }
 export type Row = {
   row_id: string
   conditions: Condition[]
+  match?: "all" | "any"
   actions: Action[]
   hold_ms?: number
   cooldown_ms?: number
@@ -34,6 +40,7 @@ export type Evaluation = {
   actions?: (Action & { blocked?: boolean; reason?: string })[]
   state?: string
   blocked?: string[]
+  rows?: { row_id: string; state: string; reasons?: string[]; held_ms: number; required_ms: number }[]
   time_checks?: { start?: string; end?: string; weekday_mask?: number; satisfied: boolean }[]
 }
 
@@ -77,6 +84,20 @@ export function isWritable(node: Node) {
   return readOnly === 0 && (ioType === "modbusCoil" || ioType === "modbusHoldingRegister")
 }
 
+// A ramped output is moved gradually by the runtime. The sequenced action path
+// waits for a single readback and is not wired for ramp steps, so new
+// sequence-based rows must not offer it.
+export function isRamped(node: Node) {
+  const text = activePoint(node, "easyemsSafety")?.text
+  if (!text) return false
+  try {
+    const config = JSON.parse(text)
+    return Number(config?.ramp_per_second) > 0
+  } catch {
+    return false
+  }
+}
+
 export function withBindings(document: DecisionDocument, nodes: Node[]): DecisionDocument {
   const result = JSON.parse(JSON.stringify(document)) as DecisionDocument
   for (const node of nodes) {
@@ -105,9 +126,11 @@ export function createSimulationPayload(
   inputs: Record<string, number>,
   textInputs: Record<string, string>,
   at: string,
+  heldMS = 0,
 ) {
+  const simulationDocument = heldMS > 0 ? { ...document, simulation: { held_ms: heldMS } } : document
   return {
-    document,
+    document: simulationDocument,
     inputs,
     text_inputs: Object.fromEntries(Object.entries(textInputs).filter(([, value]) => value !== "")),
     ...(at ? { at } : {}),
@@ -124,6 +147,14 @@ export function timeConditionText(condition: Pick<Condition, "start" | "end" | "
   const end = condition.end || ""
   const window = !start || !end ? "全天" : start > end ? `${start}–次日${end}` : `${start}–${end}`
   return `${days} ${window}`
+}
+
+export function actionText(action: Action, label: (id: string) => string) {
+  const parts: string[] = []
+  if (action.delay_ms) parts.push(`延时 ${action.delay_ms / 1000}s`)
+  parts.push(`${label(action.action_id)} = ${action.value}`)
+  if (action.readback) parts.push(`回读 ${action.readback.timeout_ms / 1000}s（容差 ${action.readback.tolerance || 0}）`)
+  return parts.join(" → ")
 }
 
 export function conditionText(condition: Condition, label: (id: string) => string) {

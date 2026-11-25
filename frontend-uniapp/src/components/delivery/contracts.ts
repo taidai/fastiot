@@ -65,7 +65,7 @@ export function actionText(action: string) {
 }
 
 const ERROR_LABELS: Record<string, string> = {
-  preflight_failed: "预检存在阻断项；确认后仍可冻结，但冻结不等于部署",
+  preflight_failed: "预检存在阻断项；确认后仍可发布，但发布不等于部署",
   calculation_rollback_unsupported: "当前版本或工程包含计算点，后端不支持回退",
   virtual_input_rollback_unsupported: "当前版本或工程包含虚拟输入点，后端不支持回退",
   package_in_use: "行业配置仍在使用，后端已拒绝停用",
@@ -77,9 +77,30 @@ const ERROR_LABELS: Record<string, string> = {
   version_not_found: "版本不存在或不属于当前 Site",
 }
 
-export function deliveryError(error: unknown): string {
+function dependencyError(code: string, operation?: "import"): string {
+  const rejected = operation === "import" ? "；已拒绝导入，未创建任何节点" : ""
+  const kindText = (kind: string) => kind === "industry" ? "行业包依赖" : "Profile 依赖"
+  let match = code.match(/^missing_dependency:(profile|industry):([^:@]+)@([^:]+?)(:not_installed)?$/)
+  if (match) {
+    const [, kind, id, version, notInstalled] = match
+    const prefix = kind === "industry" && notInstalled ? "目标实例未安装" : "缺少 "
+    return `${prefix}${kindText(kind)} ${id}@${version}${rejected}`
+  }
+  match = code.match(/^incompatible_dependency:(profile|industry):([^:]+):required@([^:]+):(?:current|available)@([^:]+)$/)
+  if (match) {
+    const [, kind, id, required, current] = match
+    return `${kindText(kind)}版本不匹配：${id} 需要 ${required}，当前${kind === "industry" ? "可用" : "为"} ${current}${rejected}`
+  }
+  match = code.match(/^undeclared_dependency:(profile|industry):([^:]+)$/)
+  if (match) return `项目包未声明所需的${kindText(match[1])} ${match[2]}${rejected}`
+  return ""
+}
+
+export function deliveryError(error: unknown, operation?: "import"): string {
   const code = error && typeof error === "object" && "code" in error ? String(error.code || "") : ""
   if (ERROR_LABELS[code]) return ERROR_LABELS[code]
+  const dependency = dependencyError(code, operation)
+  if (dependency) return dependency
   if (error instanceof Error) return error.message
   return String(error || "操作失败")
 }

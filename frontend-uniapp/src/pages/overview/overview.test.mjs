@@ -2,17 +2,24 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import {
   boundDevicesForLayer,
+  buildHourlyTrend,
+  commandStateText,
   descendantNodeIds,
   displaySample,
   formatPercent,
   healthLabel,
   isBusinessLayer,
+  isTerminalCommandState,
   metricForPoint,
   qualityLabel,
+  screenMetricTarget,
   summarizeSuccessRate,
   valueInLayer,
   alarmInLayer,
+  unitPointsForServer,
+  writableUnitPoints,
 } from "./overview.ts"
+import { DEFAULT_APPEARANCE, normalizeAppearance } from "./appearance.ts"
 
 const snapshot = {
   roots: ["site"],
@@ -94,4 +101,64 @@ test("quality, health and percentages distinguish unavailable statistics", () =>
   assert.equal(formatPercent(99.25, 12), "99.3%")
   assert.equal(summarizeSuccessRate([{ window_5m: { polls: 8, failures: 2 } }, { window_5m: { polls: 2, failures: 0 } }]), "80.0%")
   assert.equal(summarizeSuccessRate([{ window_5m: { polls: 0, failures: 0 } }]), "—")
+})
+
+test("appearance reset restores the real light theme and 42 percent defaults", () => {
+  assert.deepEqual(normalizeAppearance({ theme: "invalid", alpha: 500 }), { theme: "light", alpha: 85 })
+  assert.deepEqual(normalizeAppearance({ theme: "dark", alpha: 65 }), { theme: "dark", alpha: 65 })
+  assert.deepEqual(normalizeAppearance({ theme: "tint", alpha: 20 }), { theme: "tint", alpha: 20 })
+  assert.deepEqual(normalizeAppearance(null), DEFAULT_APPEARANCE)
+})
+
+test("metric targets come only from the saved screen binding", () => {
+  const screen = { blocks: [
+    { type: "recent", binding: {} },
+    { type: "kpi", binding: { metrics: [{ point_id: "pressure", target: " 0.45 MPa " }, { point_id: "run", target: "" }] } },
+  ] }
+  assert.equal(screenMetricTarget(screen, "pressure"), "0.45 MPa")
+  assert.equal(screenMetricTarget(screen, "run"), "")
+  assert.equal(screenMetricTarget(screen, "missing"), "")
+  assert.equal(screenMetricTarget(null, "pressure"), "")
+})
+
+test("command states never label submitted or unknown as readback confirmed", () => {
+  assert.equal(commandStateText("confirmed"), "已回读")
+  assert.equal(commandStateText("submitted"), "已下发 · 无回读确认")
+  assert.equal(commandStateText("unknown"), "结果未知")
+  assert.equal(commandStateText("accepted"), "等待回读")
+  assert.equal(isTerminalCommandState("executing"), false)
+  assert.equal(isTerminalCommandState("submitted"), true)
+  assert.equal(isTerminalCommandState("unknown"), true)
+})
+
+test("only writable Modbus outputs from the selected server appear as manual write targets", () => {
+  const points = [
+    { id: "run", name: "运行", server_id: 1, io_type: "modbusCoil", read_only: false },
+    { id: "target", name: "目标", server_id: 1, io_type: "modbusHoldingRegister", read_only: false },
+    { id: "pressure", name: "压力", server_id: 1, io_type: "modbusInputRegister", read_only: false },
+    { id: "locked", name: "锁定", server_id: 1, io_type: "modbusHoldingRegister", read_only: true },
+    { id: "other-unit", name: "其他站号", server_id: 2, io_type: "modbusHoldingRegister", read_only: false },
+  ]
+  assert.deepEqual(unitPointsForServer(points, 1).map(point => point.id), ["run", "target", "pressure", "locked"])
+  assert.deepEqual(writableUnitPoints(unitPointsForServer(points, 1)).map(point => point.id), ["run", "target"])
+})
+
+test("24 hour trend keeps real hourly values and explicit missing buckets", () => {
+  const start = new Date("2026-11-23T00:00:00Z")
+  const end = new Date("2026-11-23T23:30:00Z")
+  const records = [
+    { point_id: "pressure", source_time: "2026-11-23T00:00:00Z", value: 0, quality: "good", source: "modbus_runtime" },
+    { point_id: "pressure", source_time: "2026-11-23T02:00:00Z", value: 4, quality: "good", source: "modbus_runtime" },
+    { point_id: "pressure", source_time: "2026-11-23T03:00:00Z", quality: "stale", kind: "quality_event", source: "modbus_runtime" },
+  ]
+  const trend = buildHourlyTrend(records, start, end)
+  assert.equal(trend.buckets.length, 24)
+  assert.equal(trend.buckets[0].value, 0)
+  assert.equal(trend.buckets[0].height, 0)
+  assert.equal(trend.buckets[1].record, undefined)
+  assert.equal(trend.buckets[1].value, undefined)
+  assert.equal(trend.buckets[2].height, 100)
+  assert.equal(trend.buckets[3].value, undefined)
+  assert.equal(trend.hasData, true)
+  assert.equal(buildHourlyTrend([], start, end).hasData, false)
 })

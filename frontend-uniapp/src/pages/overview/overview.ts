@@ -1,4 +1,4 @@
-import type { EmsAlarm, Node as ApiNode, Point, Snapshot, StateValue } from "../../types/api"
+import type { EmsAlarm, HistoryRecord, Node as ApiNode, Point, Snapshot, StateValue } from "../../types/api"
 
 function point(node: ApiNode, type: string): Point | undefined {
   return node.points.find(item => item.type === type && (item.tombstone || 0) % 2 === 0)
@@ -53,6 +53,17 @@ export type OverviewMetric = {
   value: string
   quality: string
   time: string
+  target?: string
+}
+
+export type OverviewScreen = {
+  blocks?: { type: string; binding?: { metrics?: { point_id?: string; target?: string }[] } }[]
+}
+
+export function screenMetricTarget(screen: OverviewScreen | null, pointID: string) {
+  const metrics = screen?.blocks?.find(block => block.type === "kpi")?.binding?.metrics || []
+  const target = metrics.find(metric => metric.point_id === pointID)?.target
+  return typeof target === "string" ? target.trim() : ""
 }
 
 const businessTypes = new Set(["site", "group", "area", "plant", "energyUnit", "energy_unit", "unit", "device", "modbus_device"])
@@ -149,4 +160,75 @@ export function summarizeSuccessRate(channels: QualityStats[]) {
   const polls = channels.reduce((sum, channel) => sum + (channel.window_5m?.polls || 0), 0)
   const failures = channels.reduce((sum, channel) => sum + (channel.window_5m?.failures || 0), 0)
   return polls ? `${((polls - failures) / polls * 100).toFixed(1)}%` : "—"
+}
+
+export function commandStateText(state: string) {
+  return ({
+    accepted: "等待回读",
+    executing: "执行中 · 等待回读",
+    confirmed: "已回读",
+    failed: "失败",
+    unknown: "结果未知",
+    superseded: "已被后续命令取代",
+    submitted: "已下发 · 无回读确认",
+  } as Record<string, string>)[state] || state || "—"
+}
+
+export function isTerminalCommandState(state: string) {
+  return ["confirmed", "failed", "unknown", "superseded", "submitted"].includes(state)
+}
+
+export type UnitPoint = {
+  id: string
+  name: string
+  server_id: number
+  io_type: string
+  read_only: boolean
+  unit?: string
+}
+
+export function unitPointsForServer<T extends Pick<UnitPoint, "server_id">>(points: T[], serverID: number) {
+  return points.filter(point => point.server_id === serverID)
+}
+
+export function writableUnitPoints<T extends Pick<UnitPoint, "io_type" | "read_only">>(points: T[]) {
+  return points.filter(point => !point.read_only && ["modbusCoil", "modbusHoldingRegister"].includes(point.io_type))
+}
+
+export type HourlyTrendBucket = {
+  time: Date
+  record?: HistoryRecord
+  value?: number
+  height: number
+  baseline: number
+  negative: boolean
+}
+
+export function buildHourlyTrend(records: HistoryRecord[], start: Date, end: Date) {
+  const startMs = start.getTime()
+  const endMs = end.getTime()
+  const byHour = new Map<number, HistoryRecord>()
+  for (const record of records) {
+    const time = new Date(record.source_time || record.received_time || "").getTime()
+    if (!Number.isFinite(time) || time < startMs || time > endMs) continue
+    if (record.kind === "quality_event" || record.quality === "invalid" || record.value === undefined || !Number.isFinite(record.value)) continue
+    byHour.set(time, record)
+  }
+  const buckets: HourlyTrendBucket[] = Array.from({ length: 24 }, (_, index) => {
+    const time = new Date(startMs + index * 60 * 60 * 1000)
+    const record = byHour.get(time.getTime())
+    return { time, record, value: record?.value, height: 0, baseline: 100, negative: false }
+  })
+  const values = buckets.flatMap(bucket => bucket.value === undefined ? [] : [bucket.value])
+  const max = Math.max(...values, 0)
+  const min = Math.min(...values, 0)
+  const mixed = min < 0 && max > 0
+  const scale = Math.max(Math.abs(max), Math.abs(min)) || 1
+  for (const bucket of buckets) {
+    bucket.baseline = mixed ? 50 : max === 0 && min < 0 ? 0 : 100
+    if (bucket.value === undefined) continue
+    bucket.height = Math.abs(bucket.value) / scale * (mixed ? 50 : 100)
+    bucket.negative = bucket.value < 0
+  }
+  return { buckets, hasData: values.length > 0 }
 }

@@ -1,5 +1,6 @@
 import { computed, reactive } from "vue"
 import { request } from "../api/client"
+import { PREVIEW_MODE } from '../api/source'
 import { kindOf, nameOf } from "../types/api"
 import type { EmsAlarm, HistoryQueryResponse, Node, ScreenConfig, Snapshot, StateValue } from "../types/api"
 
@@ -106,6 +107,7 @@ export function stopPolling() {
 }
 
 export function requireAuth() {
+  if (PREVIEW_MODE) return true
   if (!session.token) {
     uni.redirectTo({ url: "/pages/login/index" })
     return false

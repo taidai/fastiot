@@ -23,29 +23,12 @@ func (d Document) RuleTable() (rule.Table, error) {
 	}
 	rows := make([]rule.Row, 0, len(d.Table.Rows))
 	for _, row := range d.Table.Rows {
-		conditions := make([]rule.Condition, 0, len(row.Conditions))
-		for _, condition := range row.Conditions {
-			if condition.Kind == "time" {
-				// The clock is a synthetic input; TimeSamples provides it.
-				conditions = append(conditions, rule.Condition{
-					Input: timeConditionID(condition), Op: "eq", Value: signal.Flag(true),
-				})
-				continue
-			}
-			value := signal.Num(condition.Value)
-			switch condition.Kind {
-			case "bool":
-				value = signal.Flag(condition.Value != 0)
-			case "enum":
-				value = signal.Label(condition.Text)
-			}
-			conditions = append(conditions, rule.Condition{
-				Input: condition.PointID, Op: condition.Operator, Value: value,
-			})
-		}
+		conditions := ruleConditions(row)
 		actions := make([]rule.Action, 0, len(row.Actions))
-		for _, action := range row.Actions {
-			actions = append(actions, rule.Action{Output: action.ActionID, Value: signal.Num(action.Value)})
+		if !row.sequenced() {
+			for _, action := range row.Actions {
+				actions = append(actions, rule.Action{Output: action.ActionID, Value: signal.Num(action.Value)})
+			}
 		}
 		rows = append(rows, rule.Row{
 			ID: row.ID, Conditions: conditions, Actions: actions,
@@ -220,6 +203,7 @@ func marshalCheck(report CheckReport) (string, error) {
 type SimulationAction struct {
 	ActionID string  `json:"action_id"`
 	Value    float64 `json:"value"`
+	DelayMS  int     `json:"delay_ms,omitempty"`
 	Blocked  bool    `json:"blocked,omitempty"`
 	Reason   string  `json:"reason,omitempty"`
 }
@@ -232,6 +216,20 @@ type TimeCheck struct {
 	Satisfied bool   `json:"satisfied"`
 }
 
+// SimulationOptions supplies hypothetical elapsed time. It is not runtime
+// state: the live engine measures hold from its own consecutive evaluations.
+type SimulationOptions struct {
+	HeldMS int `json:"held_ms"`
+}
+
+type SimulationRow struct {
+	RowID      string   `json:"row_id"`
+	State      string   `json:"state"`
+	Reasons    []string `json:"reasons,omitempty"`
+	HeldMS     int      `json:"held_ms"`
+	RequiredMS int      `json:"required_ms"`
+}
+
 // SimulationResult reports the matching row and what would be requested. It
 // never creates a command.
 type SimulationResult struct {
@@ -240,11 +238,11 @@ type SimulationResult struct {
 	State   string             `json:"state"`
 	Blocked []string           `json:"blocked,omitempty"`
 	Times   []TimeCheck        `json:"time_checks,omitempty"`
+	Rows    []SimulationRow    `json:"rows,omitempty"`
 }
 
-// Simulate evaluates the document with the real engine at now, which may be a
-// simulated moment. Held and cooldown state are ignored: it answers "which row
-// matches at that moment".
+// Simulate evaluates rows in first-hit order at now. Hold uses the explicitly
+// supplied hypothetical elapsed time; no command or runtime timer is created.
 func (d Document) Simulate(inputs map[string]float64, texts map[string]string, now time.Time) (SimulationResult, error) {
 	table, err := d.RuleTable()
 	if err != nil {
@@ -254,11 +252,8 @@ func (d Document) Simulate(inputs map[string]float64, texts map[string]string, n
 	for id, sample := range TimeSamples(d.Table, now) {
 		samples[id] = sample
 	}
-	outcome, err := rule.Simulate(table, now, samples, nil)
-	if err != nil {
-		return SimulationResult{}, err
-	}
-	result := SimulationResult{RowID: outcome.MatchedRow, State: string(outcome.State)}
+	samples = conditionGroupSamples(d.Table, now, samples)
+	result := SimulationResult{State: string(rule.StateNoMatch)}
 	seenTimes := make(map[string]bool)
 	for _, row := range d.Table.Rows {
 		for _, condition := range row.Conditions {
@@ -272,18 +267,71 @@ func (d Document) Simulate(inputs map[string]float64, texts map[string]string, n
 			})
 		}
 	}
-	for _, action := range outcome.Actions {
-		value := 0.0
-		if action.Applied.Kind == signal.Number {
-			value = action.Applied.Num
-		}
-		result.Actions = append(result.Actions, SimulationAction{
-			ActionID: action.Output, Value: value,
-			Blocked: action.Blocked, Reason: action.Reason,
-		})
+	heldMS := 0
+	if d.Simulation != nil {
+		heldMS = d.Simulation.HeldMS
 	}
-	for _, blocked := range outcome.Blocked {
-		result.Blocked = append(result.Blocked, blocked.RowID+": "+blocked.Reason)
+	for i, row := range d.Table.Rows {
+		outcome, simulateErr := rule.Simulate(rule.Table{ID: "decision", Version: 1, Rows: []rule.Row{table.Rows[i]}}, now, samples, nil)
+		if simulateErr != nil {
+			return SimulationResult{}, simulateErr
+		}
+		trace := SimulationRow{RowID: row.ID, State: string(outcome.State), HeldMS: heldMS, RequiredMS: row.HoldMS}
+		if outcome.State == rule.StateNoMatch {
+			trace.State = "no-match"
+			if row.Match == "any" {
+				for _, condition := range row.Conditions {
+					if _, reason := conditionMatches(condition, samples, now); reason != "" {
+						trace.Reasons = append(trace.Reasons, reason)
+					}
+				}
+			} else {
+				for _, blocked := range outcome.Blocked {
+					trace.Reasons = append(trace.Reasons, blocked.Reason)
+				}
+			}
+			result.Blocked = append(result.Blocked, row.ID+": "+joinReasons(trace.Reasons))
+			result.Rows = append(result.Rows, trace)
+			continue
+		}
+		result.RowID = row.ID
+		if row.HoldMS > heldMS {
+			result.State = string(rule.StateWaitingHold)
+			trace.State = result.State
+			trace.Reasons = []string{fmt.Sprintf("held %dms is less than required %dms", heldMS, row.HoldMS)}
+			result.Rows = append(result.Rows, trace)
+			return result, nil
+		}
+		result.State = string(rule.StateFired)
+		if row.sequenced() {
+			for _, action := range row.Actions {
+				result.Actions = append(result.Actions, SimulationAction{ActionID: action.ActionID, Value: action.Value, DelayMS: action.DelayMS})
+			}
+		} else {
+			for _, action := range outcome.Actions {
+				value := 0.0
+				if action.Applied.Kind == signal.Number {
+					value = action.Applied.Num
+				}
+				result.Actions = append(result.Actions, SimulationAction{
+					ActionID: action.Output, Value: value,
+					Blocked: action.Blocked, Reason: action.Reason,
+				})
+			}
+		}
+		result.Rows = append(result.Rows, trace)
+		return result, nil
 	}
 	return result, nil
+}
+
+func joinReasons(reasons []string) string {
+	if len(reasons) == 0 {
+		return "condition group does not match"
+	}
+	joined := reasons[0]
+	for _, reason := range reasons[1:] {
+		joined += "; " + reason
+	}
+	return joined
 }

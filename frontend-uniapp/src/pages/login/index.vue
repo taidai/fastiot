@@ -7,7 +7,7 @@
       <label>密码<input v-model="password" type="password" placeholder="密码" @confirm="submit" /></label>
       <button class="primary" :disabled="busy" @click="submit">{{ busy ? "登录中…" : "登录" }}</button>
       <view v-if="error" class="error">{{ error }}</view>
-      <view class="note">使用本实例账号；角色和对象范围由服务端决定。</view>
+      <view class="note">{{ PREVIEW_MODE ? "当前为原型预览模式；使用预览数据，不连接真实业务操作。" : "使用本实例账号；角色和对象范围由服务端决定。" }}</view>
     </view>
   </view>
 </template>
@@ -16,6 +16,7 @@
 import { ref } from "vue"
 import { login } from "../../api/client"
 import { startPolling, session } from "../../stores/session"
+import { PREVIEW_MODE } from "../../api/source"
 
 const email = ref("")
 const password = ref("")
@@ -43,6 +44,6 @@ async function submit() {
 .brand { color: var(--accent); font-size: 26px; font-weight: 700; }
 .subtitle { color: var(--faint); font-size: 12px; margin-top: -8px; }
 label { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 12px; }
-input { border: 1px solid var(--glass-border); border-radius: 10px; background: rgba(255,255,255,.6); padding: 11px 12px; }
+input { min-height: 44px; border: 1px solid var(--glass-border); border-radius: 10px; background: rgba(255,255,255,.6); padding: 11px 12px; line-height: 20px; }
 .note { color: var(--faint); font-size: 11px; line-height: 1.7; }
 </style>

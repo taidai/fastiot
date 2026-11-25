@@ -24,6 +24,7 @@ import (
 	"fastiot/internal/calculation"
 	"fastiot/internal/decision"
 	"fastiot/internal/deepseek"
+	domainaccess "fastiot/internal/domain/access"
 	"fastiot/internal/ems/command"
 	"fastiot/internal/ems/safety"
 	"fastiot/internal/emsapi"
@@ -36,6 +37,7 @@ type Handler struct {
 	users              api.UserAuthority
 	ready              *atomic.Bool
 	commandMu          sync.Mutex
+	accessMu           sync.Mutex
 	virtualInputMu     sync.Mutex
 	calculationRuntime *calculation.Runtime
 	inputEpoch         string
@@ -445,12 +447,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.history(w, r, identity, false)
 	case path == "history/export" && r.Method == http.MethodGet:
 		h.history(w, r, identity, true)
+	case path == "templates" && r.Method == http.MethodGet:
+		writeJSON(w, map[string]any{"site_templates": domainaccess.SiteTemplates()})
 	case path == "templates" && r.Method == http.MethodPost:
 		h.saveTemplate(w, r, identity)
 	case len(parts) == 3 && parts[0] == "templates" && parts[2] == "apply" && r.Method == http.MethodPost:
 		h.applyTemplate(w, r, identity, parts[1])
 	case path == "modbus" && r.Method == http.MethodPost:
 		h.createModbus(w, r, identity)
+	case path == "access/batch" && r.Method == http.MethodPost:
+		h.batchAccess(w, r, identity)
 	case path == "modbus/test" && r.Method == http.MethodPost:
 		h.testModbus(w, r, identity)
 	case len(parts) == 3 && parts[0] == "modbus" && parts[2] == "line-test" && r.Method == http.MethodPost:
@@ -465,6 +471,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.importModbusCSV(w, r, identity, parts[1])
 	case len(parts) == 3 && parts[0] == "modbus" && parts[2] == "io" && r.Method == http.MethodPost:
 		h.createModbusIO(w, r, identity, parts[1])
+	case len(parts) == 5 && parts[0] == "modbus" && parts[2] == "units" && parts[4] == "verify" && (r.Method == http.MethodGet || r.Method == http.MethodPost):
+		server, err := strconv.Atoi(parts[3])
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_station")
+			return
+		}
+		h.verifyUnit(w, r, identity, parts[1], server)
 	case len(parts) == 5 && parts[0] == "modbus" && parts[2] == "units" && parts[4] == "model" && (r.Method == http.MethodGet || r.Method == http.MethodPut):
 		server, err := strconv.Atoi(parts[3])
 		if err != nil {
@@ -500,6 +513,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.deleteNode(w, r, identity, parts[1])
 	case len(parts) == 3 && parts[0] == "nodes" && parts[2] == "move" && r.Method == http.MethodPost:
 		h.moveNode(w, r, identity, parts[1])
+	case len(parts) == 3 && parts[0] == "nodes" && parts[2] == "copy" && r.Method == http.MethodPost:
+		h.copyNodeSubtree(w, r, identity, parts[1])
 	case len(parts) == 3 && parts[0] == "nodes" && parts[2] == "value" && r.Method == http.MethodPost:
 		h.writeValue(w, r, identity, parts[1])
 	case len(parts) == 3 && parts[0] == "nodes" && parts[2] == "manual" && r.Method == http.MethodPost:
@@ -606,6 +621,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.simulateAllocator(w, r, identity, parts[2])
 	case len(parts) == 4 && parts[0] == "ems" && parts[1] == "allocators" && parts[3] == "history" && r.Method == http.MethodGet:
 		h.allocatorHistory(w, identity, parts[2])
+	case len(parts) > 0 && parts[0] == "state-machines":
+		h.stateMachines(w, r, identity, parts[1:])
+	case path == "overview/handover" && (r.Method == http.MethodGet || r.Method == http.MethodPut):
+		h.overviewHandover(w, r, identity)
 	default:
 		writeError(w, http.StatusNotFound, "not_found")
 	}
@@ -743,8 +762,10 @@ func (h *Handler) visibleNodes(identity Identity) ([]data.NodeEdge, error) {
 		data.NodeTypeDevice: true, data.NodeTypeGroup: true, data.NodeTypeVariable: true,
 		data.NodeTypeModbus: true, data.NodeTypeModbusIO: true,
 		"decisionTable": true, "deviceTemplate": true, virtualInputType: true, calculationType: true,
+		stateMachineType: true,
 		// 领域模型三层节点：不在白名单会被剪断整棵子树，前端看不到。
 		NodeTypeSite: true, NodeTypePlant: true, NodeTypeEnergyUnit: true, NodeTypeResourceGroup: true,
+		domainaccess.NodeArea: true, domainaccess.NodeUnit: true,
 		NodeTypeOpcua: true, NodeTypeOpcuaPoint: true,
 		"mqtt": true, "mqttSub": true,
 	}
@@ -785,25 +806,43 @@ func (h *Handler) visibleNodes(identity Identity) ([]data.NodeEdge, error) {
 
 func (h *Handler) createNode(w http.ResponseWriter, r *http.Request, identity Identity) {
 	var input struct {
-		Parent      string   `json:"parent"`
-		Type        string   `json:"type"`
-		Description string   `json:"description"`
-		Value       *float64 `json:"value"`
+		Parent       string   `json:"parent"`
+		Type         string   `json:"type"`
+		Description  string   `json:"description"`
+		Value        *float64 `json:"value"`
+		SiteTemplate string   `json:"site_template"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
 	}
+	input.Description = strings.TrimSpace(input.Description)
 	if input.Description == "" || input.Parent == "" {
 		writeError(w, http.StatusBadRequest, "invalid_node")
 		return
 	}
-	if input.Type != data.NodeTypeGroup && input.Type != data.NodeTypeVariable {
-		writeError(w, http.StatusBadRequest, "unsupported_node_type")
+	if input.SiteTemplate != "" {
+		h.createSiteFromTemplate(w, identity, input.Parent, input.Description, input.SiteTemplate)
 		return
 	}
 	if input.Value != nil && !finite(*input.Value) {
 		writeError(w, http.StatusBadRequest, "invalid_value")
 		return
+	}
+	legacy := input.Type == data.NodeTypeGroup || input.Type == data.NodeTypeVariable
+	if !legacy && !genericBusinessNodeType(input.Type) {
+		writeError(w, http.StatusBadRequest, "unsupported_node_type")
+		return
+	}
+	if !legacy {
+		parent, ok := h.routeNode(w, input.Parent)
+		if !ok {
+			return
+		}
+		parentIsRoot := parent.Parent == "root" || parent.Type == NodeTypeSiteRoot
+		if !domainaccess.CanPlace(input.Type, parent.Type, parentIsRoot) {
+			writeError(w, http.StatusBadRequest, "invalid_parent_type")
+			return
+		}
 	}
 	node := data.NodeEdge{
 		ID: data.NewID(), Type: input.Type, Parent: input.Parent,

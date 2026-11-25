@@ -1,45 +1,50 @@
 <template>
   <view class="access-step">
-    <view class="step-head">
-      <b>第 3 步 · 接设备</b><span>型号 → 通道 → 点位 → 验证；数据来自当前后端。</span>
-      <span class="spacer"></span>
-      <button class="ghost" :disabled="directoryLoading" @click="reload">{{ directoryLoading ? "读取中…" : "刷新" }}</button>
-      <button class="ghost" @click="ledgerOpen = !ledgerOpen">设备台账 {{ devices.length }}</button>
-    </view>
-
+    <view class="step-head"><b>第 3 步 · 接设备</b><span>型号 → 通道 → 点位 → 验证；已绑定 {{ boundBusinessCount }} / {{ businessDevices.length }}。</span></view>
+    <section class="card glass step-card">
     <p v-if="directoryError" class="error" role="alert">{{ directoryError }}</p>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
     <p v-if="notice" class="notice" role="status">{{ notice }}</p>
     <p v-if="!canConfigure" class="note">当前账号可查看接入状态，但没有配置权限；写操作已停用。</p>
 
-    <view v-if="ledgerOpen" class="ledger-panel">
+    <view v-if="!businessDevices.length" class="empty-access">
+      <view class="panel-head"><h3>还没有设备</h3></view><p class="note">先回第 2 步搭台账，把设备建成占位。</p><button class="ghost" @click="emit('navigate', 'tree')">回第 2 步 →</button>
+    </view>
+    <template v-else>
+    <MemberRoles v-if="selectedUnit" :snapshot="snapshot" :node-id="selectedUnit.id" :read-only="!canConfigure" @refresh="emit('refresh')" />
+    <template v-else>
+    <BatchAccess v-if="batchOpen" :snapshot="snapshot" :channels="channels" :profiles="profiles" :selected-node-ids="batchSelection" :read-only="!canConfigure" @close="batchOpen = false" @refresh="reloadAfterBatch" />
+
+    <view v-if="scopeMode && !batchOpen" class="ledger-panel">
       <view class="panel-head">
-        <strong>设备台账</strong><span class="src">一台物理站号设备一行；未验证不等于未绑定。</span>
-        <span class="spacer"></span>
-        <button class="ghost" :disabled="!channels.length || busy !== ''" @click="startNewUnit">接入新站号</button>
+        <h3>{{ selectedScopeName }} 的设备</h3><span class="tag">{{ scopeBoundCount }} / {{ scopeRows.length }} 已接入</span>
+        <span class="spacer"></span><button class="ghost" :disabled="directoryLoading" @click="reload">{{ directoryLoading ? "读取中…" : "刷新" }}</button><button class="ghost" :disabled="busy !== ''" @click="startNewUnit">接入新站号</button><button class="ghost" :disabled="!canConfigure" @click="openBatch">批量接入</button>
       </view>
-      <div v-if="devices.length" class="table-wrap">
-        <table class="ledger-table">
-          <thead><tr><th>设备</th><th>通道 / 站号</th><th>Profile</th><th>点位</th><th>通信</th><th>验证</th><th></th></tr></thead>
-          <tbody><tr v-for="device in devices" :key="deviceKey(device)" :class="{ selected: deviceKey(device) === selectedKey }">
-            <td><strong>{{ device.business_node_name || device.name }}</strong><small>{{ device.name }}</small></td>
-            <td>{{ device.channel_name || device.channel_id }} / {{ device.server_id }}</td>
-            <td>{{ device.profile_id ? `${device.vendor || ""} ${device.model || device.profile_id}` : "未绑定" }}</td>
-            <td>{{ device.point_count }}</td>
-            <td><span class="chip" :class="healthClass(device.health)">{{ healthText(device.health) }}</span></td>
-            <td><span class="chip" :class="device.verified ? 'ok' : 'warn'">{{ device.verified ? "已验证" : "未验证" }}</span></td>
-            <td><button class="ghost" :disabled="busy !== ''" @click="openDevice(device)">打开接入 →</button></td>
+      <div v-if="scopeRows.length" class="table-wrap">
+        <table class="mini-table ledger-table">
+          <thead><tr><th>设备</th><th>状态</th><th>型号</th><th>通道</th><th>点位</th><th></th></tr></thead>
+          <tbody><tr v-for="row in scopeRows" :key="row.id" :class="{ selected: row.device && deviceKey(row.device) === selectedKey }">
+            <td><strong>{{ row.name }}</strong><small v-if="row.device">{{ row.device.name }}</small></td>
+            <td><span class="chip" :class="row.bound ? 'ok' : 'warn'">{{ row.bound ? "已接入" : "未绑定" }}</span></td>
+            <td>{{ row.device?.profile_id ? `${row.device.vendor || ""} ${row.device.model || row.device.profile_id}` : "未选择" }}</td>
+            <td>{{ row.device ? `${row.device.channel_name || row.device.channel_id} · 站号 ${row.device.server_id}` : "未选择" }}</td>
+            <td>{{ scopePointText(row) }}</td>
+            <td><button class="ghost" :disabled="busy !== ''" @click="openScopeRow(row)">打开绑定 →</button></td>
           </tr></tbody>
         </table>
       </div>
-      <view v-else-if="!directoryLoading && !ledgerLoadFailed" class="empty">当前没有设备台账记录。没有数据不以演示设备替代；可从已有通道读取一个站号开始接入。</view>
+      <view v-else-if="!directoryLoading && !ledgerLoadFailed" class="empty">这一层还没有设备。从左侧树里选一台设备逐台接入，或回第 2 步先建占位。</view>
       <view v-else-if="ledgerLoadFailed" class="empty">设备台账暂不可用，请根据上方错误重试；当前状态不能视为无设备。</view>
     </view>
 
+    <template v-if="!scopeMode && !batchOpen">
+    <view class="panel-head"><h3>{{ activeDeviceName }}</h3><span class="tag">设备</span><span class="tag" :class="activeDeviceBound ? 'ok' : 'warn'">{{ activeDeviceBound ? '已接入' : '未绑定' }}</span><span class="src">{{ selectedProfile ? `${selectedProfile.vendor} ${selectedProfile.model}` : '未选择 Profile' }} · {{ selectedChannelID || '未选通道' }} · {{ mappedCount }}/{{ profilePoints.length }} 点位</span></view>
     <view class="pipeline" aria-label="设备接入步骤">
-      <button v-for="item in stages" :key="item.key" :disabled="busy !== ''" :class="{ active: stage === item.key }" @click="stage = item.key">
-        {{ item.key === 'points' ? `核对点位 ${mappedCount}/${profilePoints.length}` : item.label }}
-      </button>
+      <template v-for="(item, index) in stages" :key="item.key">
+        <button :disabled="busy !== ''" :class="{ active: stage === item.key, ok: stageComplete(item.key), cur: stage === item.key }" @click="stage = item.key">
+          {{ item.key === 'points' ? `核对点位 ${mappedCount}/${profilePoints.length}` : item.label }}
+        </button><i v-if="index < stages.length - 1">→</i>
+      </template>
     </view>
 
     <view v-if="modelLoading" class="empty">正在读取 {{ selectedChannelID }} / 站号 {{ selectedServerID }} 的设备模型…</view>
@@ -48,21 +53,10 @@
       <view class="acc-grid">
         <view class="acc-card">
           <view class="card-title">1 · 选型号 <span>{{ profileID ? '待保存选择可预览差异' : '尚未选择' }}</span></view>
-          <label>设备 Profile
-            <select :value="profileID" :disabled="!canConfigure || busy !== '' || !selectedChannelID" @change="selectProfile(inputValue($event))">
-              <option value="">未选择</option>
-              <option v-for="profile in availableProfiles" :key="profile.id" :value="profile.id">
-                {{ profile.vendor }} {{ profile.model }}{{ profile.custom ? "（自定义）" : "" }}{{ profile.verified ? "" : "（未现场验证）" }}
-              </option>
-            </select>
-          </label>
-          <view v-if="selectedProfile" class="profile-summary">
-            <view class="row"><span>声明点位</span><span>{{ profilePoints.length }} 个</span></view>
-            <view class="row"><span>命名命令</span><span>{{ selectedProfile.command_specs?.length || 0 }} 个</span></view>
-            <view class="row"><span>Profile 状态</span><span class="chip" :class="selectedProfile.verified ? 'ok' : 'warn'">{{ selectedProfile.verified ? "已现场验证" : "未现场验证" }}</span></view>
-            <p v-if="selectedProfile.verification" class="note">依据：{{ selectedProfile.verification }}</p>
-            <p v-for="note in selectedProfile.notes || []" :key="note" class="note">{{ note }}</p>
-          </view>
+          <button v-for="profile in availableProfiles" :key="profile.id" class="pick" :class="{ active: profile.id === profileID }" :disabled="!canConfigure || busy !== '' || !selectedChannelID" @click="selectProfile(profile.id)">
+            <strong>{{ profile.vendor }} {{ profile.model }}</strong><small>{{ profile.point_specs?.length || 0 }} 点位 · {{ profile.command_specs?.length || 0 }} 命令{{ profile.custom ? " · 自定义" : "" }}{{ profile.verified ? "" : " · 未现场验证" }}</small>
+          </button>
+          <view v-if="!availableProfiles.length" class="empty">后端没有可用 Profile；不会用演示型号替代。</view>
           <view v-if="model?.profile_errors?.length" class="error">自定义 Profile 未加载：{{ model.profile_errors.join("；") }}</view>
           <view class="actions">
             <button class="ghost" :disabled="!canConfigure || !profileID || !selectedChannelID || busy !== ''" @click="previewProfile">{{ busy === 'preview' ? '预览中…' : '预览 Profile 匹配' }}</button>
@@ -70,13 +64,19 @@
           </view>
           <p class="note">先预览同名点匹配与语义差异，再应用。应用只保存 Profile 与映射，不代表验证通过。</p>
         </view>
-        <view class="acc-card">
-          <view class="card-title">当前对象</view>
-          <view class="row"><span>通道 / 站号</span><span>{{ selectedChannelID || "—" }} / {{ selectedServerID || "—" }}</span></view>
-          <view class="row"><span>设备名称</span><span>{{ config.name || `站号 ${selectedServerID}` }}</span></view>
-          <view class="row"><span>业务节点</span><span>{{ selectedDevice?.business_node_name || config.business_node_id || "未绑定" }}</span></view>
-          <view class="row"><span>已保存 Profile</span><span>{{ model?.model?.profile_id || "—" }}</span></view>
+        <view class="acc-card profile-summary">
+          <view class="card-title">Profile 声明</view>
+          <view class="row"><span>采集点</span><span class="src">{{ selectedProfile ? `${profilePoints.length} 个 · 必需 ${requiredSpecs.size}` : "—" }}</span></view>
+          <view class="row"><span>命令</span><span class="src">{{ selectedProfile?.command_specs?.length || 0 }} 个</span></view>
+          <view class="row"><span>安全写点</span><span class="src">{{ safeCommands.map(command => command.name).join("、") || "未声明" }}</span></view>
+          <view class="row"><span>约束</span><span class="src">未声明可写的点一律只读</span></view>
+          <view v-if="selectedProfile" class="row"><span>Profile 状态</span><span class="chip" :class="selectedProfile.verified ? 'ok' : 'warn'">{{ selectedProfile.verified ? "已现场验证" : "未现场验证" }}</span></view>
+          <view class="row"><span>当前对象</span><span class="src">{{ activeDeviceName }} · {{ selectedChannelID || "—" }} / {{ selectedServerID || "—" }}</span></view>
           <view v-if="config.verification_required && !config.verified" class="warning-box">Profile 已更换，控制命令等待重新验证；保存前请核对差异。</view>
+          <p v-if="selectedProfile?.verification" class="note">依据：{{ selectedProfile.verification }}</p>
+          <p v-for="note in selectedProfile?.notes || []" :key="note" class="note">{{ note }}</p>
+          <p class="note">自动匹配、批量套用与验证都读取这一份 Profile；改型号后要重新核对点位。</p>
+          <div class="actions"><button class="primary" @click="stage = 'channel'">下一步：选通道 →</button><button class="ghost" :disabled="!canConfigure || !selectedProfile" @click="autoMatchAndNext">按型号自动匹配</button></div>
         </view>
       </view>
       <view v-if="applyPreview" class="preview-panel">
@@ -111,6 +111,7 @@
           <view class="row"><span>当前设备通信</span><span class="chip" :class="healthClass(selectedDevice?.health)">{{ healthText(selectedDevice?.health) }}</span></view>
           <view class="row"><span>成功率 / 平均延迟</span><span>{{ selectedDevice && selectedDevice.success_rate > 0 ? `${selectedDevice.success_rate.toFixed(1)}% / ${Math.round(selectedDevice.avg_latency_ms)} ms` : "—" }}</span></view>
           <p class="note">线路诊断在“验证”段执行，只读，不写设备。运行期累计统计在进程重启后归零。</p>
+          <div class="actions"><button class="primary" @click="stage = 'points'">下一步：核对点位 →</button></div>
         </view>
       </view>
       <view v-if="channelForm" class="editor-panel">
@@ -135,23 +136,26 @@
 
     <template v-else-if="stage === 'points'">
       <view class="acc-card wide">
-        <view class="card-title">3 · 核对点位 <span>当前站号 {{ serverPoints.length }} 个物理点 · Profile 已映射 {{ mappedCount }}/{{ profilePoints.length }}</span></view>
+        <view class="card-title">3 · 核对点位 <span>当前站号 {{ serverPoints.length }} 个物理点 · Profile 已映射 {{ mappedCount }}/{{ profilePoints.length }} · 必需 {{ requiredSpecs.size }}</span></view>
         <view v-if="!profileID" class="empty">先在“选型号”段选择并应用 Profile。</view>
         <template v-else>
-          <div class="table-wrap"><table><thead><tr><th>Profile 变量</th><th>角色</th><th>映射到当前站号点位</th><th>读写</th><th>状态</th></tr></thead>
+          <div class="table-wrap"><table class="mini-table"><thead><tr><th>点位</th><th>要求</th><th>地址</th><th>类型</th><th>倍率</th><th>单位</th><th>读写</th><th>状态</th></tr></thead>
             <tbody><tr v-for="spec in profilePoints" :key="spec.name">
-              <td><strong>{{ spec.name }}</strong><small>{{ spec.unit || "—" }}</small></td>
-              <td>{{ roleText(spec.role) }}</td>
+              <td><strong>{{ spec.name }}</strong></td>
+              <td>{{ requiredSpecs.has(spec.name) ? "必需" : "可选" }}</td>
               <td><select :value="config.point_map[spec.name] || ''" :disabled="!canConfigure || busy !== ''" @change="updateMapping(spec.name, inputValue($event))">
                 <option value="">未映射</option>
-                <option v-for="point in serverPoints" :key="point.id" :value="point.id">{{ point.name }} · 地址 {{ point.address }} · {{ point.data_format || point.io_type }}</option>
+                <option v-for="point in serverPoints" :key="point.id" :value="point.id">{{ point.address }} · {{ point.name }}</option>
               </select></td>
-              <td>{{ spec.read_only === false ? "可写" : "只读" }}</td>
-              <td><span class="chip" :class="config.point_map[spec.name] ? 'ok' : requiredSpecs.has(spec.name) ? 'warn' : ''">{{ config.point_map[spec.name] ? "已映射" : requiredSpecs.has(spec.name) ? "命令必需" : "未映射" }}</span></td>
+              <td>{{ mappedPoint(spec.name)?.data_format || roleText(spec.role) }}</td>
+              <td>{{ scaleText(spec.name) }}</td>
+              <td>{{ spec.unit || mappedPoint(spec.name)?.unit || "—" }}</td>
+              <td>{{ spec.read_only === false ? "读写" : "只读" }}</td>
+              <td><span class="chip" :class="config.point_map[spec.name] ? 'ok' : requiredSpecs.has(spec.name) ? 'warn' : ''">{{ config.point_map[spec.name] ? "已映射" : requiredSpecs.has(spec.name) ? "待匹配" : "可选未映射" }}</span></td>
             </tr></tbody>
           </table></div>
           <view v-if="model?.missing?.length" class="warning-box">后端报告命令所需点未映射：{{ model.missing.join("、") }}</view>
-          <view class="actions"><button class="ghost" :disabled="!canConfigure || busy !== ''" @click="autoMatch">按 Profile 名称匹配</button><button class="primary" :disabled="!canConfigure || !selectedChannelID || busy !== ''" @click="saveMapping">{{ busy === 'mapping' ? '保存中…' : '保存点位映射' }}</button><button class="ghost" :disabled="!canConfigure || !selectedChannelID" @click="openPointForm">＋ 新增物理点</button></view>
+          <view class="actions"><button class="ghost" :disabled="!canConfigure || busy !== ''" @click="autoMatch">按 Profile 名称匹配</button><button class="primary" :disabled="!canConfigure || !selectedChannelID || busy !== ''" @click="saveMapping">{{ busy === 'mapping' ? '保存中…' : '保存点位映射' }}</button><button class="ghost" :disabled="!canConfigure || !selectedChannelID" @click="openPointForm">＋ 新增物理点</button><button class="primary" @click="stage = 'verify'">下一步：验证 →</button></view>
           <p class="note">自动匹配只修改本地草稿，点击保存后才写后端。命令必需点、回读点或读写方向不满足时，后端会阻断对应命令。</p>
         </template>
       </view>
@@ -174,17 +178,25 @@
     <template v-else>
       <view class="verification-grid">
         <view class="acc-card">
-          <view class="card-title">4 · 验证 <span>只读证据 + 人工现场记录</span></view>
+          <view class="card-title">4 · 分级验证 <span>L1/L2 只读；L3 默认不执行</span></view>
           <view class="row"><span>当前通信</span><span class="chip" :class="healthClass(selectedDevice?.health)">{{ healthText(selectedDevice?.health) }}</span></view>
           <view class="row"><span>已映射点</span><span>{{ mappedSpecs.length }} 个</span></view>
           <view class="row"><span>当前无值或质量非正常</span><span :class="qualityIssues ? 'warn-text' : 'ok-text'">{{ mappedSpecs.length ? `${qualityIssues} 个` : "—" }}</span></view>
-          <view class="actions"><button class="ghost" :disabled="!canConfigure || busy !== '' || !selectedChannelID" @click="runLineTest">{{ busy === 'line-test' ? '测试中…' : '只读连通测试' }}</button></view>
-          <view v-if="lineTest" class="line-result">
-            <view>通道：{{ lineTest.connected ? "可连接" : "连接失败" }}</view>
-            <view>站号 {{ selectedServerID }} {{ lineStation?.responded ? "有响应" : "无响应" }}<template v-if="lineStation"> · {{ lineStation.latency_ms }} ms · {{ lineStation.probe || lineStation.error }}</template></view>
+          <view class="actions"><button class="ghost" :disabled="!canConfigure || busy !== '' || !selectedChannelID" @click="runVerification('L1')">{{ busy === 'verify-L1' ? '验证中…' : 'L1 连通验证（只读）' }}</button><button class="ghost" :disabled="!canConfigure || busy !== '' || !selectedChannelID || !profileID" @click="runVerification('L2')">{{ busy === 'verify-L2' ? '验证中…' : 'L2 必需点验证（只读）' }}</button></view>
+          <view v-if="verificationResult" class="line-result">
+            <view><strong>{{ verificationResult.level }}：{{ verificationResult.passed ? "通过" : "未通过" }}</strong></view>
+            <view v-for="reason in verificationResult.reasons" :key="reason">{{ reason }}</view>
+            <view v-if="verificationResult.command">命令状态：{{ verificationResult.command.state }}{{ verificationResult.command.reason ? ` · ${verificationResult.command.reason}` : "" }}</view>
+            <view v-if="verificationResult.record_error" class="warn-text">验证已执行，但历史记录保存失败。</view>
           </view>
-          <p class="note">连通测试只读取站号地址 0（保持寄存器失败后尝试输入寄存器），不证明其他点位正确，也不写设备。</p>
-          <view class="warning-box">后端没有 L1/L2/L3 分级验证执行与 L3 安全写回读 API；本页不生成这些通过结论。写回读不在此处执行。</view>
+          <view class="warning-box l3-box">
+            <strong>L3 安全点写回读</strong>
+            <p>只提交 Profile 显式标记 L3_SAFE 的固定值、无参数且有回读的命令。普通启停与功率命令不会出现在这里。</p>
+            <label>安全命令<select v-model="l3CommandID" :disabled="!canCommand || busy !== '' || !safeCommands.length"><option v-for="command in safeCommands" :key="command.id" :value="command.id">{{ command.name }}</option></select></label>
+            <label class="check-label"><checkbox :checked="l3Confirmed" :disabled="!canCommand || busy !== '' || !safeCommands.length" @click="l3Confirmed = !l3Confirmed" /> 我确认本次允许向所选安全点写入 Profile 固定值并等待回读</label>
+            <button class="ghost" :disabled="!canCommand || !l3Confirmed || !l3CommandID || busy !== ''" @click="runVerification('L3')">{{ busy === 'verify-L3' ? '写回读中…' : '执行一次 L3 写回读' }}</button>
+            <p v-if="!safeCommands.length">当前 Profile 没有声明可安全写回读的命令，L3 不可执行。</p><p v-else-if="!canCommand">当前账号没有 Command 权限。</p>
+          </view>
         </view>
         <view class="acc-card">
           <view class="card-title">现场验证记录</view>
@@ -197,6 +209,8 @@
           <p class="note">保存的是人工核对结论，不会触发设备写入。模拟器或当前快照不能替代 M5 真机签收，也不代表项目可交付或已投运。</p>
         </view>
       </view>
+      <view v-if="verificationResult?.points?.length" class="quality-panel"><view class="card-title">L2 必需点结果</view><div class="table-wrap"><table><thead><tr><th>Profile 变量</th><th>质量</th><th>观测时间</th><th>结论</th></tr></thead><tbody><tr v-for="point in verificationResult.points" :key="point.name"><td>{{ point.name }}</td><td>{{ point.quality || '—' }}</td><td>{{ point.source_time || '—' }}</td><td><span class="chip" :class="point.passed ? 'ok' : 'warn'">{{ point.passed ? '通过' : point.reason }}</span></td></tr></tbody></table></div></view>
+      <view v-if="verificationHistory.length" class="quality-panel"><view class="card-title">自动验证历史 <span>与人工签收分开记录</span></view><div class="table-wrap"><table><thead><tr><th>时间</th><th>级别</th><th>操作者</th><th>结果</th><th>原因</th></tr></thead><tbody><tr v-for="record in verificationHistory.slice().reverse().slice(0, 5)" :key="`${record.at}-${record.level}`"><td>{{ record.at }}</td><td>{{ record.level }}</td><td>{{ record.actor }}</td><td><span class="chip" :class="record.passed ? 'ok' : 'warn'">{{ record.passed ? '通过' : '未通过' }}</span></td><td>{{ record.reasons?.join('；') || '—' }}</td></tr></tbody></table></div></view>
       <view class="quality-panel">
         <view class="card-title">已映射点当前值与质量 <span>随工作台实时快照更新；无值显示 —</span></view>
         <div v-if="mappedSpecs.length" class="table-wrap"><table><thead><tr><th>Profile 变量</th><th>物理点</th><th>当前值</th><th>质量</th><th>观测时间</th></tr></thead>
@@ -205,27 +219,51 @@
         <view v-else class="empty">还没有已保存的映射点；先完成 Profile 与点位保存。</view>
       </view>
     </template>
+    </template>
+    </template>
+    <div class="actions"><button class="primary" @click="emit('navigate', 'strategy')">下一步：配策略 →</button></div>
+    </template>
+    <view class="tool-line"><span>数据从哪来</span><button class="ghost" @click="emit('tool', 'channels')">通道 →</button><button class="ghost" @click="emit('tool', 'points')">点位表 →</button><button class="ghost" @click="emit('tool', 'profiles')">型号库 →</button></view>
+    <view class="tool-line"><span>接不进来时</span><button class="ghost" @click="emit('tool', 'health')">通信健康与报文 →</button></view>
+    <view class="tool-line"><span>接完要确认</span><button class="ghost" @click="emit('tool', 'verify')">设备验证 →</button></view>
+    </section>
   </view>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue"
+import MemberRoles from "./MemberRoles.vue"
+import BatchAccess from "./BatchAccess.vue"
 import { request } from "../../api/client"
 import { nameOf, point, valueText } from "../../types/api"
-import type { Snapshot, StateValue } from "../../types/api"
-import { automaticPointMap, canConfigureAccess, prepareModelSave, verificationError } from "./access"
+import type { Snapshot, StateValue, Node } from "../../types/api"
+import { automaticPointMap, canCommandAccess, canConfigureAccess, prepareModelSave, safeVerificationCommands, verificationError } from "./access"
+import { boundBusinessIDs } from "./design"
 import type { EmsChannel, LedgerDevice, Profile, ProfileApplyResponse, ProfileApplyResult, UnitModel, UnitModelConfig, UnitPoint } from "./access"
 
-const props = withDefaults(defineProps<{ snapshot: Snapshot | null; values: StateValue[]; selectedNodeId?: string }>(), { selectedNodeId: "" })
+const props = withDefaults(defineProps<{ snapshot: Snapshot | null; values: StateValue[]; selectedNodeId?: string; batchNodeIds?: string[] }>(), { selectedNodeId: "", batchNodeIds: () => [] })
 const emit = defineEmits<{
   (event: "refresh"): void
   (event: "status", value: { channels: number; devices: number; bound: number; verified: number }): void
+  (event: "tool", value: string): void
+  (event: "navigate", value: "tree" | "strategy"): void
 }>()
 
 type Stage = "profile" | "channel" | "points" | "verify"
 type ChannelForm = { editing: string; parent: string; description: string; protocol: "TCP" | "RTU"; uri: string; port: string; baud: string; data_bits: number; parity: string; stop_bits: number; poll_period: number; timeout: number; disabled: boolean }
 type PointForm = { parent: string; description: string; server_id: number; address: number; io_type: string; data_format: string; read_only: boolean; scale: number; offset: number; units: string; disabled: boolean }
-type LineTest = { connected: boolean; latency_ms: number; probed: number; stations: { server_id: number; responded: boolean; latency_ms: number; probe: string; error: string }[] }
+type VerificationResult = {
+  level: "L1" | "L2" | "L3"
+  passed: boolean
+  reasons: string[]
+  recorded: boolean
+  record_error?: string
+  line?: { connected: boolean; stations: { server_id: number; responded: boolean; error: string }[] }
+  points?: { name: string; point_id?: string; passed: boolean; quality?: string; source_time?: string; reason?: string }[]
+  command?: { state: string; reason?: string }
+}
+type VerificationRecord = { at: string; actor: string; level: string; passed: boolean; reasons?: string[] }
+type ScopeRow = { id: string; name: string; bound: boolean; device?: LedgerDevice }
 
 const stages: { key: Stage; label: string }[] = [{ key: "profile", label: "选型号" }, { key: "channel", label: "选通道" }, { key: "points", label: "核对点位" }, { key: "verify", label: "验证" }]
 const channels = ref<EmsChannel[]>([])
@@ -235,7 +273,8 @@ const directoryLoading = ref(false)
 const directoryError = ref("")
 const channelLoadFailed = ref(false)
 const ledgerLoadFailed = ref(false)
-const ledgerOpen = ref(false)
+const batchOpen = ref(false)
+const batchSelection = ref<string[]>([])
 const stage = ref<Stage>("profile")
 const selectedChannelID = ref("")
 const selectedServerID = ref(1)
@@ -248,18 +287,49 @@ const notice = ref("")
 const previewResponse = ref<ProfileApplyResponse | null>(null)
 const channelForm = ref<ChannelForm | null>(null)
 const pointForm = ref<PointForm | null>(null)
-const lineTest = ref<LineTest | null>(null)
+const verificationResult = ref<VerificationResult | null>(null)
+const verificationHistory = ref<VerificationRecord[]>([])
+const l3CommandID = ref("")
+const l3Confirmed = ref(false)
 let modelRequest = 0
 let previewRequest = 0
-let lineTestRequest = 0
+let verificationRequest = 0
 
 const canConfigure = computed(() => canConfigureAccess(props.snapshot))
+const canCommand = computed(() => canCommandAccess(props.snapshot))
+const selectedUnit = computed(() => props.snapshot?.nodes.find(node => node.id === props.selectedNodeId && (node.type === "unit" || node.type === "energyUnit")) || null)
+const selectedBusinessNode = computed(() => props.snapshot?.nodes.find(node => node.id === props.selectedNodeId) || null)
+const selectedBusinessDevice = computed(() => selectedBusinessNode.value?.type === "device" ? selectedBusinessNode.value : null)
+const deviceDetailOpen = ref(false)
+const scopeMode = computed(() => !selectedUnit.value && !selectedBusinessDevice.value && !deviceDetailOpen.value)
+const selectedScopeName = computed(() => selectedBusinessNode.value ? nameOf(selectedBusinessNode.value) : "当前层")
+const businessDevices = computed(() => (props.snapshot?.nodes || []).filter(node => node.type === "device" && node.parent !== "root"))
+const persistedBoundIDs = computed(() => boundBusinessIDs(props.snapshot?.nodes || []))
+const boundBusinessCount = computed(() => businessDevices.value.filter(node => isBusinessBound(node.id)).length)
+const scopeRows = computed<ScopeRow[]>(() => {
+  const businessIDs = new Set(businessDevices.value.map(node => node.id))
+  const rows = businessDevices.value.filter(node => inSelectedScope(node)).map(node => {
+    const device = devices.value.find(item => item.business_node_id === node.id)
+    return { id: node.id, name: nameOf(node), bound: isBusinessBound(node.id), device }
+  })
+  if (selectedBusinessNode.value?.id === props.snapshot?.roots[0]) {
+    for (const device of devices.value) {
+      if (device.business_node_id && businessIDs.has(device.business_node_id)) continue
+      rows.push({ id: deviceKey(device), name: device.business_node_name || device.name, bound: !!device.profile_id, device })
+    }
+  }
+  return rows
+})
+const scopeBoundCount = computed(() => scopeRows.value.filter(row => row.bound).length)
+const activeDeviceName = computed(() => selectedBusinessDevice.value ? nameOf(selectedBusinessDevice.value) : selectedDevice.value?.business_node_name || config.value.name || `站号 ${selectedServerID.value}`)
+const activeDeviceBound = computed(() => selectedBusinessDevice.value ? isBusinessBound(selectedBusinessDevice.value.id) : !!selectedDevice.value?.profile_id)
 const selectedChannel = computed(() => channels.value.find(channel => channel.id === selectedChannelID.value) || null)
 const selectedDevice = computed(() => devices.value.find(device => device.channel_id === selectedChannelID.value && device.server_id === selectedServerID.value) || null)
 const selectedKey = computed(() => selectedChannelID.value ? `${selectedChannelID.value}/${selectedServerID.value}` : "")
 const profileID = computed(() => config.value.profile_id)
 const availableProfiles = computed(() => model.value?.profiles?.length ? model.value.profiles : profiles.value)
 const selectedProfile = computed(() => availableProfiles.value.find(profile => profile.id === profileID.value) || null)
+const safeCommands = computed(() => selectedProfile.value ? safeVerificationCommands(selectedProfile.value) : [])
 const profilePoints = computed(() => selectedProfile.value?.point_specs || [])
 const serverPoints = computed(() => (model.value?.points || []).filter(point => point.server_id === selectedServerID.value))
 const mappedCount = computed(() => Object.values(config.value.point_map || {}).filter(Boolean).length)
@@ -281,13 +351,66 @@ const applyPreview = computed<ProfileApplyResult | null>(() => {
   return result && result.profile_id === profileID.value && result.server === selectedServerID.value ? result : null
 })
 const modelLoading = computed(() => busy.value === "model")
-const lineStation = computed(() => lineTest.value?.stations.find(station => station.server_id === selectedServerID.value) || null)
 const qualityIssues = computed(() => mappedSpecs.value.filter(spec => sampleQuality(config.value.point_map[spec.name]) !== "good").length)
 const mappingDirty = computed(() => JSON.stringify(config.value.point_map || {}) !== JSON.stringify(model.value?.model?.point_map || {}))
 const profileDirty = computed(() => config.value.profile_id !== (model.value?.model?.profile_id || ""))
 const stationDirty = computed(() => serverInput.value !== selectedServerID.value)
 
 function inputValue(event: Event) { return (event.target as HTMLInputElement | HTMLSelectElement).value }
+function inSelectedScope(node: Node) {
+  if (!selectedBusinessNode.value) return true
+  const byID = new Map((props.snapshot?.nodes || []).map(item => [item.id, item]))
+  let current: Node | undefined = node
+  const seen = new Set<string>()
+  while (current && !seen.has(current.id)) {
+    if (current.id === selectedBusinessNode.value.id) return true
+    seen.add(current.id)
+    current = byID.get(current.parent)
+  }
+  return false
+}
+function stageComplete(key: Stage) {
+  if (key === "profile") return !!profileID.value
+  if (key === "channel") return !!selectedChannelID.value
+  if (key === "points") return profilePoints.value.length > 0 && mappedCount.value === profilePoints.value.length
+  return activeDeviceBound.value
+}
+function isBusinessBound(id: string) { return persistedBoundIDs.value.has(id) || devices.value.some(device => device.business_node_id === id && !!device.profile_id) }
+function scopePointText(row: ScopeRow) { return row.device ? `${row.device.point_count} 个物理点` : "0 / 未映射" }
+function openScopeRow(row: ScopeRow) {
+  if (row.device) { void openDevice(row.device); return }
+  if (row.bound) { void openBusinessBinding(row.id); return }
+  batchSelection.value = [row.id]
+  batchOpen.value = true
+}
+async function openBusinessBinding(id: string) {
+  for (const channel of props.snapshot?.nodes || []) {
+    if (channel.type !== "modbus") continue
+    for (const item of channel.points) {
+      if (item.type !== "easyemsUnitModel" || (item.tombstone || 0) % 2 !== 0 || !item.text) continue
+      try {
+        if ((JSON.parse(item.text) as { business_node_id?: string }).business_node_id !== id) continue
+        const station = Number(item.key)
+        if (!Number.isInteger(station) || station < 1 || station > 247) return
+        deviceDetailOpen.value = true
+        stage.value = "profile"
+        selectedChannelID.value = channel.id
+        selectedServerID.value = station
+        serverInput.value = station
+        model.value = null
+        await loadModel()
+        return
+      } catch { /* Try another persisted binding instead of guessing a station. */ }
+    }
+  }
+}
+function autoMatchAndNext() { autoMatch(); stage.value = "points" }
+function mappedPoint(name: string) { return serverPoints.value.find(point => point.id === config.value.point_map[name]) || null }
+function scaleText(name: string) {
+  const point = mappedPoint(name)
+  if (!point) return "—"
+  return `×${point.scale ?? 1}${point.offset ? ` ${point.offset > 0 ? "+" : ""}${point.offset}` : ""}`
+}
 function messageOf(cause: unknown) { return cause instanceof Error ? cause.message : "操作失败" }
 function blockStationChange() {
   if (!stationDirty.value) return false
@@ -359,18 +482,21 @@ async function loadModel() {
   }
   const requestID = ++modelRequest
   ++previewRequest
-  ++lineTestRequest
+  ++verificationRequest
   const channelID = selectedChannelID.value
   const serverID = selectedServerID.value
   busy.value = "model"
   error.value = ""
   previewResponse.value = null
-  lineTest.value = null
+  verificationResult.value = null
+  verificationHistory.value = []
+  l3Confirmed.value = false
   try {
     const result = await request<UnitModel>(`/modbus/${encodeURIComponent(channelID)}/units/${serverID}/model`)
     if (requestID !== modelRequest || channelID !== selectedChannelID.value || serverID !== selectedServerID.value) return
     model.value = result
     config.value = result.model ? { ...result.model, point_map: { ...result.model.point_map } } : { name: `站号 ${serverID}`, profile_id: "", point_map: {}, verified: false, verifier: "", verified_at: "", device_serial: "", verification: "" }
+    await loadVerificationHistory()
   } catch (cause) {
     if (requestID === modelRequest) error.value = `设备模型读取失败：${messageOf(cause)}`
   } finally {
@@ -402,8 +528,22 @@ async function reloadAfterWrite(message: string) {
   emit("refresh")
 }
 
+function openBatch() {
+  batchSelection.value = [...new Set([...props.batchNodeIds, props.selectedNodeId].filter(id => {
+    const node = props.snapshot?.nodes.find(item => item.id === id)
+    return node?.type === "device" && node.parent !== "root" && !boundBusinessIDs(props.snapshot?.nodes || []).has(id)
+  }))]
+  batchOpen.value = true
+}
+
+async function reloadAfterBatch() {
+  await loadDirectory()
+  if (selectedChannelID.value) await loadModel()
+  emit("refresh")
+}
+
 async function openDevice(device: LedgerDevice) {
-  ledgerOpen.value = false
+  deviceDetailOpen.value = true
   stage.value = "profile"
   selectedChannelID.value = device.channel_id
   selectedServerID.value = device.server_id
@@ -414,14 +554,14 @@ async function openDevice(device: LedgerDevice) {
 }
 
 async function startNewUnit() {
+  deviceDetailOpen.value = true
   selectedChannelID.value = channels.value[0]?.id || ""
   selectedServerID.value = 1
   serverInput.value = 1
   model.value = null
   config.value = { name: "站号 1", profile_id: "", point_map: {}, verified: false }
-  stage.value = "channel"
-  ledgerOpen.value = false
-  await loadModel()
+  stage.value = "profile"
+  if (selectedChannelID.value) await loadModel()
 }
 
 async function selectChannel(id: string) {
@@ -567,23 +707,37 @@ async function savePoint() {
   } catch (cause) { error.value = `物理点保存失败：${messageOf(cause)}` } finally { busy.value = "" }
 }
 
-async function runLineTest() {
-  if (requireChannel()) return
-  if (!canConfigure.value) { error.value = "当前账号无权执行此操作"; return }
-  if (blockStationChange()) return
-  const requestID = ++lineTestRequest
+async function loadVerificationHistory() {
+  if (!selectedChannelID.value) return
   const channelID = selectedChannelID.value
   const serverID = selectedServerID.value
-  busy.value = "line-test"
-  error.value = ""
-  lineTest.value = null
   try {
-    const result = await request<LineTest>(`/modbus/${encodeURIComponent(channelID)}/line-test`, "POST", { server_id: serverID })
-    if (requestID === lineTestRequest && channelID === selectedChannelID.value && serverID === selectedServerID.value) lineTest.value = result
+    const result = await request<{ records: VerificationRecord[] }>(`/modbus/${encodeURIComponent(channelID)}/units/${serverID}/verify`)
+    if (channelID === selectedChannelID.value && serverID === selectedServerID.value) verificationHistory.value = result.records || []
+  } catch { /* A missing history must not hide the current model or live quality. */ }
+}
+
+async function runVerification(level: "L1" | "L2" | "L3") {
+  if (requireChannel() || blockStationChange()) return
+  if (level === "L3") {
+    if (!canCommand.value) { error.value = "当前账号没有 Command 权限"; return }
+    if (!l3Confirmed.value || !l3CommandID.value) { error.value = "L3 必须选择安全命令并明确确认"; return }
+  }
+  const requestID = ++verificationRequest
+  const channelID = selectedChannelID.value
+  const serverID = selectedServerID.value
+  busy.value = `verify-${level}`
+  error.value = ""
+  verificationResult.value = null
+  try {
+    const result = await request<VerificationResult>(`/modbus/${encodeURIComponent(channelID)}/units/${serverID}/verify`, "POST", { level, command_id: level === "L3" ? l3CommandID.value : "", confirm: level === "L3" ? l3Confirmed.value : false })
+    if (requestID === verificationRequest && channelID === selectedChannelID.value && serverID === selectedServerID.value) verificationResult.value = result
+    await loadVerificationHistory()
   } catch (cause) {
-    if (requestID === lineTestRequest) error.value = `连通测试失败：${messageOf(cause)}`
+    if (requestID === verificationRequest) error.value = `${level} 验证失败：${messageOf(cause)}`
   } finally {
-    if (requestID === lineTestRequest) busy.value = ""
+    if (requestID === verificationRequest) busy.value = ""
+    if (level === "L3") l3Confirmed.value = false
   }
 }
 
@@ -601,28 +755,55 @@ async function saveVerification() {
   } catch (cause) { error.value = `验证记录保存失败：${messageOf(cause)}` } finally { busy.value = "" }
 }
 
+watch(safeCommands, commands => {
+  if (!commands.some(command => command.id === l3CommandID.value)) l3CommandID.value = commands[0]?.id || ""
+  l3Confirmed.value = false
+}, { immediate: true })
 watch(() => props.selectedNodeId, id => {
   const device = devices.value.find(item => item.business_node_id === id)
+  const businessDevice = props.snapshot?.nodes.some(node => node.id === id && node.type === "device" && node.parent !== "root")
+  if (!businessDevice) deviceDetailOpen.value = false
   if (device && deviceKey(device) !== selectedKey.value) void openDevice(device)
-})
+  if (!device && businessDevice) {
+    if (persistedBoundIDs.value.has(id)) void openBusinessBinding(id)
+    else {
+      batchSelection.value = [id]
+      batchOpen.value = true
+    }
+  }
+}, { immediate: true })
+watch(() => props.batchNodeIds, ids => { if (ids.length) openBatch() }, { immediate: true })
 
 onMounted(async () => { await reload() })
 </script>
 
 <style scoped>
+.tool-line { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; color: var(--faint); font-size: 12px; }
+.tool-line uni-button { margin: 0; min-height: 25px; padding: 2px 8px; font-size: 11px; }
 .access-step { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.step-head, .panel-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.l3-box { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.l3-box p { margin: 0; }
+.l3-box select { min-width: 220px; }
+.step-head, .panel-head { display: flex; gap: 10px; flex-wrap: wrap; }
+.step-head { align-items: baseline; margin-bottom: 12px; }
+.panel-head { align-items: center; margin-bottom: 12px; }
 .step-head b { font-size: 16px; }
-.step-head > span:not(.spacer), .panel-head .src { color: var(--faint); font-size: 12px; }
-.ledger-panel, .preview-panel, .editor-panel, .quality-panel { padding: 12px; border: 1px solid rgba(255,255,255,.72); border-radius: 12px; background: rgba(255,255,255,.28); }
+.step-head > span:not(.spacer), .panel-head .src { color: var(--faint); font-size: 12.5px; }
+.ledger-panel { min-width: 0; }
+.preview-panel, .editor-panel, .quality-panel { padding: 12px; border: 1px solid rgba(255,255,255,.72); border-radius: 12px; background: rgba(255,255,255,.28); }
 .ledger-table td strong, td small { display: block; }
 td small { color: var(--faint); font-size: 10.5px; margin-top: 2px; }
 tr.selected td { background: rgba(230,243,238,.45); }
-.pipeline { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.pipeline button { border: 1px solid rgba(255,255,255,.75); border-radius: 999px; padding: 5px 12px; background: rgba(255,255,255,.48); color: var(--faint); font-size: 12px; }
-.pipeline button.active { border-color: var(--accent); color: var(--accent); background: rgba(255,255,255,.82); }
-.acc-grid, .verification-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 12px; align-items: start; }
-.acc-card { min-width: 0; padding: 12px; border: 1px solid rgba(255,255,255,.72); border-radius: 12px; background: rgba(255,255,255,.38); box-shadow: 0 8px 22px rgba(45,83,110,.06); }
+.pipeline { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
+.pipeline button { border: 1px solid var(--line); border-radius: 999px; padding: 3px 9px; background: rgba(255,255,255,.48); color: var(--faint); font-size: 11.5px; }
+.pipeline button.active, .pipeline button.cur { border-color: var(--accent); color: var(--accent); }
+.pipeline button.ok { border-color: #cfe6dc; background: #e6f3ee; color: var(--mint); }
+.pipeline i { color: #c3d0da; font-style: normal; }
+.acc-grid, .verification-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; margin-top: 12px; align-items: start; }
+.acc-card { min-width: 0; padding: 11px 12px; border: 1px solid rgba(255,255,255,.72); border-radius: 10px; background: linear-gradient(135deg,rgba(255,255,255,.34),rgba(255,255,255,.06)),rgba(255,255,255,.42); box-shadow: 0 8px 22px rgba(45,83,110,.08),inset 0 1px 0 rgba(255,255,255,.75); }
+.acc-card.wide { grid-column: 1 / -1; }
+.card-title { margin: 0 0 8px; color: var(--faint); font-size: 11px; font-weight: 600; letter-spacing: .06em; }
+.card-title > span { font-weight: 400; letter-spacing: 0; }
 .acc-card > label, .verification-grid .acc-card > label { display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px; color: var(--muted); font-size: 12px; }
 input, select, textarea { width: 100%; border: 1px solid rgba(255,255,255,.82); border-radius: 8px; padding: 7px 9px; background: rgba(255,255,255,.62); font-size: 12px; }
 select { min-height: 36px; }
@@ -642,11 +823,9 @@ textarea { resize: vertical; }
 .warn-text { color: var(--amber); }
 .ok-text { color: var(--mint); }
 .line-result { margin-top: 10px; color: var(--muted); font-size: 12px; line-height: 1.8; }
-.profile-summary { margin-top: 12px; }
-@media (max-width: 1100px) {
-  .acc-grid, .verification-grid { grid-template-columns: 1fr; }
-}
+.acc-card.profile-summary { margin-top: 0; }
 @media (max-width: 760px) {
+  .acc-grid, .verification-grid { grid-template-columns: 1fr; }
   .form-grid { grid-template-columns: 1fr; }
   .step-head .spacer { display: none; }
 }

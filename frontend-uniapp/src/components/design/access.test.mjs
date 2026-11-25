@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { automaticPointMap, canConfigureAccess, prepareModelSave, verificationError } from "./access.ts"
+import { automaticPointMap, batchCSV, canCommandAccess, canConfigureAccess, prepareModelSave, safeVerificationCommands, verificationError } from "./access.ts"
 
 const profile = {
   id: "vendor-v1",
@@ -69,4 +69,29 @@ test("verificationError rejects empty mappings and command-required gaps", () =>
   const config = { name: "泵 1", profile_id: "vendor-v1", point_map: {}, verified: true, verifier: "张工", verified_at: "2026-11-22", device_serial: "SN-1" }
   assert.equal(verificationError(config), "至少映射并核对一个 Profile 点位，才能标记已验证")
   assert.equal(verificationError({ ...config, point_map: { power: "p1" } }, ["Active Power"]), "命令必需点未映射，不能标记已验证：Active Power")
+})
+
+test("batchCSV uses stable device IDs instead of ambiguous display names", () => {
+  const text = batchCSV([{ id: "device-1", name: "泵,1" }, { id: "device-2", name: "泵 2" }], "profile-1", "channel-1", 17)
+  assert.equal(text, "设备,型号,通道,站号\ndevice-1,profile-1,channel-1,17\ndevice-2,profile-1,channel-1,18")
+  assert.equal(batchCSV([], "profile-1", "channel-1", 1), "设备,型号,通道,站号")
+})
+
+test("safeVerificationCommands exposes only explicit fixed safe commands with readback", () => {
+  const profile = {
+    point_specs: [{ name: "test", read_only: false, note: "L3_SAFE 固定测试" }, { name: "ordinary", read_only: false }, { name: "feedback", read_only: true }],
+    command_specs: [
+      { id: "safe", name: "安全测试", point: "test", value: 1, readback: "feedback" },
+      { id: "ordinary", name: "启动", point: "ordinary", value: 1, readback: "feedback" },
+      { id: "parameter", name: "参数", point: "test", readback: "feedback", parameters: [{ name: "value", point: "test" }] },
+      { id: "no-readback", name: "无回读", point: "test", value: 1 },
+    ],
+  }
+  assert.deepEqual(safeVerificationCommands(profile).map(command => command.id), ["safe"])
+})
+
+test("canCommandAccess independently gates L3 from configure permission", () => {
+  const snapshot = { user: { user_id: "u", policy: { admin: false, role: "implementer" }, actions: ["configure"] }, roots: [], nodes: [] }
+  assert.equal(canCommandAccess(snapshot), false)
+  assert.equal(canCommandAccess({ ...snapshot, user: { ...snapshot.user, actions: ["configure", "command"] } }), true)
 })

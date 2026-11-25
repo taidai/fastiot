@@ -31,7 +31,7 @@ try {
   await button("运行预检").click()
   assert.equal((await preflightResponse).status(), 200)
   await page.getByText(/最近预检：(通过|注意|阻断)/).waitFor()
-  await page.waitForFunction(() => [...document.querySelectorAll("uni-button")].some(item => item.textContent === "导出证据 ZIP" && !item.hasAttribute("disabled")))
+  await page.waitForFunction(() => [...document.querySelectorAll("uni-button")].some(item => item.textContent === "导出验收证据" && !item.hasAttribute("disabled")))
 
   let projectPackage = null
   if (site) {
@@ -41,10 +41,12 @@ try {
     projectPackage = JSON.parse(await readFile(await packageDownload.path(), "utf8"))
     assert.equal(projectPackage.format, "fastiot.project-package")
     assert(projectPackage.nodes.length > 0)
+    assert(Number.isInteger(projectPackage.point_count))
+    assert(Number.isInteger(projectPackage.strategy_count))
   }
 
   const evidenceEvent = page.waitForEvent("download")
-  await button("导出证据 ZIP").click()
+  await button("导出验收证据").click()
   const evidenceDownload = await evidenceEvent
   const evidence = await readFile(await evidenceDownload.path())
   assert.equal(evidence[0], 0x50)
@@ -52,17 +54,18 @@ try {
   assert(evidence.length > 100)
 
   await button("部署记录").click()
-  await page.getByText(/后端缺口：当前没有独立/).waitFor()
+  await page.getByText(/后端没有独立的/).waitFor()
   await button("版本回退").click()
   await page.getByText(/版本或当前工程包含计算点/).waitFor()
   await button("账号与权限").click()
-  await page.locator(".account").first().waitFor()
-  const accounts = await page.locator(".account").count()
+  await page.locator(".account-table tbody tr").first().waitFor()
+  await page.locator(".permission-matrix tbody tr").first().waitFor()
+  const accounts = await page.locator(".account-table tbody tr").count()
   await button("审计").click()
-  await page.locator("tbody tr").first().waitFor()
+  await page.locator(".audit-list .audit-row").first().waitFor()
   await button("行业包").click()
-  await page.locator(".package-item").first().waitFor()
-  const industry = await page.locator(".package-item").innerText()
+  await page.locator(".industry-card").first().waitFor()
+  const industry = await page.locator(".industry-card").innerText()
 
   await button("项目包与版本").click()
   await button("展开门槛").click()
@@ -72,12 +75,12 @@ try {
   await page.evaluate(() => { uni.redirectTo({ url: "/pages/delivery/index" }) })
   await page.getByText("预检与门槛", { exact: true }).waitFor()
   const overflows = []
-  for (const width of [1280, 1024]) {
-    await page.setViewportSize({ width, height: width === 1280 ? 800 : 768 })
+  for (const width of [1280, 1024, 760, 375]) {
+    await page.setViewportSize({ width, height: width === 1280 ? 800 : width === 1024 ? 768 : 900 })
     overflows.push(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth))
     if (process.env.T5_SHOT_DIR) await page.screenshot({ path: `${process.env.T5_SHOT_DIR}/uniapp-visual-delivery-${width}.png`, fullPage: true })
   }
-  assert.deepEqual(overflows, [false, false])
+  assert.deepEqual(overflows, [false, false, false, false])
   if (process.env.T5_SHOT) await page.screenshot({ path: process.env.T5_SHOT, fullPage: true })
   assert.deepEqual(errors, [])
   console.log(JSON.stringify({ ok: true, site: site || null, gateCount, packageNodes: projectPackage?.nodes.length || null, dependencies: projectPackage?.dependencies.length || null, evidenceBytes: evidence.length, accounts, industry: industry.split("\n").slice(0, 4), overflows, errors }))

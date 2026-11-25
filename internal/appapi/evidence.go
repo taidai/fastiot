@@ -4,17 +4,25 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/simpleiot/simpleiot/client"
+	"github.com/simpleiot/simpleiot/data"
+
+	"fastiot/internal/audit"
+	"fastiot/internal/authz"
 )
 
-// deliveryEvidence exports one zip with the delivery evidence CSVs: device
-// ledger, verification records, communication test report and alarm stats.
-// Everything is read from existing sources; no passwords or tokens appear in
-// any of them.
+// deliveryEvidence exports one zip from existing delivery sources: device
+// ledger, verification, communication, alarms, preflight, mapping differences,
+// audit records and the effective role/action/object matrix. Everything is
+// scoped to the caller; no passwords or tokens appear in any of them.
 func (h *Handler) deliveryEvidence(w http.ResponseWriter, r *http.Request, identity Identity) {
 	if h.ems == nil || h.ems.Profiles == nil || h.ems.Service == nil {
 		writeError(w, http.StatusServiceUnavailable, "ems_unavailable")
@@ -36,11 +44,14 @@ func (h *Handler) deliveryEvidence(w http.ResponseWriter, r *http.Request, ident
 		return
 	}
 	channelStats, deviceStats := h.ems.QualityReport()
+	nodes, err := h.visibleNodes(identity)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "nodes_unavailable")
+		return
+	}
 	names := map[string]string{}
-	if nodes, err := h.visibleNodes(identity); err == nil {
-		for _, node := range nodes {
-			names[node.ID] = node.Desc()
-		}
+	for _, node := range nodes {
+		names[node.ID] = node.Desc()
 	}
 	channelName := func(id string) string {
 		if name := names[id]; name != "" {
@@ -80,7 +91,11 @@ func (h *Handler) deliveryEvidence(w http.ResponseWriter, r *http.Request, ident
 	fmt.Fprint(readme, "  01-设备台账.csv       接入设备、Profile 绑定与验证状态\n")
 	fmt.Fprint(readme, "  02-验证记录.csv       每台设备的现场验证人、日期、序列号与备注\n")
 	fmt.Fprint(readme, "  03-通信测试报告.csv   通道/设备轮询统计与各设备点位质量汇总\n")
-	fmt.Fprint(readme, "  04-报警统计.csv       最近 30 天报警趋势与来源排名\n\n")
+	fmt.Fprint(readme, "  04-报警统计.csv       最近 30 天报警趋势与来源排名\n")
+	fmt.Fprint(readme, "  05-预检记录.csv       当前实时门槛与最近一次持久化预检，分开标识\n")
+	fmt.Fprint(readme, "  06-映射差异.csv       Profile 与实际点位的逐点映射判定及差异\n")
+	fmt.Fprint(readme, "  07-审计记录.csv       有审计查看权时导出最近 2000 条；否则明确标未包含\n")
+	fmt.Fprint(readme, "  08-权限矩阵.csv       角色 × 动作 × 对象；无账号管理权时仅含当前账号\n\n")
 	fmt.Fprint(readme, "边界:\n")
 	fmt.Fprint(readme, "  - 通信统计为本次运行期间的轮询计数，进程重启后清零。\n")
 	fmt.Fprint(readme, "  - 证据包不包含密码、令牌等敏感信息。\n")
@@ -206,6 +221,36 @@ func (h *Handler) deliveryEvidence(w http.ResponseWriter, r *http.Request, ident
 		return
 	}
 
+	livePreflight, err := h.buildPreflight(identity, "")
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "preflight_unavailable")
+		return
+	}
+	latestPreflight, err := h.latestVisiblePreflight(identity, nodes)
+	if err != nil {
+		fail()
+		return
+	}
+	if !writeCSV("05-预检记录.csv", preflightEvidenceRows(livePreflight, latestPreflight)) ||
+		!writeCSV("06-映射差异.csv", h.mappingEvidenceRows(nodes)) {
+		fail()
+		return
+	}
+	auditRows, err := h.auditEvidenceRows(identity)
+	if err != nil {
+		fail()
+		return
+	}
+	permissionRows, err := h.permissionEvidenceRows(identity, names)
+	if err != nil {
+		fail()
+		return
+	}
+	if !writeCSV("07-审计记录.csv", auditRows) || !writeCSV("08-权限矩阵.csv", permissionRows) {
+		fail()
+		return
+	}
+
 	if err := archive.Close(); err != nil {
 		fail()
 		return
@@ -213,4 +258,169 @@ func (h *Handler) deliveryEvidence(w http.ResponseWriter, r *http.Request, ident
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="fastiot-evidence-%s.zip"`, now.Format("2006-01-02")))
 	_, _ = w.Write(buffer.Bytes())
+}
+
+func (h *Handler) latestVisiblePreflight(identity Identity, nodes []data.NodeEdge) (*preflightReport, error) {
+	// Site-less snapshots are global and cannot be attributed to a restricted
+	// anchor safely. Restricted accounts read only their visible Site reports.
+	if identity.Policy.Admin {
+		return h.readLatestPreflight("")
+	}
+	var latest *preflightReport
+	for _, node := range nodes {
+		if node.Type != NodeTypeSite {
+			continue
+		}
+		report, err := h.readLatestPreflight(node.ID)
+		if err != nil {
+			return nil, err
+		}
+		if report != nil && (latest == nil || report.GeneratedAt.After(latest.GeneratedAt)) {
+			latest = report
+		}
+	}
+	return latest, nil
+}
+
+func preflightEvidenceRows(live preflightReport, latest *preflightReport) [][]string {
+	rows := [][]string{{"记录", "报告ID", "Site", "生成时间", "操作人", "门槛", "标题", "状态", "详情", "对象", "下一步"}}
+	appendReport := func(kind string, report preflightReport) {
+		for _, gate := range report.Gates {
+			rows = append(rows, []string{
+				kind, report.ID, report.Site, report.GeneratedAt.Format("2006-01-02 15:04:05"), report.Operator,
+				gate.Key, gate.Title, gate.Status, gate.Detail, gate.Object, gate.NextStep,
+			})
+		}
+	}
+	appendReport("实时门槛", live)
+	if latest != nil {
+		appendReport("最近预检", *latest)
+	} else {
+		rows = append(rows, []string{"最近预检", "", "", "", "", "", "", "", "尚未运行并保存预检", "", ""})
+	}
+	return rows
+}
+
+// mappingEvidenceRows uses the same real Profile comparison as the access UI.
+// It never saves or applies a mapping while exporting evidence.
+func (h *Handler) mappingEvidenceRows(nodes []data.NodeEdge) [][]string {
+	rows := [][]string{{"通道", "站号", "Profile", "更换前 Profile", "Profile 变量", "物理点ID", "判定", "原因", "差异"}}
+	for _, channel := range nodes {
+		if channel.Type != data.NodeTypeModbus {
+			continue
+		}
+		points := h.unitPoints(channel.ID)
+		for _, point := range channel.Points {
+			if point.Type != unitModelPoint || point.Tombstone%2 != 0 {
+				continue
+			}
+			server, err := strconv.Atoi(point.Key)
+			if err != nil {
+				continue
+			}
+			model, ok := unitModelFor(channel, server)
+			if !ok {
+				continue
+			}
+			prof, ok := h.ems.Profiles.Get(model.ProfileID)
+			if !ok {
+				rows = append(rows, []string{channelNameForEvidence(channel), strconv.Itoa(server), model.ProfileID, model.ReplacedFrom, "", "", "Profile 不可用", "目标实例没有该 Profile", ""})
+				continue
+			}
+			result := applyProfile(server, prof, points, model)
+			for _, mapped := range result.Points {
+				differences := make([]string, 0, len(mapped.Differences))
+				for _, difference := range mapped.Differences {
+					differences = append(differences, fmt.Sprintf("%s: Profile=%s, 实际=%s", difference.Field, difference.Profile, difference.Existing))
+				}
+				rows = append(rows, []string{
+					channelNameForEvidence(channel), strconv.Itoa(server), model.ProfileID, model.ReplacedFrom,
+					mapped.Name, mapped.PointID, mapped.Verdict, mapped.Reason, strings.Join(differences, "；"),
+				})
+			}
+		}
+	}
+	return rows
+}
+
+func channelNameForEvidence(node data.NodeEdge) string {
+	if name := node.Desc(); name != "" {
+		return name
+	}
+	return node.ID
+}
+
+func (h *Handler) auditEvidenceRows(identity Identity) ([][]string, error) {
+	rows := [][]string{{"时间", "人", "动作", "对象", "详情", "结果"}}
+	if !identity.Effective.Allowed(authz.AuditView) {
+		return append(rows, []string{"", "", "未包含", "", "当前账号无审计查看权限", ""}), nil
+	}
+	if h.audit == nil {
+		return append(rows, []string{"", "", "未包含", "", "审计存储不可用", ""}), nil
+	}
+	records, err := h.audit.Query(audit.Filter{Limit: 2000})
+	if err != nil {
+		return nil, err
+	}
+	for _, record := range records {
+		rows = append(rows, []string{record.Time.Format("2006-01-02 15:04:05"), record.Actor, record.Action, record.Object, record.Detail, record.Result})
+	}
+	return rows, nil
+}
+
+func (h *Handler) permissionEvidenceRows(identity Identity, names map[string]string) ([][]string, error) {
+	rows := [][]string{{"账号", "角色", "对象范围", "动作", "结果"}}
+	users := []userDTO{{ID: identity.UserID, Email: identity.Email, Policy: identity.Policy}}
+	if identity.Effective.Allowed(authz.AccountManage) {
+		nodes, err := client.GetNodes(h.nc, "all", "all", data.NodeTypeUser, false)
+		if err != nil {
+			return nil, err
+		}
+		users = users[:0]
+		for _, node := range nodes {
+			email, _ := node.Points.Text(data.PointTypeEmail, "")
+			var policy AccessPolicy
+			if point, ok := node.Points.Find("easyemsAccess", ""); ok {
+				_ = json.Unmarshal([]byte(point.Txt()), &policy)
+			}
+			users = append(users, userDTO{ID: node.ID, Email: email, Policy: policy})
+		}
+	}
+	sort.Slice(users, func(i, j int) bool {
+		if users[i].Email != users[j].Email {
+			return users[i].Email < users[j].Email
+		}
+		return users[i].ID < users[j].ID
+	})
+	for _, user := range users {
+		account := user.Email
+		if account == "" {
+			account = user.ID
+		}
+		role := user.Policy.Role
+		if role == "" && user.Policy.Admin {
+			role = "admin"
+		}
+		scopes := make([]string, 0, len(user.Policy.RootNodeIDs))
+		for _, id := range user.Policy.RootNodeIDs {
+			name := names[id]
+			if name == "" {
+				name = id
+			}
+			scopes = append(scopes, name)
+		}
+		scope := strings.Join(scopes, "、")
+		if scope == "" && user.Policy.Admin {
+			scope = "全部对象"
+		}
+		effective := authz.Resolve(user.Policy.Admin, role, user.Policy.Actions)
+		for _, action := range authz.All {
+			verdict := "拒绝"
+			if effective.Allowed(action) {
+				verdict = "允许"
+			}
+			rows = append(rows, []string{account, role, scope, action, verdict})
+		}
+	}
+	return rows, nil
 }

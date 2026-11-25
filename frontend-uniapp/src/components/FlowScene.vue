@@ -28,6 +28,7 @@
           <polygon points="138,110 200,139 200,189 138,158" fill="#e4edf2" stroke="#aec3cf"/>
           <polygon points="200,139 354,96 354,145 200,189" fill="url(#flow-wall)" stroke="#aec3cf"/>
           <polygon v-for="(points, index) in panels" :key="index" :points="points" fill="#2f78ad" stroke="#76b3d2" stroke-width=".7"/>
+          <g fill="#88b2c7"><rect x="222" y="146" width="17" height="14" transform="skewY(-16)"/><rect x="256" y="135" width="17" height="14" transform="skewY(-16)"/><rect x="290" y="125" width="17" height="14" transform="skewY(-16)"/></g>
           <path d="M200 189 L354 145" stroke="#a9c0cd"/>
         </g>
         <g filter="url(#flow-soft)">
@@ -66,11 +67,11 @@
           <path d="M642 150 v-18 M654 146 v-18 M666 151 v-18M636 132 h12 M648 128 h12 M660 133 h12" stroke="#5d7788" stroke-width="2"/>
         </g>
       </svg>
-      <view v-for="(item, index) in labels" :key="index" class="scene-label" :class="`label-${index}`" :title="item.quality ? `${item.quality} · ${item.time || '—'}` : '未映射点位'">
+      <view v-for="(item, index) in labels" :key="index" class="scene-label" :class="`label-${index}`" :title="prototype ? undefined : item.quality ? `${item.quality} · ${item.time || '—'}` : '未映射点位'">
         <view class="label-name">{{ item.label }}</view>
-        <view class="label-value">{{ item.value }}<text v-if="item.unit">{{ item.unit }}</text></view>
+        <view class="label-value">{{ item.value }}<text v-if="item.unit">{{ item.unit }}</text><text v-if="item.detail">{{ item.detail }}</text></view>
       </view>
-      <view class="legend"><span><i></i>实时观测</span><span class="off"><i></i>无数据不补值</span></view>
+      <view class="legend"><span><i></i>{{ prototype ? '供水' : '实时观测' }}</span><span class="off"><i></i>{{ prototype ? '未接入' : '无数据不补值' }}</span></view>
       <view class="scene-mode">三维视图 · 俯视</view>
     </view>
   </section>
@@ -81,7 +82,8 @@ import { computed } from "vue"
 
 const props = defineProps<{
   layerName: string
-  metrics: { label: string; value: string; unit?: string; quality?: string; time?: string }[]
+  metrics: { label: string; value: string; unit?: string; detail?: string; quality?: string; time?: string }[]
+  prototype?: boolean
 }>()
 const labels = computed(() => Array.from({ length: 3 }, (_, index) => props.metrics[index] || { label: "未映射点位", value: "—", unit: "" }))
 const trees = [[66,214,.8],[96,176,.7],[125,122,.75],[176,85,.65],[252,70,.7],[352,72,.65],[422,90,.8],[514,78,.7],[598,120,.85],[690,163,.8],[732,218,.85],[660,251,.75],[548,260,.65],[475,270,.7],[342,260,.8],[225,250,.65],[124,244,.8],[72,244,.75]]
@@ -113,10 +115,4 @@ const containers = [0, 1, 2]
 .legend i { display: inline-block; width: 16px; height: 2px; margin-right: 5px; background: #3c9da5; vertical-align: middle; }
 .legend .off i { background: #9eb2bd; }
 .scene-mode { position: absolute; right: 12px; bottom: 10px; color: #4c7188; font-size: 10px; }
-@media (max-width: 760px) {
-  .scene { height: 230px; }
-  .scene-label { min-width: 96px; padding: 7px 9px; }
-  .label-value { font-size: 17px; }
-  .flow-tools text:first-child, .flow-tools text:last-child { display: none; }
-}
 </style>

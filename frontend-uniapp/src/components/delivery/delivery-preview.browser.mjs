@@ -1,0 +1,88 @@
+import assert from "node:assert/strict"
+import { createRequire } from "node:module"
+
+const require = createRequire(new URL("../../../../frontend/package.json", import.meta.url))
+const { chromium } = require("playwright-core")
+const base = process.env.DELIVERY_PREVIEW_URL || "http://127.0.0.1:5174/uniapp/pages/delivery/index"
+let browser
+try {
+  try { browser = await chromium.launch({ channel: "chrome", headless: true }) }
+  catch { browser = await chromium.launch({ channel: "msedge", headless: true }) }
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } })
+  const apiRequests = []
+  await context.route("**/*", route => {
+    if (new URL(route.request().url()).pathname.startsWith("/api/")) { apiRequests.push(route.request().url()); return route.abort() }
+    return route.continue()
+  })
+  const page = await context.newPage()
+  const errors = []
+  page.on("pageerror", error => errors.push(error.message))
+  await page.goto(base, { waitUntil: "domcontentloaded" })
+  await page.locator(".variant-head").first().waitFor().catch(error => { console.error({ url: page.url(), errors, apiRequests }); throw error })
+  await page.locator(".version-id").first().waitFor()
+  assert.match(await page.locator(".stage").innerText(), /v2026\.11\.21-1/)
+  await page.locator(".package-contents").getByText(/36 个采集点/).waitFor()
+  await page.locator(".import-card uni-button").filter({ hasText: "导入到新实例" }).click()
+  await page.getByText("先发布一个项目包版本", { exact: true }).waitFor()
+  assert.equal(await page.locator(".preview-import-guide").count(), 0)
+  const failures = page.locator(".delivery-package uni-button").filter({ hasText: "模拟预检失败" })
+  await failures.click()
+  await page.getByText(/PCS7 必需点未映射/).first().waitFor()
+  await page.locator(".delivery-package uni-button").filter({ hasText: /重新发布|发布版本/ }).first().click()
+  await page.getByText(/预检失败，无法发布/).waitFor()
+  assert.equal(await page.getByText("预检未通过，仍要发布", { exact: true }).count(), 0)
+  await failures.click()
+  await page.locator(".delivery-package uni-button").filter({ hasText: /^发布版本$/ }).click()
+  await page.getByText(/已发布版本/).first().waitFor()
+  await page.locator(".delivery-package uni-button").filter({ hasText: "模拟依赖不匹配" }).click()
+  await page.locator(".import-card uni-button").filter({ hasText: "导入到新实例" }).click()
+  await page.getByText(/依赖版本不匹配/).first().waitFor()
+  await page.locator(".delivery-package uni-button").filter({ hasText: "模拟依赖不匹配" }).click()
+  await page.locator(".import-card uni-button").filter({ hasText: "导入到新实例" }).click()
+  await page.getByText("完成现场重绑", { exact: true }).waitFor()
+  assert.equal(await page.getByText("在新实例运行", { exact: true }).count(), 0)
+  await page.getByText("完成现场重绑", { exact: true }).click()
+  await page.getByText("在新实例运行", { exact: true }).waitFor()
+  assert.equal(await page.locator(".preview-import-guide").getByText("运行中", { exact: true }).count(), 0)
+  await page.getByText("在新实例运行", { exact: true }).click()
+  await page.locator(".preview-import-guide").getByText("运行中", { exact: true }).waitFor()
+  await failures.click()
+  const downloadPending = page.waitForEvent("download")
+  await page.getByText("导出验收证据", { exact: true }).click()
+  const download = await downloadPending
+  assert.equal(download.suggestedFilename(), "fastiot-acceptance-evidence.json")
+  const chunks = []
+  for await (const chunk of await download.createReadStream()) chunks.push(chunk)
+  const evidence = JSON.parse(Buffer.concat(chunks).toString("utf8"))
+  assert.equal(evidence.importStep, "running")
+  assert.equal(evidence.preflight.status, "failed")
+  assert.equal(evidence.mappingDiff[0].mapped, false)
+  assert.notEqual(evidence.version, "未发布")
+  await page.locator(".workbench uni-button").filter({ hasText: "设计" }).click()
+  await page.waitForURL(/pages\/design\/index/)
+  await page.locator(".workbench uni-button").filter({ hasText: "交付" }).click()
+  await page.waitForURL(/pages\/delivery\/index/)
+  await page.locator(".preview-import-guide").getByText("运行中", { exact: true }).waitFor()
+  assert.equal(await failures.getAttribute("aria-pressed"), "true")
+  await failures.click()
+  await page.locator("uni-button").filter({ hasText: "部署记录" }).click()
+  assert.equal(await page.locator(".deploy-table tbody tr").count(), 2)
+  assert.match(await page.locator(".deploy-table").innerText(), /教学泵房（本站）[\s\S]*运行中/)
+  await page.locator("uni-button").filter({ hasText: "账号与权限" }).click()
+  assert.equal(await page.locator(".account-table tbody tr").count(), 3)
+  assert.match(await page.locator(".stage").innerText(), /张工[\s\S]*李工[\s\S]*王管理员/)
+  await page.getByText("以李工身份检查", { exact: true }).click()
+  assert.match(await page.locator(".permission-exercise").innerText(), /启动 2号泵：\s*允许 · 对象在泵房内/)
+  assert.match(await page.locator(".permission-exercise").innerText(), /修改 1号泵 点位：\s*拒绝 · 操作员无工程权限/)
+  assert.match(await page.locator(".permission-exercise").innerText(), /发布版本：\s*拒绝 · 操作员无发布权限/)
+  await page.locator("uni-button").filter({ hasText: "审计" }).click()
+  assert.match(await page.locator(".audit-list").innerText(), /项目发布/)
+  await page.locator(".side uni-button").filter({ hasText: "行业包" }).click()
+  assert.equal(await page.locator(".ems-toggle").getAttribute("aria-checked"), "true")
+  assert.deepEqual(errors, [])
+  assert.deepEqual(apiRequests, [])
+  assert.equal(await page.evaluate(() => localStorage.getItem("fastems-token")), null)
+  console.log(JSON.stringify({ ok: true, checks: ["first-publish prerequisite", "failure scenarios", "import/rebind/run", "current-state evidence JSON", "workbench roundtrip", "three permission outcomes", "deployment records", "accounts", "audit", "industry switch", "no real APIs or live token"] }))
+} finally {
+  if (browser) await browser.close()
+}

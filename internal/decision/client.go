@@ -2,6 +2,7 @@ package decision
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"maps"
@@ -36,6 +37,8 @@ type Document struct {
 	Bindings BindingSet `json:"bindings"`
 	// Scenarios are saved simulations; the running engine ignores them.
 	Scenarios []Scenario `json:"scenarios,omitempty"`
+	// Simulation is transient editor input and is ignored by the running engine.
+	Simulation *SimulationOptions `json:"simulation,omitempty"`
 }
 
 type BindingSet struct {
@@ -69,9 +72,11 @@ type activeTable struct {
 	table       Table
 	bindings    BindingSet
 	values      map[string]signal.Sample
+	loaded      map[string]bool
 	manual      map[string]bool
 	engine      *rule.Engine
 	allocations map[string]*allocationRun
+	sequence    *actionSequence
 	pending     []string
 	rampRates   map[string]float64
 	rampTargets map[string]float64
@@ -228,6 +233,7 @@ func (c *Client) Run() error {
 						Input: update.pointID, Value: value, Quality: signal.Good,
 						SourceTime: point.Time, ReceivedTime: point.Time,
 					}
+					active.loaded[update.pointID] = true
 				}
 				changed = true
 			}
@@ -262,6 +268,7 @@ func (c *Client) start() (*activeTable, error) {
 		table:       table,
 		bindings:    bindings,
 		values:      make(map[string]signal.Sample),
+		loaded:      make(map[string]bool),
 		manual:      make(map[string]bool),
 		allocations: make(map[string]*allocationRun),
 		rampRates:   make(map[string]float64),
@@ -296,6 +303,11 @@ func (c *Client) start() (*activeTable, error) {
 			}
 			if err := ValidateTarget(c.nc, c.config.Parent, target, true, &action.Value); err != nil {
 				return fail(fmt.Errorf("action %s: %w", action.ActionID, err))
+			}
+			if action.Readback != nil && action.Readback.Target.NodeID != "" {
+				if err := ValidateTarget(c.nc, c.config.Parent, action.Readback.Target, false, nil); err != nil {
+					return fail(fmt.Errorf("action %s readback: %w", action.ActionID, err))
+				}
 			}
 			requiredActions[action.ActionID] = target
 		}
@@ -386,6 +398,7 @@ func (c *Client) start() (*activeTable, error) {
 					Input: pointID, Value: value, Quality: signal.Good,
 					SourceTime: point.Time, ReceivedTime: point.Time,
 				}
+				active.loaded[pointID] = true
 			}
 		}
 	}
@@ -415,22 +428,37 @@ func (c *Client) start() (*activeTable, error) {
 		active.stops = append(active.stops, stop)
 	}
 
-	// Values are fetched before evaluation so a default row cannot fire on a
-	// partially loaded snapshot.
+	// Evaluation starts once at least one input has produced a value. From
+	// then on an invalid or missing input makes only its own condition
+	// unsatisfied (ADR 0010), so a later fallback row stays reachable.
 	var evaluationError error
-	if len(active.values) == len(bindings.Points) {
+	if len(active.bindings.Points) == 0 || len(active.loaded) > 0 {
 		evaluationError = c.evaluate(active)
 	}
 	return active, evaluationError
 }
 
+// evaluate marks untrusted inputs stale and runs one first-hit evaluation.
+// Following ADR 0010, an invalid input only makes its own condition
+// unsatisfied; the table keeps evaluating later rows, and the reason is
+// reported through the table error and check report.
 func (c *Client) evaluate(active *activeTable) error {
-	if len(active.values) < len(active.bindings.Points) {
+	if len(active.bindings.Points) > 0 && len(active.loaded) == 0 {
 		return nil
 	}
-	if err := c.inputsFresh(active); err != nil {
-		return err
+	stale := c.markStale(active)
+	err := c.evaluateNow(active)
+	if len(stale) > 0 {
+		note := strings.Join(stale, "; ")
+		if err != nil {
+			return fmt.Errorf("%v; %s", err, note)
+		}
+		return errors.New(note)
 	}
+	return err
+}
+
+func (c *Client) evaluateNow(active *activeTable) error {
 	if active.engine == nil {
 		return nil
 	}
@@ -441,6 +469,7 @@ func (c *Client) evaluate(active *activeTable) error {
 		maps.Copy(samples, active.values)
 		maps.Copy(samples, timeSamples)
 	}
+	samples = conditionGroupSamples(active.table, now, samples)
 	outcome, err := active.engine.Evaluate(now, samples)
 	if err != nil {
 		return err
@@ -448,64 +477,81 @@ func (c *Client) evaluate(active *activeTable) error {
 
 	accepted := 0
 	rampChanged := false
+	sequenceChanged := false
+	if active.sequence != nil && outcome.MatchedRow != active.sequence.rowID {
+		active.sequence = nil
+		sequenceChanged = true
+	}
 	if outcome.State == rule.StateNoMatch {
 		clear(active.rampTargets)
 	}
 	if outcome.Fired {
-		for i := range outcome.Actions {
-			action := &outcome.Actions[i]
-			if action.Blocked {
-				delete(active.rampTargets, action.Output)
-				continue
+		sequencedRow := false
+		for _, row := range active.table.Rows {
+			if row.ID == outcome.MatchedRow && row.sequenced() {
+				active.sequence = newActionSequence(row)
+				sequencedRow = true
+				sequenceChanged = true
+				clear(active.rampTargets)
+				break
 			}
-			target := active.bindings.Actions[action.Output]
-			if run, ok := active.allocations[action.Output]; ok {
-				if err := run.start(c.nc, action.Applied.Num, now); err != nil {
+		}
+		if !sequencedRow {
+			for i := range outcome.Actions {
+				action := &outcome.Actions[i]
+				if action.Blocked {
+					delete(active.rampTargets, action.Output)
+					continue
+				}
+				target := active.bindings.Actions[action.Output]
+				if run, ok := active.allocations[action.Output]; ok {
+					if err := run.start(c.nc, action.Applied.Num, now); err != nil {
+						return fmt.Errorf("action %s: %w", action.Output, err)
+					}
+					active.pending = append(active.pending, action.Output)
+					accepted++
+					continue
+				}
+				if target.PointType == "" {
+					target.PointType = data.PointTypeValueSet
+				}
+				value := 0.0
+				if action.Applied.Kind == signal.Number {
+					value = action.Applied.Num
+				}
+				if rate := active.rampRates[action.Output]; rate > 0 && action.Applied.Kind == signal.Number {
+					current, ok := active.rampValues[action.Output]
+					if !ok {
+						// No readback: do not invent a starting point; write the target.
+						current = value
+						active.rampValues[action.Output] = current
+						active.rampAt[action.Output] = now
+					}
+					next := safety.RampStep(current, value, rate, now.Sub(active.rampAt[action.Output]))
+					if next != current {
+						active.rampValues[action.Output] = next
+						active.rampAt[action.Output] = now
+					}
+					value = next
+					action.Applied = signal.Num(next)
+					rampChanged = true
+					if next == action.Requested.Num {
+						action.Reason = ""
+						delete(active.rampTargets, action.Output)
+					} else {
+						action.Reason = rampReason(next, action.Requested.Num)
+						active.rampTargets[action.Output] = action.Requested.Num
+					}
+				} else {
+					delete(active.rampTargets, action.Output)
+				}
+				point := data.NewPointFloat(target.PointType, target.Key, value)
+				point.Origin = c.config.ID
+				if err := siotclient.SendNodePoint(c.nc, target.NodeID, point, true); err != nil {
 					return fmt.Errorf("action %s: %w", action.Output, err)
 				}
-				active.pending = append(active.pending, action.Output)
 				accepted++
-				continue
 			}
-			if target.PointType == "" {
-				target.PointType = data.PointTypeValueSet
-			}
-			value := 0.0
-			if action.Applied.Kind == signal.Number {
-				value = action.Applied.Num
-			}
-			if rate := active.rampRates[action.Output]; rate > 0 && action.Applied.Kind == signal.Number {
-				current, ok := active.rampValues[action.Output]
-				if !ok {
-					// No readback: do not invent a starting point; write the target.
-					current = value
-					active.rampValues[action.Output] = current
-					active.rampAt[action.Output] = now
-				}
-				next := safety.RampStep(current, value, rate, now.Sub(active.rampAt[action.Output]))
-				if next != current {
-					active.rampValues[action.Output] = next
-					active.rampAt[action.Output] = now
-				}
-				value = next
-				action.Applied = signal.Num(next)
-				rampChanged = true
-				if next == action.Requested.Num {
-					action.Reason = ""
-					delete(active.rampTargets, action.Output)
-				} else {
-					action.Reason = rampReason(next, action.Requested.Num)
-					active.rampTargets[action.Output] = action.Requested.Num
-				}
-			} else {
-				delete(active.rampTargets, action.Output)
-			}
-			point := data.NewPointFloat(target.PointType, target.Key, value)
-			point.Origin = c.config.ID
-			if err := siotclient.SendNodePoint(c.nc, target.NodeID, point, true); err != nil {
-				return fmt.Errorf("action %s: %w", action.Output, err)
-			}
-			accepted++
 		}
 	}
 	if outcome.State == rule.StateAlreadyFired {
@@ -515,8 +561,11 @@ func (c *Client) evaluate(active *activeTable) error {
 	}
 
 	c.stepAllocations(active, now)
+	if active.sequence != nil && c.stepSequence(active, now) {
+		sequenceChanged = true
+	}
 	signature := allocationSignature(active)
-	if outcome.MatchedRow != c.lastCheckRow || outcome.Fired || rampChanged || signature != c.lastAllocSig {
+	if outcome.MatchedRow != c.lastCheckRow || outcome.Fired || rampChanged || sequenceChanged || signature != c.lastAllocSig {
 		if err := c.recordCheck(outcome, now, active); err != nil {
 			return err
 		}
@@ -526,10 +575,15 @@ func (c *Client) evaluate(active *activeTable) error {
 
 	if outcome.Fired {
 		log.Printf("decisionTable %s: matched %s, accepted %d actions, state %s", c.config.ID, outcome.MatchedRow, accepted, outcome.State)
-		return c.setLastMatch(outcome.MatchedRow)
+		if err := c.setLastMatch(outcome.MatchedRow); err != nil {
+			return err
+		}
 	}
 	if outcome.MatchedRow == "" && c.config.LastMatch != "" {
 		return c.setLastMatch("")
+	}
+	if active.sequence != nil && active.sequence.err != "" {
+		return fmt.Errorf("action sequence: %s", active.sequence.err)
 	}
 	return nil
 }
@@ -674,6 +728,9 @@ func (c *Client) recordCheck(outcome rule.Outcome, now time.Time, active *active
 			}
 		}
 	}
+	if active.sequence != nil && active.sequence.rowID == outcome.MatchedRow {
+		report.Actions = append([]CheckAction(nil), active.sequence.checks...)
+	}
 	for i := range report.Actions {
 		if run, ok := active.allocations[report.Actions[i].Output]; ok {
 			report.Actions[i].Shares = run.result.Shares
@@ -700,56 +757,80 @@ func (c *Client) recordCheck(outcome rule.Outcome, now time.Time, active *active
 	return nil
 }
 
-func (c *Client) inputsFresh(active *activeTable) error {
+// markStale downgrades inputs whose source cannot currently be trusted, so
+// their conditions evaluate as unsatisfied instead of re-using an old value.
+// A recovered source restores trust for the last known value; a deleted or
+// invalid point simply stays absent.
+func (c *Client) markStale(active *activeTable) []string {
+	var reasons []string
 	for pointID, target := range active.bindings.Points {
-		nodes, err := siotclient.GetNodes(c.nc, "all", target.NodeID, "", false)
-		if err != nil || len(nodes) == 0 {
-			return fmt.Errorf("point %s: input unavailable", pointID)
-		}
-		disabled, _ := nodes[0].Points.Value(data.PointTypeDisabled, "")
-		if disabled != 0 {
-			return fmt.Errorf("point %s: input disabled", pointID)
-		}
-		if nodes[0].Type != data.NodeTypeModbusIO {
-			// 其他协议（OPC-UA/MQTT）没有 Modbus 心跳，按最新值时间判断时效。
-			if nodes[0].Type == "opcuaPoint" || nodes[0].Type == "mqttSub" {
-				value, found := nodes[0].Points.Find(data.PointTypeValue, "")
-				if !found || value.Time.IsZero() {
-					return fmt.Errorf("point %s: no %s sample", pointID, nodes[0].Type)
-				}
-				age := time.Since(value.Time)
-				if age > 15*time.Second || age < -5*time.Second {
-					return fmt.Errorf("point %s: stale %s input", pointID, nodes[0].Type)
-				}
+		err := validateFreshInput(c.nc, pointID, target)
+		sample, present := active.values[pointID]
+		if err != nil {
+			if present {
+				sample.Quality = signal.Stale
+				active.values[pointID] = sample
 			}
+			reasons = append(reasons, err.Error())
 			continue
 		}
-		busID := nodes[0].Parent
-		buses, err := siotclient.GetNodes(c.nc, "all", busID, "", false)
-		if err != nil || len(buses) == 0 {
-			return fmt.Errorf("point %s: bus unavailable", pointID)
+		if present && sample.Quality != signal.Good {
+			sample.Quality = signal.Good
+			active.values[pointID] = sample
 		}
-		busDisabled, _ := buses[0].Points.Value(data.PointTypeDisabled, "")
-		if busDisabled != 0 {
-			return fmt.Errorf("point %s: bus disabled", pointID)
+	}
+	sort.Strings(reasons)
+	return reasons
+}
+
+func validateFreshInput(nc *nats.Conn, pointID string, target Target) error {
+	nodes, err := siotclient.GetNodes(nc, "all", target.NodeID, "", false)
+	if err != nil || len(nodes) == 0 {
+		return fmt.Errorf("point %s: input unavailable", pointID)
+	}
+	disabled, _ := nodes[0].Points.Value(data.PointTypeDisabled, "")
+	if disabled != 0 {
+		return fmt.Errorf("point %s: input disabled", pointID)
+	}
+	if nodes[0].Type != data.NodeTypeModbusIO {
+		// 其他协议（OPC-UA/MQTT）没有 Modbus 心跳，按最新值时间判断时效。
+		if nodes[0].Type == "opcuaPoint" || nodes[0].Type == "mqttSub" {
+			value, found := nodes[0].Points.Find(data.PointTypeValue, "")
+			if !found || value.Time.IsZero() {
+				return fmt.Errorf("point %s: no %s sample", pointID, nodes[0].Type)
+			}
+			age := time.Since(value.Time)
+			if age > 15*time.Second || age < -5*time.Second {
+				return fmt.Errorf("point %s: stale %s input", pointID, nodes[0].Type)
+			}
 		}
-		heartbeat, ok := buses[0].Points.Find("lastGoodPoll", "")
-		if !ok || heartbeat.Time.IsZero() {
-			return fmt.Errorf("point %s: no successful Modbus poll", pointID)
-		}
-		poll, _ := buses[0].Points.Value(data.PointTypePollPeriod, "")
-		timeout, _ := buses[0].Points.Value(data.PointTypeTimeout, "")
-		maxAge := 5 * time.Second
-		if duration := 5 * time.Duration(poll) * time.Millisecond; duration > maxAge {
-			maxAge = duration
-		}
-		if duration := 3 * time.Duration(timeout) * time.Millisecond; duration > maxAge {
-			maxAge = duration
-		}
-		age := time.Since(heartbeat.Time)
-		if age > maxAge || age < -5*time.Second {
-			return fmt.Errorf("point %s: stale Modbus input", pointID)
-		}
+		return nil
+	}
+	busID := nodes[0].Parent
+	buses, err := siotclient.GetNodes(nc, "all", busID, "", false)
+	if err != nil || len(buses) == 0 {
+		return fmt.Errorf("point %s: bus unavailable", pointID)
+	}
+	busDisabled, _ := buses[0].Points.Value(data.PointTypeDisabled, "")
+	if busDisabled != 0 {
+		return fmt.Errorf("point %s: bus disabled", pointID)
+	}
+	heartbeat, ok := buses[0].Points.Find("lastGoodPoll", "")
+	if !ok || heartbeat.Time.IsZero() {
+		return fmt.Errorf("point %s: no successful Modbus poll", pointID)
+	}
+	poll, _ := buses[0].Points.Value(data.PointTypePollPeriod, "")
+	timeout, _ := buses[0].Points.Value(data.PointTypeTimeout, "")
+	maxAge := 5 * time.Second
+	if duration := 5 * time.Duration(poll) * time.Millisecond; duration > maxAge {
+		maxAge = duration
+	}
+	if duration := 3 * time.Duration(timeout) * time.Millisecond; duration > maxAge {
+		maxAge = duration
+	}
+	age := time.Since(heartbeat.Time)
+	if age > maxAge || age < -5*time.Second {
+		return fmt.Errorf("point %s: stale Modbus input", pointID)
 	}
 	return nil
 }

@@ -17,6 +17,17 @@ const ERROR_TEXTS: Record<string, string> = {
 }
 
 export async function request<T>(path: string, method = "GET", body?: unknown): Promise<T> {
+  const { PREVIEW_MODE } = await import("./source")
+  if (PREVIEW_MODE) {
+    const { resolvePreview } = await import("./preview")
+    const preview = await resolvePreview(path, method, body)
+    if (preview.handled && (preview.status || 200) < 400) return preview.data as T
+    const payload = preview.data as { error?: string } | undefined
+    const backendCode = payload?.error || ""
+    const code = preview.handled ? backendCode || "preview_request_failed" : "preview_unhandled"
+    const message = preview.handled ? ERROR_TEXTS[backendCode] || backendCode || `预览操作失败：${method} ${path}` : `预览接口未实现：${method} ${path}`
+    throw new ApiError(message, preview.status || 501, code)
+  }
   const token = uni.getStorageSync("fastems-token") as string
   const response = await new Promise<UniApp.RequestSuccessCallbackResult>((resolve, reject) => {
     uni.request({

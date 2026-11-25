@@ -1,7 +1,9 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import {
+  actionText,
   businessId,
+  isRamped,
   conditionText,
   createSimulationPayload,
   isWritable,
@@ -75,6 +77,28 @@ test("conditionText describes only backend-supported condition kinds", () => {
 test("timeConditionText handles weekday masks and all-day windows", () => {
   assert.equal(timeConditionText({ weekday_mask: 3 }), "周日、周一 全天")
   assert.equal(timeConditionText({ start: "08:00", end: "20:00" }), "每天 08:00–20:00")
+})
+
+test("simulation hold is transient and action sequence keeps delay/readback", () => {
+  const document = parseDocument(JSON.stringify({ table: { rows: [{
+    row_id: "or", match: "any", conditions: [],
+    actions: [{ action_id: "pump", value: 1, delay_ms: 2500, readback: { timeout_ms: 5000, tolerance: 0.1 } }],
+  }] } }))
+  const payload = createSimulationPayload(document, {}, {}, "", 10_000)
+  assert.equal(payload.document.simulation.held_ms, 10_000)
+  assert.equal(document.simulation, undefined, "simulation input must not leak into a saved draft")
+  assert.equal(payload.document.table.rows[0].match, "any")
+  assert.equal(payload.document.table.rows[0].actions[0].readback.timeout_ms, 5000)
+  assert.equal(actionText(payload.document.table.rows[0].actions[0], id => id), "延时 2.5s → pump = 1 → 回读 5s（容差 0.1）")
+})
+
+test("isRamped detects only an explicit positive ramp_per_second", () => {
+  const node = safety => ({ id: "x", type: "modbusIo", parent: "root", points: [{ type: "modbusIoType", text: "modbusHoldingRegister" }, ...(safety ? [{ type: "easyemsSafety", text: safety }] : [])] })
+  assert.equal(isRamped(node('{"ramp_per_second": 10}')), true)
+  assert.equal(isRamped(node('{"ramp_per_second": 0}')), false)
+  assert.equal(isRamped(node('{"min": 0}')), false)
+  assert.equal(isRamped(node("not-json")), false)
+  assert.equal(isRamped(node()), false)
 })
 
 test("businessId and isWritable follow the existing node contract", () => {

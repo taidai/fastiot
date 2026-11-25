@@ -19,6 +19,7 @@ import (
 	"github.com/simpleiot/simpleiot/data"
 	"github.com/simpleiot/simpleiot/server"
 
+	"fastiot/internal/audit"
 	"fastiot/internal/ems/runtime"
 	"fastiot/internal/emsapi"
 )
@@ -35,6 +36,7 @@ func TestModbusCSVDiffAndDeliveryEvidence(t *testing.T) {
 		AppOnly: true, NatsLoopback: true, ProvisioningDisable: true,
 		AppHandlerFactory: func(nc *nats.Conn, users api.UserAuthority) http.Handler {
 			handler := New(nc, users, ready)
+			handler.SetAudit(audit.New(filepath.Join(dataDir, "audit.jsonl")))
 			handler.SetDataDir(dataDir)
 			handler.SetEMS(emsapi.New(runtime.NewService(nil, 15*time.Second, 5*time.Second, 100), 15*time.Second))
 			return handler
@@ -157,7 +159,18 @@ func TestModbusCSVDiffAndDeliveryEvidence(t *testing.T) {
 		return nodeByDescription(t, base, token, "旧点位") == nil
 	}, "diff apply removed the missing point")
 
-	// Evidence package: one zip, the four CSVs plus the readme, no secrets.
+	status, body = call(t, http.MethodPut, base+"/modbus/"+bus.ID+"/units/1/model", token, map[string]any{
+		"name": "恩玖 PCS", "profile_id": "enjo-pcs", "point_map": map[string]string{},
+	}, nil)
+	if status != http.StatusOK {
+		t.Fatalf("save unit model for mapping evidence: %d %s", status, body)
+	}
+	status, body = call(t, http.MethodPost, base+"/delivery/preflight", token, nil, nil)
+	if status != http.StatusOK {
+		t.Fatalf("persist preflight for evidence: %d %s", status, body)
+	}
+
+	// Evidence package: readme plus current and persisted delivery evidence.
 	request, err := http.NewRequest(http.MethodGet, base+"/delivery/evidence", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -195,7 +208,10 @@ func TestModbusCSVDiffAndDeliveryEvidence(t *testing.T) {
 		}
 		contents[file.Name] = string(text)
 	}
-	for _, name := range []string{"00-说明.txt", "01-设备台账.csv", "02-验证记录.csv", "03-通信测试报告.csv", "04-报警统计.csv"} {
+	for _, name := range []string{
+		"00-说明.txt", "01-设备台账.csv", "02-验证记录.csv", "03-通信测试报告.csv", "04-报警统计.csv",
+		"05-预检记录.csv", "06-映射差异.csv", "07-审计记录.csv", "08-权限矩阵.csv",
+	} {
 		if _, ok := contents[name]; !ok {
 			t.Fatalf("evidence zip missing %s (has %v)", name, fileNames(archive))
 		}
@@ -205,6 +221,18 @@ func TestModbusCSVDiffAndDeliveryEvidence(t *testing.T) {
 	}
 	if !strings.Contains(contents["03-通信测试报告.csv"], "通信测试报告") {
 		t.Fatal("communication report CSV missing header")
+	}
+	if !strings.Contains(contents["05-预检记录.csv"], "实时门槛") || !strings.Contains(contents["05-预检记录.csv"], "最近预检") {
+		t.Fatal("preflight evidence must distinguish live gates from the persisted report")
+	}
+	if !strings.Contains(contents["06-映射差异.csv"], "enjo-pcs") || !strings.Contains(contents["06-映射差异.csv"], "没有同名物理点位") {
+		t.Fatal("mapping evidence missing real profile differences")
+	}
+	if !strings.Contains(contents["07-审计记录.csv"], "交付预检") {
+		t.Fatal("audit evidence missing the persisted preflight action")
+	}
+	if !strings.Contains(contents["08-权限矩阵.csv"], "account_manage") || !strings.Contains(contents["08-权限矩阵.csv"], "允许") {
+		t.Fatal("permission evidence missing effective role/action/object rows")
 	}
 	if strings.Contains(contents["00-说明.txt"], password) {
 		t.Fatal("readme leaks the password")

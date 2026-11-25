@@ -37,3 +37,27 @@ export function summarizeLedger(nodes: Node[]) {
 export function screenSummary(screen: ScreenConfig | null) {
   return screen ? `${screen.title} · ${screen.columns} 列 · ${screen.point_ids.length} 个点位` : "未配置"
 }
+
+export function allowedChildTypes(parentType: string, parentIsRoot = false) {
+  if (parentType === "siteRoot" || (parentType === "device" && parentIsRoot)) return ["site", "plant", "area", "unit", "energyUnit", "device"]
+  if (parentType === "site") return ["plant", "area", "unit", "energyUnit", "device"]
+  if (parentType === "plant") return ["area", "unit", "energyUnit", "device"]
+  if (parentType === "area" || parentType === "group") return ["area", "unit", "energyUnit", "device"]
+  if (parentType === "unit" || parentType === "energyUnit") return ["device"]
+  return []
+}
+
+export function boundBusinessIDs(nodes: Node[]) {
+  const result = new Set<string>()
+  for (const node of nodes) {
+    if (node.type !== "modbus") continue
+    for (const point of node.points) {
+      if (point.type !== "easyemsUnitModel" || (point.tombstone || 0) % 2 !== 0 || !point.text) continue
+      try {
+        const model = JSON.parse(point.text) as { business_node_id?: string }
+        if (model.business_node_id) result.add(model.business_node_id)
+      } catch { /* Invalid persisted models remain unbound rather than guessed. */ }
+    }
+  }
+  return result
+}

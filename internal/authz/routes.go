@@ -214,6 +214,20 @@ var routeRequirements = []routeRequirement{
 	authenticatedRoute(http.MethodGet, "industry/packages"),
 	actionRoute(http.MethodPost, "industry/packages", SiteSettings, "admin_required"),
 	actionRoute(http.MethodDelete, "industry/packages/*", SiteSettings, "admin_required"),
+	authenticatedRoute(http.MethodGet, "templates"),
+	actionRoute(http.MethodPost, "access/batch", Configure, "admin_required"),
+	actionRoute(http.MethodPost, "nodes/*/copy", Configure, "admin_required").pathTarget(1).bodyTargetError("parent", 400, "invalid_copy"),
+	authenticatedRoute(http.MethodGet, "modbus/*/units/*/verify").pathTarget(1),
+	authenticatedRoute(http.MethodPost, "modbus/*/units/*/verify").pathTarget(1),
+	authenticatedRoute(http.MethodGet, "state-machines"),
+	actionRoute(http.MethodPost, "state-machines", Configure, "operation_not_allowed").bodyTarget("parent"),
+	authenticatedRoute(http.MethodGet, "state-machines/*").pathTarget(1),
+	actionRoute(http.MethodPost, "state-machines/*/draft", Configure, "operation_not_allowed").pathTarget(1),
+	actionRoute(http.MethodPost, "state-machines/*/publish", RulePublish, "operation_not_allowed").pathTarget(1),
+	authenticatedRoute(http.MethodPost, "state-machines/*/simulate").pathTarget(1),
+	actionRoute(http.MethodPost, "state-machines/*/execute", Command, "operation_not_allowed").pathTarget(1),
+	authenticatedRoute(http.MethodGet, "overview/handover").queryTarget("layer"),
+	actionRoute(http.MethodPut, "overview/handover", Command, "operator_required").queryTarget("layer"),
 }
 
 func matchRoutePath(pattern, path string) bool {

@@ -1,6 +1,6 @@
 <template>
+  <view class="variant-head"><b>审计</b><span>谁在什么时候做过什么？</span></view>
   <section class="card glass">
-    <view class="step-head"><b>审计</b><span>谁在什么时候做过什么，结果是什么？</span></view>
     <view v-if="!canView" class="empty">当前账号没有审计查看权限；服务端会拒绝读取审计。</view>
     <template v-else>
       <form class="filters" @submit.prevent="load">
@@ -11,9 +11,12 @@
       <view v-if="error" class="error">{{ error }}</view>
       <view v-else-if="loading && !records.length" class="empty">正在读取审计…</view>
       <view v-else-if="!records.length" class="empty">当前筛选条件下没有审计记录。</view>
-      <view v-else class="table-wrap"><table><thead><tr><th>时间</th><th>人</th><th>动作</th><th>对象与详情</th><th>结果</th></tr></thead>
-        <tbody><tr v-for="(item, index) in records" :key="`${item.time}-${item.actor}-${index}`"><td class="nowrap">{{ clock(item.time) }}</td><td>{{ item.actor || "—" }}</td><td>{{ item.action || "—" }}</td><td><b class="object">{{ item.object || "—" }}</b><small>{{ item.detail || "—" }}</small></td><td><span class="chip" :class="item.result === 'success' ? 'ok' : 'warn'">{{ item.result === "success" ? "成功" : item.result === "failure" ? "失败" : item.result || "—" }}</span></td></tr></tbody>
-      </table></view>
+      <view v-else class="audit-list">
+        <view v-for="(item, index) in records" :key="`${item.time}-${item.actor}-${index}`" class="row audit-row">
+          <span class="audit-event">{{ clock(item.time) }} · {{ item.actor || "—" }} · {{ item.action || "—" }}<small>{{ item.object || "—" }}<template v-if="item.detail"> · {{ item.detail }}</template></small></span>
+          <span class="chip" :class="item.result === 'success' ? 'ok' : 'warn'">{{ item.result === "success" ? "成功" : item.result === "failure" ? "失败" : item.result || "—" }}</span>
+        </view>
+      </view>
       <p class="note">每次最多读取 200 条；审计记录来自后端，不用当前页面操作临时拼凑。</p>
     </template>
   </section>
@@ -53,15 +56,14 @@ onMounted(() => { if (props.canView) void load() })
 </script>
 
 <style scoped>
-.step-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
-.step-head b { font-size: 16px; }
-.step-head span, .note { color: var(--faint); font-size: 12px; }
+.variant-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 0; }
+.variant-head b { font-size: 15px; }
+.variant-head span, .note { color: var(--faint); font-size: 12.5px; }
 .filters { display: flex; align-items: flex-end; gap: 9px; flex-wrap: wrap; margin-bottom: 12px; }
 .filters label { display: grid; gap: 5px; color: var(--muted); font-size: 11.5px; }
 .filters select { min-width: 150px; min-height: 44px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 9px; background: rgba(255,255,255,.7); }
-table { min-width: 760px; }
-.nowrap { white-space: nowrap; }
-.object { display: block; font-weight: 500; }
-td small { display: block; margin-top: 3px; color: var(--faint); }
+.audit-event { min-width: 0; overflow-wrap: anywhere; }
+.audit-event small { display: block; margin-top: 3px; color: var(--faint); font-size: 11.5px; }
+.audit-row .chip { flex: none; }
 .note { margin-top: 12px; }
 </style>

@@ -13,7 +13,9 @@ type Table struct {
 type Row struct {
 	ID         string      `json:"row_id"`
 	Conditions []Condition `json:"conditions"`
-	Actions    []Action    `json:"actions"`
+	// Match is "all" (default, AND) or "any" (OR). There is no nested logic.
+	Match   string   `json:"match,omitempty"`
+	Actions []Action `json:"actions"`
 	// HoldMS delays firing until the conditions have held this long.
 	HoldMS int `json:"hold_ms,omitempty"`
 	// CooldownMS blocks re-firing the row for this long after it fired.
@@ -41,6 +43,29 @@ type Condition struct {
 type Action struct {
 	ActionID string  `json:"action_id"`
 	Value    float64 `json:"value"`
+	// DelayMS waits after the previous action has been confirmed.
+	DelayMS  int       `json:"delay_ms,omitempty"`
+	Readback *Readback `json:"readback,omitempty"`
+}
+
+type Readback struct {
+	// Target defaults to the action node's value point.
+	Target    Target  `json:"target,omitempty"`
+	TimeoutMS int     `json:"timeout_ms"`
+	Tolerance float64 `json:"tolerance,omitempty"`
+}
+
+// sequenced reports whether the row opts into the ordered sequence runtime.
+// Rows without delay/readback keep the legacy fire-and-forget path so imported
+// or API-authored documents keep working; rows authored in the editor always
+// carry readback, as ADR 0010 requires.
+func (r Row) sequenced() bool {
+	for _, action := range r.Actions {
+		if action.DelayMS != 0 || action.Readback != nil {
+			return true
+		}
+	}
+	return false
 }
 
 type Result struct {
@@ -85,6 +110,9 @@ func (t Table) Validate() error {
 			return fmt.Errorf("row %d: duplicate row_id", i+1)
 		}
 		rows[row.ID] = true
+		if row.Match != "" && row.Match != "all" && row.Match != "any" {
+			return fmt.Errorf("row %s: condition group match must be all or any", row.ID)
+		}
 		if row.HoldMS < 0 || row.CooldownMS < 0 {
 			return fmt.Errorf("row %s: hold and cooldown must not be negative", row.ID)
 		}
@@ -131,12 +159,23 @@ func (t Table) Validate() error {
 			if action.ActionID == "" {
 				return fmt.Errorf("row %s: missing action_id", row.ID)
 			}
-			if actions[action.ActionID] {
+			if actions[action.ActionID] && !row.sequenced() {
 				return fmt.Errorf("row %s: duplicate action_id", row.ID)
 			}
 			actions[action.ActionID] = true
 			if !finite(action.Value) {
 				return fmt.Errorf("row %s: action value must be finite", row.ID)
+			}
+			if action.DelayMS < 0 {
+				return fmt.Errorf("row %s: action delay must not be negative", row.ID)
+			}
+			if action.Readback != nil {
+				if action.Readback.TimeoutMS <= 0 || action.Readback.TimeoutMS > 120000 {
+					return fmt.Errorf("row %s: readback timeout must be 1..120000ms", row.ID)
+				}
+				if !finite(action.Readback.Tolerance) || action.Readback.Tolerance < 0 {
+					return fmt.Errorf("row %s: readback tolerance must be finite and non-negative", row.ID)
+				}
 			}
 		}
 	}
@@ -150,21 +189,17 @@ func Evaluate(t Table, values map[string]float64) (Result, error) {
 		return Result{}, err
 	}
 	for _, row := range t.Rows {
-		matched := true
+		matched := row.Match != "any" || len(row.Conditions) == 0
 		for _, condition := range row.Conditions {
+			conditionMatched := false
 			if condition.Kind == "time" {
-				if !timeMatches(condition, time.Now()) {
-					matched = false
-					break
-				}
-				continue
+				conditionMatched = timeMatches(condition, time.Now())
+			} else if value, ok := values[condition.PointID]; ok && finite(value) {
+				conditionMatched = compare(value, condition.Operator, condition.Value)
 			}
-			value, ok := values[condition.PointID]
-			if !ok || !finite(value) {
-				matched = false
-				break
-			}
-			if !compare(value, condition.Operator, condition.Value) {
+			if row.Match == "any" {
+				matched = matched || conditionMatched
+			} else if !conditionMatched {
 				matched = false
 				break
 			}

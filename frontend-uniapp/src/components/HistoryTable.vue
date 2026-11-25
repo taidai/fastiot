@@ -36,6 +36,7 @@ function sourceText(source: string) {
 
 <style scoped>
 .time { white-space: nowrap; }
+.compact td { line-height: 14px; }
 .off { color: var(--amber); }
 .reason { margin-top: 2px; color: var(--faint); font-size: 10px; }
 .placeholder-row td { height: 44px; color: var(--faint); text-align: center; }
