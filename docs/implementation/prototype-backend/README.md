@@ -23,13 +23,13 @@ The worktree starts at the current committed source plus only task-related pendi
 | 05 | [单设备 Profile 接入与只读验证](05.md) | 03 | integrated — b633be0 |
 | 06 | [批量接入与 CSV 逐台结果](06.md) | 05 | integrated — e068b25 |
 | 07 | [操作抽屉与命令回读闭环](07.md) | 05 | code integrated — 9de5c1d; full-suite acceptance open |
-| 08 | [L3 安全写回读验证](08.md) | 07 | queued — integrated command contract; final acceptance gated |
+| 08 | [L3 安全写回读验证](08.md) | 07 | in progress — isolated worktree; final acceptance gated |
 | 09 | [按层总览与可信实时数据](09.md) | 02 | integrated — b74d6e2 |
 | 10 | [历史查询、断线曲线与 CSV](10.md) | 02 | integrated — b399379 |
 | 11 | [告警生命周期与交接持久化](11.md) | 09, 10 | integrated — aac3628 |
 | 12 | [今日电量、运行时长与健康统计](12.md) | 09, 10 | integrated — c273cbc |
-| 13 | [四段式规则与显式作用范围](13.md) | 07 | queued — integrated command contract; final acceptance gated |
-| 14 | [状态机定义、模拟与受控执行](14.md) | 07 | queued — integrated command contract; final acceptance gated |
+| 13 | [四段式规则与显式作用范围](13.md) | 07 | in progress — isolated worktree; final acceptance gated |
+| 14 | [状态机定义、模拟与受控执行](14.md) | 07 | in progress — isolated worktree; final acceptance gated |
 | 15 | [持续运行的聚合点](15.md) | 09, 10 | integrated — 8d927ab |
 | 16 | [今日执行统一查询](16.md) | 13, 14 | pending |
 | 17 | [配界面保存到客户总览](17.md) | 09, 11, 12 (active-alarm and statistics bindings) | integrated — 02220a1; preview repair verified |
