@@ -260,14 +260,16 @@ func TestReview16StoppedSequenceRetainsTerminalOutcome(t *testing.T) {
 	if status != 200 {
 		t.Fatal(text)
 	}
-	manager := client.NewManager(h.nc, func(nc *nats.Conn, c decision.DecisionTable) client.Client { return h.NewRuleClient(nc, c) }, RuleParentTypes())
-	done := make(chan error, 1)
-	go func() { done <- manager.Run() }()
-	defer func() { manager.Stop(nil); <-done }()
 	status, text = call(t, "POST", base+"/rules/"+created.ID+"/enable", admin, map[string]bool{"enabled": true}, nil)
 	if status != 200 {
 		t.Fatal(text)
 	}
+	// Start from the persisted enabled configuration rather than racing the
+	// manager's initial discovery; the terminal-outcome assertion is unchanged.
+	manager := client.NewManager(h.nc, func(nc *nats.Conn, c decision.DecisionTable) client.Client { return h.NewRuleClient(nc, c) }, RuleParentTypes())
+	done := make(chan error, 1)
+	go func() { done <- manager.Run() }()
+	defer func() { manager.Stop(nil); <-done }()
 	var before decision.CheckReport
 	readReport := func() decision.CheckReport {
 		nodes, err := client.GetNodes(h.nc, "all", created.ID, "", false)
