@@ -21,7 +21,10 @@
     <button v-if="showEms" class="ems-toggle" role="switch" :aria-checked="displayEmsInstalled === true" :disabled="emsBusy || displayEmsInstalled === null || !canChangeIndustry" title="启用不等于购买、部署或控制授权" @click="emit('toggle-ems')"><text class="ems-check">{{ displayEmsInstalled ? '✓' : '' }}</text><text>EMS 行业包</text></button>
     <view v-if="showAppearance" class="top-meta desktop-only">{{ meta }}</view>
     <button v-if="showAppearance" class="appearance" :aria-expanded="open" @click="open = !open">外观</button>
-    <button v-if="showBell" class="bell" @click="$emit('bell')">告警中心 <text v-if="pending" class="badge">{{ pending }}</text></button>
+    <view class="notification-actions">
+      <NotificationInbox v-if="PREVIEW_MODE || session.token" />
+      <button v-if="showBell" class="bell" @click="$emit('bell')">告警中心 <text v-if="pending" class="badge">{{ pending }}</text></button>
+    </view>
     <view v-if="showAppearance && open" class="appearance-panel glass" role="dialog" aria-label="外观设置">
       <view v-if="themes" class="theme-choices" aria-label="主题">
         <button v-for="item in themeOptions" :key="item.key" class="theme-choice" :class="{ active: theme === item.key }"
@@ -35,6 +38,7 @@
 </template>
 
 <script setup lang="ts">
+import NotificationInbox from './NotificationInbox.vue'
 import { computed, nextTick, ref } from "vue"
 import { session } from '../stores/session'
 import { canAction } from './delivery/contracts'
@@ -120,6 +124,7 @@ const activeLabel = computed(() => PREVIEW_MODE ? "原型预览" : tabs.find(tab
 </script>
 
 <style scoped>
+.notification-actions { display: flex; align-items: center; gap: 8px; }
 .topbar { position: relative; z-index: 30; display: grid; grid-template-columns: 180px minmax(110px,1fr) auto minmax(180px,1.2fr) auto auto; align-items: center; gap: 20px; padding: 12px 18px; }
 .topbar.no-workbench { grid-template-columns: 180px 1fr auto auto auto; }
 .topbar.no-actions { display: flex; gap: 14px; padding: 9px 18px; }

@@ -1,3 +1,4 @@
+import { resolveNotificationPreview } from './notifications'
 import { resolveDesignPreview, selectDesignPreviewProject } from './design'
 import { resolveDeliveryPreview, setDeliveryPreviewEms, selectDeliveryPreviewProject } from './delivery'
 import { previewWorkspace, previewProjects, setPreviewEms } from './workspace'
@@ -6,6 +7,8 @@ import type { Snapshot } from '../../types/api'
 export type PreviewResult = { handled: boolean; status?: number; data?: unknown }
 
 export async function resolvePreview(path: string, method: string, body?: unknown): Promise<PreviewResult> {
+  const inbox = resolveNotificationPreview(path, method, body)
+  if (inbox.handled) return inbox
   if (path === '/login' && method === 'POST') return { handled: true, data: { token: 'prototype-preview' } }
   const project = previewProjects.find(item => item.id === previewWorkspace.projectId)!
   selectDesignPreviewProject(project.id, project.name)
