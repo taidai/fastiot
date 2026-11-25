@@ -67,6 +67,11 @@ export type HistoryRecord = {
   source_time?: string
   received_time?: string
   bucket_end?: string
+  time_source?: string
+  late?: boolean
+  aggregate?: string
+  sample_count?: number
+  origin?: string
   quality?: string
   value?: number
   text?: string
@@ -87,6 +92,9 @@ export type HistoryPointResult = {
   next_before?: string
   next_before_count?: number
   sample_interval_ms?: number
+  actual_interval_ms?: number
+  aggregation?: "raw" | "mean"
+  retention?: { kind: "unknown" | "count_per_point_per_kind"; limit?: number }
 }
 
 export type HistoryQueryResponse = {

@@ -53,12 +53,23 @@ type Record struct {
 	Aggregate   string `json:"aggregate,omitempty"`
 }
 
+// Retention describes a storage policy, not a fabricated duration or a promise
+// that every requested observation still exists. Unknown is explicit for adapters
+// that do not expose their retention configuration.
+type Retention struct {
+	Kind  string `json:"kind"`
+	Limit int    `json:"limit,omitempty"`
+}
+
 // PointResult is the paginated history of one point.
 type PointResult struct {
 	NodeID           string      `json:"node_id"`
 	DeviceID         string      `json:"device_id,omitempty"`
 	Source           string      `json:"source"`
 	SampleIntervalMS int         `json:"sample_interval_ms"`
+	ActualIntervalMS int         `json:"actual_interval_ms"`
+	Aggregation      string      `json:"aggregation"`
+	Retention        Retention   `json:"retention"`
 	Points           data.Points `json:"points,omitempty"`
 	Records          []Record    `json:"records"`
 	// Matched is the number of records matching the time window and filter
@@ -141,6 +152,9 @@ type readResult struct {
 	points           data.Points
 	deviceID, source string
 	sampleIntervalMS int
+	actualIntervalMS int
+	aggregation      string
+	retention        Retention
 }
 
 // Execute resolves each node, selects its source, merges records, aggregates,
@@ -199,6 +213,7 @@ func (q *Query) Execute(req Request) ([]PointResult, int, error) {
 		}
 		results = append(results, PointResult{
 			NodeID: id, DeviceID: read.deviceID, Source: read.source, SampleIntervalMS: read.sampleIntervalMS,
+			ActualIntervalMS: read.actualIntervalMS, Aggregation: read.aggregation, Retention: read.retention,
 			Points: read.points, Records: records, Matched: matchedCount, Returned: len(records),
 			Truncated: truncated, NextBefore: next.Before, NextBeforeCount: next.Count,
 		})
@@ -213,7 +228,7 @@ func (q *Query) Execute(req Request) ([]PointResult, int, error) {
 // source answered, so a SIOT fallback is never silently left out of an
 // aggregated result.
 func (q *Query) read(node Node, typ, key string, start, end time.Time, aggregate time.Duration) (readResult, error) {
-	out := readResult{source: SourceSIOT, records: []Record{}}
+	out := readResult{source: SourceSIOT, records: []Record{}, aggregation: "raw", retention: Retention{Kind: "unknown"}}
 	runtimePoint := node.Type == data.NodeTypeModbusIO && q.Runtime != nil
 	if runtimePoint {
 		deviceID, intervalMS, ok, err := q.Runtime.Locate(node.ID)
@@ -222,6 +237,10 @@ func (q *Query) read(node Node, typ, key string, start, end time.Time, aggregate
 		}
 		if ok {
 			out.deviceID, out.source, out.sampleIntervalMS = deviceID, SourceRuntime, intervalMS
+			out.actualIntervalMS = intervalMS
+			if policy, ok := q.Runtime.(interface{ Retention() Retention }); ok {
+				out.retention = policy.Retention()
+			}
 			for _, sample := range q.Runtime.Timeline(deviceID, node.ID, start, end) {
 				if sample.SourceTime.IsZero() {
 					continue
@@ -247,6 +266,12 @@ func (q *Query) read(node Node, typ, key string, start, end time.Time, aggregate
 	if aggregate == 0 {
 		return out, nil
 	}
+	// A requested display window cannot create observations faster than the
+	// declared sampling cadence. Report the actual window independently.
+	if cadence := time.Duration(out.sampleIntervalMS) * time.Millisecond; aggregate < cadence {
+		aggregate = cadence
+	}
+	out.actualIntervalMS, out.aggregation = int(aggregate/time.Millisecond), "mean"
 	out.records = aggregateRecords(out.records, aggregate, node.ID, out.deviceID, out.source)
 	return out, nil
 }
@@ -319,14 +344,15 @@ func sampleRecord(sample history.Sample, nodeID, deviceID, source string) Record
 }
 
 // aggregateRecords means good numeric observations per bucket and carries
-// quality events through unchanged. A record with no declared quality is not
-// treated as unavailable: SIOT fallback rows have no quality but are still
-// real history.
+// non-good observations and quality events unchanged. A record with no declared
+// quality is not treated as unavailable: SIOT fallback rows have no quality but
+// are still real history.
 func aggregateRecords(records []Record, aggregate time.Duration, nodeID, deviceID, source string) []Record {
 	buckets := []Record{}
 	events := make([]Record, 0)
 	var bucketStart time.Time
 	var sum float64
+	var late bool
 	count := 0
 	quality, unit, timeSource := "", "", ""
 	flush := func() {
@@ -337,7 +363,7 @@ func aggregateRecords(records []Record, aggregate time.Duration, nodeID, deviceI
 		buckets = append(buckets, Record{
 			PointID: nodeID, DeviceID: deviceID, SourceTime: bucketStart, BucketEnd: bucketStart.Add(aggregate),
 			Quality: quality, Value: &value, Source: source, Unit: unit, TimeSource: timeSource,
-			SampleCount: count, Aggregate: aggregate.String(), Kind: history.KindObservation,
+			SampleCount: count, Aggregate: aggregate.String(), Kind: history.KindObservation, Late: late,
 		})
 	}
 	for _, record := range records {
@@ -345,7 +371,13 @@ func aggregateRecords(records []Record, aggregate time.Duration, nodeID, deviceI
 			events = append(events, record)
 			continue
 		}
-		if record.Value == nil || (record.Quality != "" && record.Quality != signal.Good.String()) {
+		if record.Quality != "" && record.Quality != signal.Good.String() {
+			// Invalid/stale observations are evidence, not missing inputs to
+			// discard. Keep original times and kind beside the numeric mean.
+			events = append(events, record)
+			continue
+		}
+		if record.Value == nil {
 			continue
 		}
 		at := record.SourceTime.Truncate(aggregate)
@@ -355,6 +387,7 @@ func aggregateRecords(records []Record, aggregate time.Duration, nodeID, deviceI
 			sum = 0
 		}
 		if count == 0 {
+			late = false
 			bucketStart = at
 			quality = record.Quality
 			unit = record.Unit
@@ -367,6 +400,7 @@ func aggregateRecords(records []Record, aggregate time.Duration, nodeID, deviceI
 				timeSource = ""
 			}
 		}
+		late = late || record.Late
 		sum += *record.Value
 		count++
 	}
