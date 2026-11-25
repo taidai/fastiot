@@ -38,6 +38,7 @@ type Handler struct {
 	ready              *atomic.Bool
 	commandMu          sync.Mutex
 	accessMu           sync.Mutex
+	accountMu          sync.Mutex
 	virtualInputMu     sync.Mutex
 	calculationRuntime *calculation.Runtime
 	inputEpoch         string
@@ -233,48 +234,46 @@ func canAction(identity Identity, action string) bool {
 }
 
 func (h *Handler) authorizeRoute(w http.ResponseWriter, r *http.Request, identity Identity) bool {
+	status, reason := h.routeAuthorization(r, identity)
+	if status != http.StatusOK {
+		writeError(w, status, reason)
+		return false
+	}
+	return true
+}
+
+// routeAuthorization is shared by request enforcement and read-only explanation.
+// It never dispatches a handler or executes the requested operation.
+func (h *Handler) routeAuthorization(r *http.Request, identity Identity) (int, string) {
 	route, ok := authz.Required(r)
 	if !ok {
-		writeError(w, http.StatusForbidden, authz.ReasonRouteNotDeclared)
-		return false
+		return http.StatusForbidden, authz.ReasonRouteNotDeclared
 	}
 	if !h.packageInstalled(route.Package) {
-		writeError(w, http.StatusConflict, ReasonPackageNotInstalled)
-		return false
+		return http.StatusConflict, ReasonPackageNotInstalled
 	}
-	allowed := route.Allowed(identity.Policy.Admin, func(action string) bool {
-		return canAction(identity, action)
-	})
-	if !allowed {
-		writeError(w, http.StatusForbidden, route.Reason)
-		return false
+	if !route.Allowed(identity.Policy.Admin, func(action string) bool { return canAction(identity, action) }) {
+		return http.StatusForbidden, route.Reason
 	}
 	// Activation changes the whole runtime, not only the caller's visible Site.
 	if r.Method != http.MethodGet && strings.HasPrefix(strings.Trim(r.URL.Path, "/"), "industry/packages") {
 		root, err := client.GetRootNode(h.nc)
 		if err != nil {
-			writeError(w, http.StatusServiceUnavailable, "project_context_unavailable")
-			return false
+			return http.StatusServiceUnavailable, "project_context_unavailable"
 		}
 		if !h.allows(identity, root.ID) {
-			writeError(w, http.StatusForbidden, "industry_scope_required")
-			return false
+			return http.StatusForbidden, "industry_scope_required"
 		}
 	}
 	if route.UnknownTarget != nil && !identity.Policy.Admin {
-		writeError(w, route.UnknownTarget.Status, route.UnknownTarget.Reason)
-		return false
+		return route.UnknownTarget.Status, route.UnknownTarget.Reason
 	}
 	for _, target := range route.Targets {
-		if target.Alarm {
-			continue
-		}
-		if !h.allows(identity, target.ID) {
-			writeError(w, target.Status, target.Reason)
-			return false
+		if !target.Alarm && !h.allows(identity, target.ID) {
+			return target.Status, target.Reason
 		}
 	}
-	return true
+	return http.StatusOK, "allowed"
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -646,6 +645,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.createUser(w, r, identity)
 	case path == "users" && r.Method == http.MethodGet:
 		h.listUsers(w, identity)
+	case len(parts) == 3 && parts[0] == "users" && parts[2] == "authorization" && r.Method == http.MethodGet:
+		h.explainUserAuthorization(w, r, identity, parts[1])
 	case len(parts) == 2 && parts[0] == "users" && r.Method == http.MethodPut:
 		h.updateUserPolicy(w, r, identity, parts[1])
 	case len(parts) == 3 && parts[0] == "users" && parts[2] == "password" && r.Method == http.MethodPost:
@@ -758,7 +759,9 @@ func (h *Handler) identityForUser(userID string) (Identity, bool) {
 	if !policy.Admin && policy.Role != "implementer" && policy.Role != "operator" && policy.Role != "viewer" {
 		return Identity{}, false
 	}
-	if !policy.Admin {
+	// Admin bypasses action limits, not an explicit object-scope declaration.
+	// Legacy bootstrap admins without declared roots still use their real anchors.
+	if !policy.Admin || len(policy.RootNodeIDs) > 0 {
 		allowed := make(map[string]bool, len(policy.RootNodeIDs))
 		for _, root := range policy.RootNodeIDs {
 			allowed[root] = true
@@ -1196,6 +1199,8 @@ func (h *Handler) testRule(w http.ResponseWriter, r *http.Request, identity Iden
 }
 
 func (h *Handler) createUser(w http.ResponseWriter, r *http.Request, identity Identity) {
+	h.accountMu.Lock()
+	defer h.accountMu.Unlock()
 	var input struct {
 		Parent   string   `json:"parent"`
 		Email    string   `json:"email"`
@@ -1210,6 +1215,14 @@ func (h *Handler) createUser(w http.ResponseWriter, r *http.Request, identity Id
 		(input.Role != "admin" && input.Role != "implementer" && input.Role != "operator" && input.Role != "viewer") ||
 		!validActions(input.Actions) {
 		writeError(w, http.StatusBadRequest, "invalid_user")
+		return
+	}
+	if !h.validAccountParent(identity, input.Parent) {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	if !canGrantPolicy(identity, input.Role, input.Actions) {
+		writeError(w, http.StatusForbidden, "grant_not_allowed")
 		return
 	}
 	users, err := client.GetNodesType[client.User](h.nc, "all", "all")
@@ -1257,9 +1270,10 @@ func validActions(actions []string) bool {
 }
 
 type userDTO struct {
-	ID     string       `json:"id"`
-	Email  string       `json:"email"`
-	Policy AccessPolicy `json:"policy"`
+	ID      string       `json:"id"`
+	Email   string       `json:"email"`
+	Policy  AccessPolicy `json:"policy"`
+	Actions []string     `json:"actions"`
 }
 
 func (h *Handler) listUsers(w http.ResponseWriter, identity Identity) {
@@ -1269,21 +1283,37 @@ func (h *Handler) listUsers(w http.ResponseWriter, identity Identity) {
 		return
 	}
 	out := make([]userDTO, 0, len(users))
+	seen := map[string]bool{}
 	for _, node := range users {
+		if seen[node.ID] {
+			continue
+		}
+		seen[node.ID] = true
+		edges, err := client.GetNodes(h.nc, "all", node.ID, data.NodeTypeUser, false)
+		if err != nil || !h.accountInScope(identity, edges) {
+			continue
+		}
 		email, _ := node.Points.Text(data.PointTypeEmail, "")
 		var policy AccessPolicy
 		if point, ok := node.Points.Find("easyemsAccess", ""); ok {
 			_ = json.Unmarshal([]byte(point.Txt()), &policy)
 		}
-		out = append(out, userDTO{ID: node.ID, Email: email, Policy: policy})
+		actions := []string{}
+		if subject, active := h.identityForUser(node.ID); active {
+			actions = subject.Actions
+			policy.RootNodeIDs = subject.Anchors
+		}
+		out = append(out, userDTO{ID: node.ID, Email: email, Policy: policy, Actions: actions})
 	}
 	writeJSON(w, map[string]any{"users": out, "actions": allActions})
 }
 
 func (h *Handler) updateUserPolicy(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
+	h.accountMu.Lock()
+	defer h.accountMu.Unlock()
 	nodes, err := client.GetNodes(h.nc, "all", id, data.NodeTypeUser, false)
-	if err != nil || len(nodes) == 0 {
-		writeError(w, http.StatusNotFound, "user_not_found")
+	if err != nil || !h.accountInScope(identity, nodes) {
+		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
 	var policy AccessPolicy
@@ -1293,6 +1323,7 @@ func (h *Handler) updateUserPolicy(w http.ResponseWriter, r *http.Request, ident
 	var input struct {
 		Role    string   `json:"role"`
 		Actions []string `json:"actions"`
+		Parent  string   `json:"parent"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
@@ -1302,9 +1333,40 @@ func (h *Handler) updateUserPolicy(w http.ResponseWriter, r *http.Request, ident
 		writeError(w, http.StatusBadRequest, "invalid_user")
 		return
 	}
-	if id == identity.UserID && input.Role != "admin" {
+	if !canGrantPolicy(identity, input.Role, input.Actions) {
+		writeError(w, http.StatusForbidden, "grant_not_allowed")
+		return
+	}
+	if id == identity.UserID && (input.Role != "admin" || (input.Parent != "" && input.Parent != nodes[0].Parent)) {
 		writeError(w, http.StatusConflict, "cannot_demote_self")
 		return
+	}
+	if input.Parent != "" {
+		if !h.validAccountParent(identity, input.Parent) {
+			writeError(w, http.StatusForbidden, "forbidden")
+			return
+		}
+		if len(nodes) != 1 {
+			writeError(w, http.StatusConflict, "multiple_account_scopes")
+			return
+		}
+		if input.Parent != nodes[0].Parent {
+			// Moving an edge and saving policy are separate store operations.
+			// Revoke first: any intermediate/failure state must grant no access,
+			// including when an administrator is being demoted and moved.
+			blocked, _ := json.Marshal(AccessPolicy{Role: "viewer", RootNodeIDs: []string{}})
+			deny := data.NewPointString("easyemsAccess", "", string(blocked))
+			deny.Origin = identity.UserID
+			if err := client.SendNodePoint(h.nc, id, deny, true); err != nil {
+				writeError(w, http.StatusBadRequest, "save_failed")
+				return
+			}
+			if err := client.MoveNode(h.nc, id, nodes[0].Parent, input.Parent, identity.UserID); err != nil {
+				writeError(w, http.StatusBadRequest, "scope_move_failed")
+				return
+			}
+		}
+		policy.RootNodeIDs = []string{input.Parent}
 	}
 	policy.Admin = input.Role == "admin"
 	policy.Role = input.Role
@@ -1323,6 +1385,8 @@ func (h *Handler) updateUserPolicy(w http.ResponseWriter, r *http.Request, ident
 // account. The password is written to the user node only and never enters the
 // audit log or any export; existing sessions of the target account are revoked.
 func (h *Handler) resetUserPassword(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
+	h.accountMu.Lock()
+	defer h.accountMu.Unlock()
 	var input struct {
 		Password string `json:"password"`
 	}
@@ -1335,8 +1399,16 @@ func (h *Handler) resetUserPassword(w http.ResponseWriter, r *http.Request, iden
 		return
 	}
 	existing, err := client.GetNodes(h.nc, "all", id, data.NodeTypeUser, false)
-	if err != nil || len(existing) == 0 {
-		writeError(w, http.StatusNotFound, "user_not_found")
+	if err != nil || !h.accountInScope(identity, existing) {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	var policy AccessPolicy
+	if p, ok := existing[0].Points.Find("easyemsAccess", ""); ok {
+		_ = json.Unmarshal([]byte(p.Txt()), &policy)
+	}
+	if !canGrantPolicy(identity, policy.Role, policy.Actions) {
+		writeError(w, http.StatusForbidden, "grant_not_allowed")
 		return
 	}
 	point := data.NewPointString(data.PointTypePass, "", input.Password)

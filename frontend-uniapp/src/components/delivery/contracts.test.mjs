@@ -2,6 +2,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import {
   actionText,
+  authorizationText,
   canAction,
   deliveryError,
   resolveActions,
@@ -10,6 +11,13 @@ import {
 } from "./contracts.ts"
 
 const policy = (role, actions = []) => ({ admin: role === "admin", role, actions })
+
+test("authorization cells fail closed without a server result and explain scope denial", () => {
+  assert.equal(authorizationText(undefined), "未检查")
+  assert.equal(authorizationText({ allowed: true, reason: "allowed" }), "授权允许")
+  assert.equal(authorizationText({ allowed: false, reason: "forbidden" }), "拒绝 · 对象范围未授权")
+  assert.equal(authorizationText({ allowed: false, reason: "admin_required" }), "拒绝 · 动作未授权")
+})
 
 test("resolveActions follows backend role defaults", () => {
   assert.ok(resolveActions(policy("admin")).includes("account_manage"))
