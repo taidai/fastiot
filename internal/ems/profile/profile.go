@@ -54,16 +54,42 @@ func ValidRole(role string) bool {
 // PointSpec is one point proposed by a vendor profile. It uses the same
 // function/address/format vocabulary as the Modbus point-table CSV.
 type PointSpec struct {
-	Name     string           `json:"name"`
-	Function channel.Function `json:"function"`
-	Address  uint16           `json:"address"`
-	Format   string           `json:"format"`
-	Scale    float64          `json:"scale"`
-	Offset   float64          `json:"offset"`
-	Unit     string           `json:"unit"`
-	ReadOnly bool             `json:"read_only"`
-	Role     string           `json:"role,omitempty"`
-	Note     string           `json:"note,omitempty"`
+	Name     string            `json:"name"`
+	Function channel.Function  `json:"function"`
+	Address  uint16            `json:"address"`
+	Format   string            `json:"format"`
+	Scale    float64           `json:"scale"`
+	Offset   float64           `json:"offset"`
+	Unit     string            `json:"unit"`
+	ReadOnly bool              `json:"read_only"`
+	Role     string            `json:"role,omitempty"`
+	Note     string            `json:"note,omitempty"`
+	Required *bool             `json:"required,omitempty"`
+	Enum     map[string]string `json:"enum,omitempty"`
+}
+
+// Omitted direction is read-only; a Profile must explicitly opt into writes.
+func (p *PointSpec) UnmarshalJSON(raw []byte) error {
+	type point PointSpec
+	decoded := point{ReadOnly: true}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return err
+	}
+	*p = PointSpec(decoded)
+	return nil
+}
+
+// RequiredPoint preserves legacy OPTIONAL notes; explicit declarations win.
+func (p PointSpec) RequiredPoint() bool {
+	if p.Required != nil {
+		return *p.Required
+	}
+	for _, marker := range strings.Fields(p.Note) {
+		if marker == "OPTIONAL" {
+			return false
+		}
+	}
+	return true
 }
 
 // CommandParameter is one operator-supplied value of a named command.

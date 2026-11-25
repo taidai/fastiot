@@ -1,8 +1,12 @@
 package appapi
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -67,16 +71,21 @@ type profileApplyResult struct {
 }
 
 type profileApplyRequest struct {
-	ProfileID string `json:"profile_id"`
-	Servers   []int  `json:"servers"`
-	DryRun    bool   `json:"dry_run"`
+	ProfileID      string `json:"profile_id"`
+	Servers        []int  `json:"servers"`
+	DryRun         bool   `json:"dry_run"`
+	BusinessNodeID string `json:"business_node_id,omitempty"`
+	CreatePoints   bool   `json:"create_points,omitempty"`
+	PreviewVersion string `json:"preview_version,omitempty"`
 }
 
 type profileApplyResponse struct {
-	ProfileID string               `json:"profile_id"`
-	DryRun    bool                 `json:"dry_run"`
-	Results   []profileApplyResult `json:"results"`
-	Applied   int                  `json:"applied"`
+	ProfileID      string               `json:"profile_id"`
+	DryRun         bool                 `json:"dry_run"`
+	Results        []profileApplyResult `json:"results"`
+	Applied        int                  `json:"applied"`
+	PreviewVersion string               `json:"preview_version,omitempty"`
+	CreatePoints   []ModbusIOInput      `json:"create_points,omitempty"`
 }
 
 func normalizePointName(name string) string {
@@ -209,6 +218,9 @@ func pointDifferences(spec profile.PointSpec, point unitModelPointView) []profil
 			Point: spec.Name, Field: field, Profile: want, Existing: got,
 		})
 	}
+	if point.Address != int(spec.Address) {
+		add("地址", strconv.Itoa(int(spec.Address)), strconv.Itoa(point.Address))
+	}
 	wantType := profile.IOTypeFor(spec.Function)
 	if point.IOType != "" && point.IOType != wantType {
 		add("类型", typeName(wantType), typeName(point.IOType))
@@ -285,6 +297,8 @@ func formatNumber(value float64) string {
 
 // applyProfilesHandler 处理 POST /api/modbus/{channel}/units/apply。
 func (h *Handler) applyProfilesHandler(w http.ResponseWriter, r *http.Request, identity Identity, channelID string) {
+	h.accessMu.Lock()
+	defer h.accessMu.Unlock()
 	channel, ok := h.routeNode(w, channelID)
 	if !ok {
 		return
@@ -308,6 +322,10 @@ func (h *Handler) applyProfilesHandler(w http.ResponseWriter, r *http.Request, i
 	}
 	if len(input.Servers) == 0 {
 		writeError(w, http.StatusBadRequest, "servers_required")
+		return
+	}
+	if input.CreatePoints {
+		h.applySingleDeviceProfile(w, identity, channel, prof, input)
 		return
 	}
 	points := h.unitPoints(channel.ID)
@@ -335,4 +353,99 @@ func (h *Handler) applyProfilesHandler(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 	writeJSON(w, response)
+}
+
+// Single-device onboarding reuses the Profile point factory; preview never creates
+// acquisition nodes. The reviewed version fences both point and model edits.
+func (h *Handler) applySingleDeviceProfile(w http.ResponseWriter, identity Identity, channel data.NodeEdge, prof profile.Profile, input profileApplyRequest) {
+	if len(input.Servers) != 1 || input.Servers[0] < 1 || input.Servers[0] > 247 || input.BusinessNodeID == "" {
+		writeError(w, http.StatusBadRequest, "single_device_required")
+		return
+	}
+	server := input.Servers[0]
+	if !h.allows(identity, input.BusinessNodeID) {
+		writeError(w, http.StatusForbidden, "out_of_scope")
+		return
+	}
+	node, ok := h.routeNode(w, input.BusinessNodeID)
+	if !ok {
+		return
+	}
+	if node.Type != data.NodeTypeDevice || node.Parent == "root" {
+		writeError(w, http.StatusBadRequest, "business_device_required")
+		return
+	}
+	existing, configured := unitModelFor(channel, server)
+	if configured && existing.BusinessNodeID != input.BusinessNodeID {
+		writeError(w, http.StatusConflict, "station_already_bound")
+		return
+	}
+	inventory, err := h.batchInventory(identity)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "access_inventory_unavailable")
+		return
+	}
+	for _, device := range inventory.Devices {
+		if device.ID == node.ID && device.Bound && existing.BusinessNodeID != node.ID {
+			writeError(w, http.StatusConflict, "device_already_bound")
+			return
+		}
+	}
+	points := h.unitPoints(channel.ID)
+	result := applyProfile(server, prof, points, existing)
+	version, _ := h.ems.Profiles.Fingerprint(prof.ID)
+	sort.Slice(points, func(i, j int) bool { return points[i].ID < points[j].ID })
+	stamp := accessHash(struct {
+		Channel                string
+		Server                 int
+		Device, ProfileVersion string
+		Model                  unitModelConfig
+		Points                 []unitModelPointView
+	}{channel.ID, server, node.ID, version, existing, points})
+	response := profileApplyResponse{ProfileID: prof.ID, DryRun: input.DryRun, Results: []profileApplyResult{result}, PreviewVersion: stamp}
+	missing := map[string]bool{}
+	for _, name := range result.Missing {
+		missing[name] = true
+	}
+	for _, point := range profilePointInputs(channel.ID, server, prof) {
+		if missing[point.Description] {
+			response.CreatePoints = append(response.CreatePoints, point)
+		}
+	}
+	if input.DryRun {
+		writeJSON(w, response)
+		return
+	}
+	if input.PreviewVersion != stamp {
+		writeError(w, http.StatusConflict, "profile_preview_changed")
+		return
+	}
+	if result.Mismatched > 0 || result.Scaled > 0 {
+		writeError(w, http.StatusConflict, "profile_points_differ")
+		return
+	}
+	before := map[string]bool{}
+	for _, point := range points {
+		before[point.ID] = true
+	}
+	if err := h.createModbusBatch(channel.ID, response.CreatePoints, identity.UserID); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "profile_points_create_failed")
+		return
+	}
+	points = h.unitPoints(channel.ID)
+	result = applyProfile(server, prof, points, existing)
+	result.Model.BusinessNodeID, result.Model.Name = node.ID, node.Desc()
+	if err := h.saveUnitModel(channel, server, result.Model, points); err != nil {
+		h.rollbackNewBatchPoints(channel.ID, before, identity.UserID)
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	response.Applied, response.Results = 1, []profileApplyResult{result}
+	writeJSON(w, response)
+}
+
+func accessHash(value any) string {
+	raw, _ := json.Marshal(value)
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
 }
