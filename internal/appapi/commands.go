@@ -110,24 +110,17 @@ func commandObject(deviceID string, names map[string]string) (string, bool) {
 
 // existingCommand reports the canonical outcome already recorded for a request
 // id, including the conflict when the id was used for another target.
-func (h *Handler) existingCommand(id, requestID string, target float64) (CommandResult, bool, error) {
+func (h *Handler) existingCommand(id, requestID, actor string, target float64) (CommandResult, bool, error) {
 	manager := h.commandManager()
 	if manager == nil {
 		return CommandResult{}, false, nil
 	}
-	outcome, ok := manager.Get(requestID)
-	if !ok {
-		return CommandResult{}, false, nil
+	outcome, found, err := manager.Existing(command.Request{ID: requestID, DeviceID: id, Point: id, Value: signal.Num(target), Actor: actor, Source: "manual"})
+	if err != nil {
+		return CommandResult{}, false, err
 	}
-	if outcome.DeviceID != id || len(outcome.Writes) != 1 || outcome.Writes[0].Value.Num != target {
-		return CommandResult{}, false, &commandConflictError{}
-	}
-	return projectCommandResult(outcome), true, nil
+	return projectCommandResult(outcome), found, nil
 }
-
-type commandConflictError struct{}
-
-func (*commandConflictError) Error() string { return "request ID was already used for another target" }
 
 // recordCommand records one manual point write as a canonical command outcome
 // and writes its lastCommand projection. This is the only way a manual write

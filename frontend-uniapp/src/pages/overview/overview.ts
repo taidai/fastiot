@@ -176,6 +176,7 @@ export function commandStateText(state: string) {
     accepted: "等待回读",
     executing: "执行中 · 等待回读",
     confirmed: "已回读",
+    rejected: "已拒绝",
     failed: "失败",
     unknown: "结果未知",
     superseded: "已被后续命令取代",
@@ -184,7 +185,7 @@ export function commandStateText(state: string) {
 }
 
 export function isTerminalCommandState(state: string) {
-  return ["confirmed", "failed", "unknown", "superseded", "submitted"].includes(state)
+  return ["confirmed", "rejected", "failed", "unknown", "superseded", "submitted"].includes(state)
 }
 
 export type UnitPoint = {

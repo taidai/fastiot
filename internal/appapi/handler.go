@@ -944,6 +944,22 @@ func (h *Handler) writeValue(w http.ResponseWriter, r *http.Request, identity Id
 	if !ok {
 		return
 	}
+	if node.Type == data.NodeTypeModbusIO {
+		buses, err := client.GetNodes(h.nc, "all", node.Parent, "", false)
+		if err != nil || len(buses) == 0 {
+			writeError(w, http.StatusServiceUnavailable, "command_mapping_unavailable")
+			return
+		}
+		server, _ := node.Points.ValueInt(data.PointTypeID, "")
+		if model, found := unitModelFor(buses[0], server); found && model.ProfileID != "" {
+			for _, mapped := range model.PointMap {
+				if mapped == id {
+					writeError(w, http.StatusConflict, "declared_profile_command_required")
+					return
+				}
+			}
+		}
+	}
 	if input.PointType == "" {
 		input.PointType = data.PointTypeValueSet
 	}
@@ -993,7 +1009,7 @@ func (h *Handler) writeValue(w http.ResponseWriter, r *http.Request, identity Id
 	if verdict.Decision == safety.DecisionClamped {
 		input.Value = verdict.Value
 	}
-	if existing, found, err := h.existingCommand(id, input.RequestID, input.Value); err != nil {
+	if existing, found, err := h.existingCommand(id, input.RequestID, identity.UserID, input.Value); err != nil {
 		writeError(w, http.StatusConflict, "request_id_conflict")
 		return
 	} else if found {
@@ -1015,6 +1031,10 @@ func (h *Handler) writeValue(w http.ResponseWriter, r *http.Request, identity Id
 	result := CommandResult{
 		RequestID: input.RequestID, Status: "accepted", Target: input.Value,
 		Actor: identity.UserID, CreatedAt: time.Now(),
+	}
+	if err := h.recordCommand(id, result, ""); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "command_state_unavailable")
+		return
 	}
 	point := data.NewPointFloat(input.PointType, "", input.Value)
 	point.Origin = identity.UserID
@@ -1047,6 +1067,22 @@ func (h *Handler) setManual(w http.ResponseWriter, r *http.Request, identity Ide
 	target := decision.Target{NodeID: id, PointType: data.PointTypeValueSet}
 	if err := decision.ValidateTarget(h.nc, node.Parent, target, true, &value); err != nil {
 		writeError(w, http.StatusForbidden, "operation_not_allowed")
+		return
+	}
+	if node.Type == data.NodeTypeModbusIO {
+		buses, err := client.GetNodes(h.nc, "all", node.Parent, "", false)
+		if err != nil || len(buses) == 0 {
+			writeError(w, http.StatusServiceUnavailable, "command_mapping_unavailable")
+			return
+		}
+		server, _ := node.Points.ValueInt(data.PointTypeID, "")
+		if model, found := unitModelFor(buses[0], server); found && !h.operationScope(identity, model) {
+			writeError(w, http.StatusForbidden, "out_of_scope")
+			return
+		}
+	}
+	if err := h.recordManualIntent(identity, r, id, *input.Manual); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "audit_unavailable")
 		return
 	}
 	point := data.NewPointFloat("easyemsManual", "", value)

@@ -96,6 +96,7 @@ type unitModelView struct {
 	Points        []unitModelPointView `json:"points"`
 	Commands      []unitModelCommand   `json:"commands"`
 	Missing       []string             `json:"missing,omitempty"`
+	ManualAllowed bool                 `json:"manual_allowed"`
 }
 
 type unitModelParameter struct {
@@ -149,7 +150,41 @@ func (h *Handler) unitModel(w http.ResponseWriter, r *http.Request, identity Ide
 	model, hasModel := unitModelFor(channel, server)
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, unitModelResponse(channel.ID, server, model, hasModel, points, h.ems.Profiles))
+		if hasModel && !h.operationScope(identity, model) {
+			writeError(w, http.StatusForbidden, "out_of_scope")
+			return
+		}
+		view := unitModelResponse(channel.ID, server, model, hasModel, points, h.ems.Profiles)
+		view.ManualAllowed = canAction(identity, ActionWriteValue)
+		for i := range view.Commands {
+			item := &view.Commands[i]
+			if !canAction(identity, ActionCommand) {
+				item.Available = false
+				item.Reason = "当前账号无命令权限"
+			}
+			if h.ems.Service == nil || !h.ems.Service.HasDevice(fmt.Sprintf("%s/%d", channel.ID, server)) || h.ems.Service.State.Health(fmt.Sprintf("%s/%d", channel.ID, server)) == "offline" {
+				item.Available = false
+				item.Reason = "设备离线或运行时未就绪"
+			}
+			if item.Available {
+				writes := []device.Write{}
+				if item.PointID != "" {
+					writes = append(writes, device.Write{Point: item.PointID, Value: signal.Num(item.Value)})
+				}
+				for _, parameter := range item.Parameters {
+					writes = append(writes, device.Write{Point: parameter.PointID, Value: signal.Num(parameter.Default)})
+				}
+				for _, write := range writes {
+					verdict := h.commandGuard(command.GuardRequest{DeviceID: fmt.Sprintf("%s/%d", channel.ID, server), Point: write.Point, Writes: []device.Write{write}}).Effective()
+					if verdict.Decision == "refused" {
+						item.Available = false
+						item.Reason = verdict.Reason
+						break
+					}
+				}
+			}
+		}
+		writeJSON(w, view)
 	case http.MethodPut:
 		var input unitModelConfig
 		if !decodeJSON(w, r, &input) {
@@ -476,7 +511,7 @@ func (h *Handler) commandProfile(deviceID string) (device.Profile, bool) {
 		kinds[id] = kind
 		seenPoints[id] = true
 		profilePoints = append(profilePoints, device.Point{
-			ID: id, Kind: kind, Unit: point.Unit, ReadOnly: point.ReadOnly,
+			ID: id, Kind: kind, Unit: point.Unit, ReadOnly: point.ReadOnly || spec.ReadOnly,
 		})
 	}
 	commands := make([]device.Command, 0, len(prof.CommandSpecs))
@@ -521,7 +556,7 @@ func (h *Handler) commandProfile(deviceID string) (device.Profile, bool) {
 			}
 			kind := kinds[id]
 			parameters = append(parameters, device.Parameter{
-				Name: parameter.Name, Label: parameter.Label, Point: id, Kind: kind,
+				Name: parameter.Name, Label: parameter.Label, Point: id, Kind: kind, Binary: parameter.Kind == "bool",
 				Unit: parameter.Unit, HasRange: parameter.HasRange,
 				Min: parameter.Min, Max: parameter.Max, Default: parameter.Default,
 			})
@@ -534,7 +569,7 @@ func (h *Handler) commandProfile(deviceID string) (device.Profile, bool) {
 			timeout = time.Duration(spec.TimeoutMS) * time.Millisecond
 		}
 		commands = append(commands, device.Command{
-			ID: spec.ID, Name: spec.Name, Timeout: timeout,
+			ID: spec.ID, Name: spec.Name, Timeout: timeout, ReadbackTolerance: spec.ReadbackTolerance,
 			Writes: writes, Readback: readback, Parameters: parameters,
 		})
 	}
@@ -542,6 +577,18 @@ func (h *Handler) commandProfile(deviceID string) (device.Profile, bool) {
 		return device.Profile{}, false
 	}
 	return device.Profile{ID: model.ProfileID, Vendor: prof.Vendor, Model: prof.Model, Points: profilePoints, Commands: commands}, true
+}
+
+func (h *Handler) operationScope(identity Identity, model unitModelConfig) bool {
+	if model.BusinessNodeID != "" && !h.allows(identity, model.BusinessNodeID) {
+		return false
+	}
+	for _, id := range model.PointMap {
+		if !h.allows(identity, id) {
+			return false
+		}
+	}
+	return true
 }
 
 func (h *Handler) unitCommands(w http.ResponseWriter, r *http.Request, identity Identity, channelID string, server int, requestID string) {
@@ -554,6 +601,10 @@ func (h *Handler) unitCommands(w http.ResponseWriter, r *http.Request, identity 
 		return
 	}
 	deviceID := fmt.Sprintf("%s/%d", channelID, server)
+	if model, found := unitModelFor(channel, server); found && !h.operationScope(identity, model) {
+		writeError(w, http.StatusForbidden, "out_of_scope")
+		return
+	}
 	switch {
 	case r.Method == http.MethodGet && requestID == "":
 		outcomes := h.ems.Service.Commands().List()
@@ -566,7 +617,11 @@ func (h *Handler) unitCommands(w http.ResponseWriter, r *http.Request, identity 
 		writeJSON(w, map[string]any{"commands": list})
 		return
 	case r.Method == http.MethodGet && requestID != "":
-		outcome, ok := h.ems.Service.Commands().Get(requestID)
+		outcome, ok, err := h.ems.Service.Commands().Find(requestID)
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "command_state_unavailable")
+			return
+		}
 		if !ok || outcome.DeviceID != deviceID {
 			writeError(w, http.StatusNotFound, "command_not_found")
 			return
@@ -584,6 +639,18 @@ func (h *Handler) unitCommands(w http.ResponseWriter, r *http.Request, identity 
 		}
 		if input.RequestID == "" || input.CommandID == "" {
 			writeError(w, http.StatusBadRequest, "request_id_and_command_required")
+			return
+		}
+		if len(input.RequestID) > 128 {
+			writeError(w, http.StatusBadRequest, "invalid_request_id")
+			return
+		}
+		request := command.Request{ID: input.RequestID, DeviceID: deviceID, CommandID: input.CommandID, Actor: identity.UserID, Parameters: input.Parameters}
+		if existing, found, err := h.ems.Service.Commands().Existing(request); err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		} else if found {
+			writeJSON(w, commandOutcome(existing))
 			return
 		}
 		model, ok := unitModelFor(channel, server)
@@ -608,10 +675,7 @@ func (h *Handler) unitCommands(w http.ResponseWriter, r *http.Request, identity 
 			writeError(w, http.StatusConflict, "device_offline")
 			return
 		}
-		outcome, err := h.ems.Service.Commands().Submit(time.Now(), command.Request{
-			ID: input.RequestID, DeviceID: deviceID, CommandID: input.CommandID, Actor: identity.UserID,
-			Parameters: input.Parameters,
-		})
+		outcome, err := h.ems.Service.Commands().Submit(time.Now(), request)
 		if err != nil {
 			writeError(w, http.StatusConflict, err.Error())
 			return
@@ -625,10 +689,14 @@ func (h *Handler) unitCommands(w http.ResponseWriter, r *http.Request, identity 
 }
 
 func commandOutcome(outcome command.Outcome) contract.CommandOutcome {
+	observed := make([]contract.CommandObservation, 0, len(outcome.Observed))
+	for _, sample := range outcome.Observed {
+		observed = append(observed, contract.CommandObservation{Point: sample.Point, Value: sample.Value.String(), At: sample.At})
+	}
 	return contract.CommandOutcome{
 		RequestID: outcome.RequestID, DeviceID: outcome.DeviceID, CommandID: outcome.CommandID,
 		Actor: outcome.Actor, State: string(outcome.State), Reason: outcome.Reason,
-		StartedAt: outcome.StartedAt, UpdatedAt: outcome.UpdatedAt,
+		StartedAt: outcome.StartedAt, UpdatedAt: outcome.UpdatedAt, Deadline: outcome.Deadline, Observed: observed,
 	}
 }
 

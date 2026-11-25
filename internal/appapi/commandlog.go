@@ -3,136 +3,138 @@ package appapi
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 
 	"fastiot/internal/ems/command"
+	"fastiot/internal/ems/device"
 )
 
 const (
 	commandLogFile = "commands.jsonl"
-	commandLogKeep = 500
+	commandLogKeep = 500 // display preload only, never a deduplication retention limit
 )
 
-// commandLogRecord is the persisted form of a command outcome: the audit-facing
-// fields only, never write payloads beyond state and reason.
 type commandLogRecord struct {
-	RequestID   string    `json:"request_id"`
-	DeviceID    string    `json:"device_id"`
-	CommandID   string    `json:"command_id,omitempty"`
-	Actor       string    `json:"actor,omitempty"`
-	State       string    `json:"state"`
-	Reason      string    `json:"reason,omitempty"`
-	StartedAt   time.Time `json:"started_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	DispatchID  string    `json:"dispatch_id,omitempty"`
-	Source      string    `json:"source,omitempty"`
-	Stage       string    `json:"stage,omitempty"`
-	FallbackOf  string    `json:"fallback_of,omitempty"`
-	Fingerprint string    `json:"fingerprint,omitempty"`
-	External    bool      `json:"external,omitempty"`
+	RequestID   string             `json:"request_id"`
+	DeviceID    string             `json:"device_id"`
+	CommandID   string             `json:"command_id,omitempty"`
+	Actor       string             `json:"actor,omitempty"`
+	State       string             `json:"state"`
+	Reason      string             `json:"reason,omitempty"`
+	StartedAt   time.Time          `json:"started_at"`
+	UpdatedAt   time.Time          `json:"updated_at"`
+	DispatchID  string             `json:"dispatch_id,omitempty"`
+	Source      string             `json:"source,omitempty"`
+	Stage       string             `json:"stage,omitempty"`
+	FallbackOf  string             `json:"fallback_of,omitempty"`
+	Fingerprint string             `json:"fingerprint,omitempty"`
+	External    bool               `json:"external,omitempty"`
+	Deadline    time.Time          `json:"deadline,omitempty"`
+	Observed    []command.Observed `json:"observed,omitempty"`
+	Writes      []device.Write     `json:"writes,omitempty"`
+	Readback    []device.Readback  `json:"readback,omitempty"`
 }
 
-// WireCommandHistory replays persisted command outcomes into the manager and
-// hooks new state changes back to <dataDir>/commands.jsonl. The log keeps the
-// newest commandLogKeep requests (last state per request id wins) so command
-// history survives restarts without growing without bound.
+func (r commandLogRecord) outcome() command.Outcome {
+	o := command.Outcome{RequestID: r.RequestID, DeviceID: r.DeviceID, CommandID: r.CommandID, Actor: r.Actor, State: command.State(r.State), Reason: r.Reason, StartedAt: r.StartedAt, UpdatedAt: r.UpdatedAt, DispatchID: r.DispatchID, Source: r.Source, Stage: r.Stage, FallbackOf: r.FallbackOf, Fingerprint: r.Fingerprint, External: r.External, Deadline: r.Deadline, Observed: r.Observed, Writes: r.Writes, Readback: r.Readback, Restored: true}
+	if o.State == command.Accepted || o.State == command.Executing {
+		o.State = command.Unknown
+		o.Reason = "进程重启，结果未知"
+	}
+	return o
+}
+
+// WireCommandHistory uses the same append-only journal for history and durable
+// idempotency. The manager serializes lookup, fsynced intent, and dispatch with
+// its own lock. A missing/corrupt/unwritable journal fails closed, never retries I/O.
 func WireCommandHistory(dataDir string, manager *command.Manager) {
 	if dataDir == "" || manager == nil {
 		return
 	}
 	path := filepath.Join(dataDir, commandLogFile)
-	records, order := readCommandLog(path)
+	initErr := os.MkdirAll(dataDir, 0700)
+	if initErr == nil {
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+		initErr = err
+		if err == nil {
+			initErr = file.Sync()
+			file.Close()
+		}
+	}
+	records := map[string]commandLogRecord{}
+	order := []string{}
+	if initErr == nil {
+		initErr = scanCommandLog(path, func(record commandLogRecord) {
+			if _, exists := records[record.RequestID]; !exists {
+				order = append(order, record.RequestID)
+			}
+			records[record.RequestID] = record
+		})
+	}
 	if len(order) > commandLogKeep {
 		order = order[len(order)-commandLogKeep:]
 	}
 	outcomes := make([]command.Outcome, 0, len(order))
 	for _, id := range order {
-		record := records[id]
-		outcomes = append(outcomes, command.Outcome{
-			RequestID: record.RequestID, DeviceID: record.DeviceID, CommandID: record.CommandID,
-			Actor: record.Actor, State: command.State(record.State), Reason: record.Reason,
-			StartedAt: record.StartedAt, UpdatedAt: record.UpdatedAt,
-			DispatchID: record.DispatchID, Source: record.Source, Stage: record.Stage,
-			FallbackOf: record.FallbackOf, Fingerprint: record.Fingerprint, External: record.External,
-		})
+		outcomes = append(outcomes, records[id].outcome())
 	}
 	manager.Preload(outcomes)
-	rewriteCommandLog(path, records, order)
-	manager.Persist = func(outcome command.Outcome) {
-		// 自动功率调度每秒一次，明细已进入调度追溯；这里只持久化人工/命名
-		// 命令，避免命令历史被自动写入淹没。
-		if outcome.Actor == "" && outcome.CommandID == "" && outcome.Source != "manual" {
-			return
+	manager.Lookup = func(id string) (command.Outcome, bool, error) {
+		if initErr != nil {
+			return command.Outcome{}, false, initErr
 		}
-		appendCommandLog(path, commandLogRecord{
-			RequestID: outcome.RequestID, DeviceID: outcome.DeviceID, CommandID: outcome.CommandID,
-			Actor: outcome.Actor, State: string(outcome.State), Reason: outcome.Reason,
-			StartedAt: outcome.StartedAt, UpdatedAt: outcome.UpdatedAt,
-			DispatchID: outcome.DispatchID, Source: outcome.Source, Stage: outcome.Stage,
-			FallbackOf: outcome.FallbackOf, Fingerprint: outcome.Fingerprint, External: outcome.External,
+		var found commandLogRecord
+		// ponytail: linear disk lookup for cold IDs; index this same journal if
+		// profiling shows large histories need it. No TTL can reauthorize old IDs.
+		err := scanCommandLog(path, func(record commandLogRecord) {
+			if record.RequestID == id {
+				found = record
+			}
 		})
+		return found.outcome(), found.RequestID != "", err
+	}
+	manager.Persist = func(o command.Outcome) error {
+		if initErr != nil {
+			return initErr
+		}
+		record := commandLogRecord{RequestID: o.RequestID, DeviceID: o.DeviceID, CommandID: o.CommandID, Actor: o.Actor, State: string(o.State), Reason: o.Reason, StartedAt: o.StartedAt, UpdatedAt: o.UpdatedAt, DispatchID: o.DispatchID, Source: o.Source, Stage: o.Stage, FallbackOf: o.FallbackOf, Fingerprint: o.Fingerprint, External: o.External, Deadline: o.Deadline, Observed: o.Observed, Writes: o.Writes, Readback: o.Readback}
+		encoded, err := json.Marshal(record)
+		if err != nil {
+			return err
+		}
+		// Do not recreate a lost journal after startup: that would forget identities.
+		file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		if _, err = file.Write(append(encoded, '\n')); err != nil {
+			return err
+		}
+		return file.Sync()
 	}
 }
 
-func readCommandLog(path string) (map[string]commandLogRecord, []string) {
-	records := map[string]commandLogRecord{}
-	var order []string
+func scanCommandLog(path string, visit func(commandLogRecord)) error {
 	file, err := os.Open(path)
 	if err != nil {
-		return records, order
+		return err
 	}
 	defer file.Close()
 	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		var record commandLogRecord
-		if json.Unmarshal(scanner.Bytes(), &record) != nil || record.RequestID == "" {
-			continue
+		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+			return fmt.Errorf("invalid command journal: %w", err)
 		}
-		if _, exists := records[record.RequestID]; !exists {
-			order = append(order, record.RequestID)
+		if record.RequestID == "" {
+			return fmt.Errorf("command journal record has no identity")
 		}
-		records[record.RequestID] = record
+		visit(record)
 	}
-	return records, order
-}
-
-func rewriteCommandLog(path string, records map[string]commandLogRecord, order []string) {
-	if len(order) == 0 {
-		return
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return
-	}
-	file, err := os.OpenFile(path+".tmp", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
-	if err != nil {
-		return
-	}
-	for _, id := range order {
-		encoded, err := json.Marshal(records[id])
-		if err != nil {
-			continue
-		}
-		_, _ = file.Write(append(encoded, '\n'))
-	}
-	_ = file.Close()
-	_ = os.Rename(path+".tmp", path)
-}
-
-func appendCommandLog(path string, record commandLogRecord) {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return
-	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
-	if err != nil {
-		return
-	}
-	defer file.Close()
-	encoded, err := json.Marshal(record)
-	if err != nil {
-		return
-	}
-	_, _ = file.Write(append(encoded, '\n'))
+	return scanner.Err()
 }

@@ -110,15 +110,16 @@ type CommandParameter struct {
 // Readback names the point that proves the action took effect when that is not
 // the written point itself (for example, a run contact after a start command).
 type CommandSpec struct {
-	ID            string             `json:"id"`
-	Name          string             `json:"name"`
-	Point         string             `json:"point,omitempty"`
-	Value         float64            `json:"value"`
-	Readback      string             `json:"readback,omitempty"`
-	ReadbackValue float64            `json:"readback_value,omitempty"`
-	TimeoutMS     int                `json:"timeout_ms,omitempty"`
-	Parameters    []CommandParameter `json:"parameters,omitempty"`
-	Note          string             `json:"note,omitempty"`
+	ID                string             `json:"id"`
+	Name              string             `json:"name"`
+	Point             string             `json:"point,omitempty"`
+	Value             float64            `json:"value"`
+	Readback          string             `json:"readback,omitempty"`
+	ReadbackValue     float64            `json:"readback_value,omitempty"`
+	TimeoutMS         int                `json:"timeout_ms,omitempty"`
+	ReadbackTolerance float64            `json:"readback_tolerance,omitempty"`
+	Parameters        []CommandParameter `json:"parameters,omitempty"`
+	Note              string             `json:"note,omitempty"`
 }
 
 // Profile is one vendor/model description. Points/Commands are counts kept for
