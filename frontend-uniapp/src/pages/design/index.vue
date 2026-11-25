@@ -61,10 +61,10 @@
         </template>
 
         <template v-else-if="current === 'tree'">
+          <p v-if="modelError" class="error" role="alert">{{ modelError }}</p><p v-if="modelNotice" class="notice" role="status">{{ modelNotice }}</p>
           <section v-if="newNodeParent" class="card glass step-card">
             <view class="panel-head"><h3>在「{{ nodeName(newNodeParent) }}」下新建</h3><span class="tag">类型受后端层级约束</span></view>
             <view class="create-line"><select v-model="newNodeType" :disabled="actionBusy !== ''"><option v-for="type in allowedTypes" :key="type" :value="type">{{ typeLabel(type) }}</option></select><input v-model="newNodeName" placeholder="对象名称" :disabled="actionBusy !== ''"><button class="primary" :disabled="!newNodeName.trim() || actionBusy !== ''" @click="createNode">{{ actionBusy === 'node' ? '创建中…' : '创建' }}</button><button class="ghost" @click="newNodeParent = ''">取消</button></view>
-            <p v-if="modelError" class="error" role="alert">{{ modelError }}</p><p v-if="modelNotice" class="notice" role="status">{{ modelNotice }}</p>
           </section>
           <template v-else>
             <view class="step-head"><b>第 2 步 · 搭台账</b><span>按区域、单元、设备把现场搭出来；设备可以先占位。</span></view>

@@ -32,9 +32,10 @@ func (h *Handler) updateNode(w http.ResponseWriter, r *http.Request, identity Id
 		return
 	}
 	var input struct {
-		Description string                     `json:"description"`
-		Disabled    *bool                      `json:"disabled"`
-		Members     *[]domainaccess.MemberRole `json:"members"`
+		Description    string                     `json:"description"`
+		Disabled       *bool                      `json:"disabled"`
+		Members        *[]domainaccess.MemberRole `json:"members"`
+		MembersVersion *int                       `json:"members_version"`
 	}
 	if !decodeJSON(w, r, &input) || strings.TrimSpace(input.Description) == "" {
 		writeError(w, http.StatusBadRequest, "invalid_node")
@@ -49,7 +50,18 @@ func (h *Handler) updateNode(w http.ResponseWriter, r *http.Request, identity Id
 		points = append(points, data.NewPointFloat(data.PointTypeDisabled, "", data.BoolToFloat(*input.Disabled)))
 	}
 	missing := []string{}
+	version, _ := node.Points.Value(domainaccess.MembersVersionPoint, "")
 	if input.Members != nil {
+		// Node mutations already hold virtualInputMu in ServeHTTP; read/check/save
+		// therefore shares the existing serialization boundary with other editors.
+		if input.MembersVersion == nil || *input.MembersVersion < 0 {
+			writeError(w, http.StatusBadRequest, "members_version_required")
+			return
+		}
+		if float64(*input.MembersVersion) != version {
+			writeError(w, http.StatusConflict, "members_version_conflict")
+			return
+		}
 		if node.Type != domainaccess.NodeUnit && node.Type != NodeTypeEnergyUnit {
 			writeError(w, http.StatusBadRequest, "members_require_unit")
 			return
@@ -90,7 +102,8 @@ func (h *Handler) updateNode(w http.ResponseWriter, r *http.Request, identity Id
 			writeError(w, http.StatusBadRequest, "invalid_members")
 			return
 		}
-		points = append(points, data.NewPointString(domainaccess.MembersPoint, "", string(encoded)))
+		version++
+		points = append(points, data.NewPointString(domainaccess.MembersPoint, "", string(encoded)), data.NewPointFloat(domainaccess.MembersVersionPoint, "", version))
 	}
 	for i := range points {
 		points[i].Origin = identity.UserID
@@ -99,7 +112,7 @@ func (h *Handler) updateNode(w http.ResponseWriter, r *http.Request, identity Id
 		writeError(w, http.StatusBadRequest, "save_failed")
 		return
 	}
-	writeJSON(w, map[string]any{"saved": true, "missing_required": missing})
+	writeJSON(w, map[string]any{"id": id, "saved": true, "members_version": int(version), "missing_required": missing})
 }
 
 func (h *Handler) moveNode(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
@@ -434,7 +447,7 @@ func structuralCopyPoints(node data.NodeEdge) data.Points {
 	points := data.Points{}
 	for _, point := range copyConfigPoints(node) {
 		switch point.Type {
-		case domainaccess.MembersPoint, PointTypePowerSetpoint, PointTypeProfileID, PointTypePointMap:
+		case domainaccess.MembersPoint, domainaccess.MembersVersionPoint, PointTypePowerSetpoint, PointTypeProfileID, PointTypePointMap:
 			continue
 		case PointTypeAssetCode, "businessId":
 			point = data.NewPointString(point.Type, point.Key, data.NewID())

@@ -952,7 +952,8 @@ func (h *Handler) applyProjectUpgrade(identity Identity, plan *upgradePlan, reso
 			points[i].Time = now
 			points[i].Origin = identity.UserID
 		}
-		if err := client.SendPoints(h.nc, client.SubjectNodePoints(action.LocalID), points, false); err != nil {
+		// The new baseline and success response must follow persisted configuration.
+		if err := client.SendPoints(h.nc, client.SubjectNodePoints(action.LocalID), points, true); err != nil {
 			_ = h.auditUpgrade(identity, result, "failed", "写入工程配置失败，现场可能处于部分升级状态")
 			return result, fmt.Errorf("upgrade_failed")
 		}

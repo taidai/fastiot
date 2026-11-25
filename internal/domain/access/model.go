@@ -17,8 +17,9 @@ const (
 	NodeEnergyUnit = "energyUnit"
 	NodeDevice     = "device"
 
-	MembersPoint      = "easyemsUnitMembers"
-	VerificationPoint = "easyemsAccessVerification"
+	MembersPoint        = "easyemsUnitMembers"
+	MembersVersionPoint = "easyemsUnitMembersVersion"
+	VerificationPoint   = "easyemsAccessVerification"
 )
 
 // MemberRole binds one stable business role to an existing Device or Point.
@@ -47,8 +48,11 @@ type SiteTemplate struct {
 }
 
 // CanPlace is the server-side hierarchy constraint for newly created business
-// nodes. Legacy group/variable creation keeps its existing behavior in appapi.
+// nodes and legacy group containers. Point creation keeps its existing behavior.
 func CanPlace(childType, parentType string, parentIsRoot bool) bool {
+	if childType == "group" {
+		childType = NodeArea // Legacy containers obey the same hierarchy.
+	}
 	if parentIsRoot {
 		parentType = NodeSiteRoot
 	}
