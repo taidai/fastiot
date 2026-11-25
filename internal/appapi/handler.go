@@ -25,6 +25,7 @@ import (
 	"fastiot/internal/decision"
 	"fastiot/internal/deepseek"
 	domainaccess "fastiot/internal/domain/access"
+	"fastiot/internal/ems/alarm"
 	"fastiot/internal/ems/command"
 	"fastiot/internal/ems/safety"
 	"fastiot/internal/emsapi"
@@ -59,12 +60,13 @@ type Handler struct {
 	forecastMu   sync.Mutex
 	forecastLast map[string]time.Time
 
-	acceptanceMu     sync.Mutex
-	latestAcceptance *acceptanceReport
-	audit            *audit.Store
-	dataDir          string
-	alarmEventsMu    sync.Mutex
-	alarmEventsError error
+	acceptanceMu          sync.Mutex
+	latestAcceptance      *acceptanceReport
+	audit                 *audit.Store
+	dataDir               string
+	alarmEventsMu         sync.Mutex
+	alarmEventsError      error
+	alarmCheckpointWrites int
 
 	sessionMu      sync.Mutex
 	sessions       map[string]sessionState
@@ -104,7 +106,9 @@ func (h *Handler) SetEMS(handler *emsapi.Handler) {
 	if handler != nil && handler.Service != nil {
 		handler.Service.Commands().SetProfiles(h.commandProfile)
 		handler.Service.Commands().Guard = h.commandGuard
+		h.restoreAlarmOccurrences(handler.Service.Alarms)
 		handler.Service.Alarms.OnChange = h.recordAlarmChange
+		handler.Service.Alarms.OnCheckpoint = func(value alarm.Alarm) { h.recordAlarmChange(value, "checkpoint") }
 		handler.AlarmEvidenceError = h.alarmEvidenceError
 	}
 }
