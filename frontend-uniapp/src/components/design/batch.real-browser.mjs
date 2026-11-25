@@ -46,6 +46,12 @@ try {
   assert.equal(await batch.getByText('预检阻断', { exact: true }).count(), 2, 'every conflicting station must be blocked before writes')
   const modelPath = `/modbus/${fixture.channel}/units/1/model`
   assert.equal((await api(modelPath)).points.length, 0)
+  await batch.locator('textarea').fill('x'.repeat(262145))
+  await batch.getByText('CSV 超过 256 KiB，请拆分后重新粘贴；本次不会导入', { exact: true }).waitFor()
+  await batch.locator('textarea').fill(header + row(fixture.device, 1).repeat(257))
+  await button('CSV 预检').click()
+  await batch.getByText('每批最多 256 台，请拆分 CSV', { exact: true }).waitFor()
+  assert.equal((await api(modelPath)).points.length, 0, 'oversized import must not write')
   await batch.locator('textarea').fill(header + row(fixture.device, 1) + row(fixture.second, 2) + row(fixture.third, 248))
   await button('CSV 预检').click()
   await batch.locator('.batch-diff').first().waitFor()

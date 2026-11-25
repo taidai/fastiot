@@ -11,7 +11,7 @@
       <label>起始站号<input v-model.number="startStation" type="number" min="1" max="247" :disabled="readOnly || busy !== ''" @input="invalidate"></label>
       <button class="ghost" :disabled="readOnly || !checked.size || !channelID || !profileID || busy !== ''" @click="makeDraft">生成批量草稿</button>
     </view>
-    <label class="csv-label">CSV 草稿（设备,型号,通道,站号）<textarea v-model="csv" :maxlength="262145" rows="6" :disabled="readOnly || busy !== ''" @input="invalidate"></textarea></label>
+    <label class="csv-label">CSV 草稿（设备,型号,通道,站号）<textarea v-model="csv" :maxlength="262145" rows="6" :disabled="readOnly || busy !== ''" @blur="syncCSV"></textarea></label>
     <p class="notice">每批最多 256 台、CSV 256 KiB、每字段 256 字节；超限会拒绝，不会截断后导入。</p>
     <p v-if="csvError" class="error" role="alert">{{ csvError }}</p>
     <view class="actions"><button class="ghost" :disabled="readOnly || !!csvError || !csv.trim() || busy !== ''" @click="preview">{{ busy === 'preview' ? '预检中…' : 'CSV 预检' }}</button><button class="primary" :disabled="readOnly || previewedCSV !== csv || !previewVersion || !rows.some(row => row.valid) || busy !== ''" @click="apply">{{ busy === 'apply' ? '套用中…' : '批量套用可导入项' }}</button></view>
@@ -66,6 +66,12 @@ watch([() => props.channels, () => props.profiles], () => {
   if (!channelID.value) channelID.value = props.channels[0]?.id || ""
   if (!profileID.value) profileID.value = usableProfiles.value[0]?.id || ""
 }, { immediate: true, deep: true })
+// uni-app throttles input events; invalidate on changed text, not delayed repeats.
+watch(csv, invalidate, { flush: "sync" })
+function syncCSV(event: { detail?: unknown }) {
+  const detail = event.detail
+  if (detail && typeof detail === "object" && "value" in detail && typeof detail.value === "string") csv.value = detail.value
+}
 function toggle(id: string) {
   const next = new Set(checked.value)
   if (next.has(id)) next.delete(id); else next.add(id)
@@ -85,11 +91,13 @@ function deviceName(id?: string) { return id ? devices.value.find(device => devi
 function statusText(row: BatchBindingRow) { return row.status === "mapped" ? "映射已保存，待验证" : row.status === "ready" ? "可导入" : row.status === "blocked" ? "预检阻断" : "套用失败" }
 async function run(dryRun: boolean) {
   if (csvError.value) { error.value = csvError.value; return }
+  const submittedCSV = csv.value
   busy.value = dryRun ? "preview" : "apply"
   error.value = ""
   notice.value = ""
   try {
-    const result = await request<BatchAccessResponse>("/access/batch/reviewed", "POST", { csv: csv.value, dry_run: dryRun, preview_version: dryRun ? undefined : previewVersion.value })
+    const result = await request<BatchAccessResponse>("/access/batch/reviewed", "POST", { csv: submittedCSV, dry_run: dryRun, preview_version: dryRun ? undefined : previewVersion.value })
+    if (dryRun && csv.value !== submittedCSV) { error.value = "CSV 草稿已改变，请重新预检"; return }
     rows.value = result.rows || []
     plans.value = result.plans || {}
     if (dryRun) { previewedCSV.value = csv.value; previewVersion.value = result.preview_version || "" }

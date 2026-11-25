@@ -507,8 +507,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.applyTemplate(w, r, identity, parts[1])
 	case path == "modbus" && r.Method == http.MethodPost:
 		h.createModbus(w, r, identity)
-	case (path == "access/batch" || path == "access/batch/reviewed") && r.Method == http.MethodPost:
-		h.batchAccess(w, r, identity, path == "access/batch/reviewed")
+	case path == "access/batch" && r.Method == http.MethodPost:
+		h.batchAccess(w, r, identity, false)
+	case path == "access/batch/reviewed" && r.Method == http.MethodPost:
+		h.batchAccess(w, r, identity, true)
 	case path == "modbus/test" && r.Method == http.MethodPost:
 		h.testModbus(w, r, identity)
 	case len(parts) == 3 && parts[0] == "modbus" && parts[2] == "line-test" && r.Method == http.MethodPost:
