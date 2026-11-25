@@ -116,16 +116,7 @@ func (f *upgradeFixture) sendPoints(t *testing.T, nodeID string, points ...data.
 
 func (f *upgradeFixture) publish(t *testing.T, note string) string {
 	t.Helper()
-	recorder := httptest.NewRecorder()
-	f.handler.publishHandler(recorder, f.admin, f.siteID, note, true)
-	if recorder.Code != 200 {
-		t.Fatalf("publish = %d %s", recorder.Code, recorder.Body.String())
-	}
-	var published versionSummary
-	if err := json.Unmarshal(recorder.Body.Bytes(), &published); err != nil {
-		t.Fatal(err)
-	}
-	return published.ID
+	return freezeRecoveryBaseline(t, f.handler, f.admin, f.siteID, note).ID
 }
 
 func (f *upgradeFixture) preview(t *testing.T, site, base string, pkg projectPackage) (int, upgradePreview, string) {

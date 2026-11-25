@@ -10,6 +10,7 @@ import type { Page } from "./navigation"
 
 type Gate = { key: string; title: string; status: string; detail: string; object?: string; next_step?: string }
 type PreflightReport = {
+  fingerprint?: string
   id: string
   generated_at: string
   operator?: string
@@ -19,7 +20,7 @@ type PreflightReport = {
 }
 type StepKey = "site" | "channels" | "points" | "model" | "rules" | "commission" | "preflight"
 type Tab = "gates" | "acceptance" | "versions" | "tools"
-type VersionSummary = { id: string; site_id: string; site_name: string; created_at: string; operator: string; note?: string; preflight_status?: string; nodes: number }
+type VersionSummary = { id: string; site_id: string; site_name: string; created_at: string; operator: string; note?: string; preflight_status?: string; nodes: number; deliverable?: boolean }
 type DemandWindow = { available: boolean; demand_kw: number; valid_bins: number; missing_bins?: string[] }
 type PlantDemand = { plant_id: string; plant_name: string; meter_point_id?: string; upper_limit_kw?: number; window: DemandWindow; reason?: string }
 type DemandResponse = { site: string; plants: PlantDemand[] }
@@ -243,6 +244,7 @@ export default function DeliveryWorkbench({ token, nodes, siteID, canConfigure, 
       const query = currentSite ? `?site=${encodeURIComponent(currentSite)}` : ""
       const report = await request<PreflightReport>(token, `/delivery/preflight${query}`, "POST")
       setLatest(report)
+      if (report.status !== "fail") { setPublishBlocked(false); setVersionMessage("") }
       await loadGates()
       setTab("gates")
     } catch (cause) {
@@ -292,15 +294,17 @@ export default function DeliveryWorkbench({ token, nodes, siteID, canConfigure, 
     setPackageTone("info")
     try {
       const site = nodes.find((node) => node.id === currentSite)
-      await downloadProjectPackage(token, currentSite, `${site ? nameOf(site) : "project"}.package.json`)
-      setPackageMessage("已导出当前站点项目包；包内不含地址、凭据、控制启动与运行状态")
+      const version = versions.find(item => item.deliverable)
+      if (!version) throw new Error("请先通过预检并发布可交付版本")
+      await downloadProjectPackage(token, currentSite, `${site ? nameOf(site) : "project"}.package.json`, version.id)
+      setPackageMessage(`已导出冻结版本 ${version.id}；包内不含地址、凭据、控制启动与运行状态`)
     } catch (cause) {
       setPackageTone("danger")
       setPackageMessage(cause instanceof Error ? cause.message : "导出失败")
     } finally {
       setPackageBusy(false)
     }
-  }, [token, currentSite, nodes])
+  }, [token, currentSite, nodes, versions])
 
   const importPackageFile = useCallback(async (file: File) => {
     setPackageBusy(true)
@@ -328,11 +332,11 @@ export default function DeliveryWorkbench({ token, nodes, siteID, canConfigure, 
     }
   }, [token, loadRecovery])
 
-  const publishProject = useCallback(async (confirm: boolean) => {
+  const publishProject = useCallback(async () => {
     if (!currentSite) return
     setVersionBusy(true)
     try {
-      const published = await request<VersionSummary>(token, "/projects/publish", "POST", { site: currentSite, note: publishNote.trim(), confirm })
+      const published = await request<VersionSummary>(token, "/projects/publish", "POST", { site: currentSite, note: publishNote.trim(), confirm: false, expected_fingerprint: gates?.fingerprint })
       setVersionMessage(`已冻结版本 ${published.id}（${published.nodes} 个节点）`)
       setPublishNote("")
       setPublishBlocked(false)
@@ -340,14 +344,15 @@ export default function DeliveryWorkbench({ token, nodes, siteID, canConfigure, 
     } catch (cause) {
       if (cause instanceof ApiError && cause.status === 409) {
         setPublishBlocked(true)
-        setVersionMessage("预检存在阻断项：确认后可冻结版本，但不会改变运行中的配置。")
+        setVersionMessage("工程已变更或预检存在阻断项；修复后重新预检，不能确认绕过。")
+        void loadGates()
         return
       }
       onError(cause instanceof Error ? cause.message : "冻结版本失败")
     } finally {
       setVersionBusy(false)
     }
-  }, [token, currentSite, publishNote, loadVersions, onError])
+  }, [token, currentSite, publishNote, loadVersions, onError, gates?.fingerprint, loadGates])
 
   const rollbackProject = useCallback(async (version: string) => {
     if (!currentSite) return
@@ -819,11 +824,11 @@ export default function DeliveryWorkbench({ token, nodes, siteID, canConfigure, 
               <label className="grid gap-1 text-xs text-ems-muted">发布说明（可选）
                 <input className="ems-input" aria-label="发布说明" value={publishNote} placeholder="例如 首次交付 / 更换 PCS 前" onChange={(event) => setPublishNote(event.target.value)} />
               </label>
-              <EmsButton busy={versionBusy} disabled={!currentSite} onClick={() => void publishProject(false)}>冻结版本</EmsButton>
+              <EmsButton busy={versionBusy} disabled={!currentSite} onClick={() => void publishProject()}>冻结版本</EmsButton>
             </div>
             {versionMessage && <InlineNotice tone={publishBlocked ? "warning" : "info"}>{versionMessage}</InlineNotice>}
             {publishBlocked && <div className="flex justify-end">
-              <EmsButton variant="danger" busy={versionBusy} onClick={() => void publishProject(true)}>预检未通过，仍要冻结版本</EmsButton>
+              <EmsButton variant="secondary" busy={versionBusy} onClick={() => void runPreflight()}>修复后重新预检</EmsButton>
             </div>}
             {versions.length === 0
               ? <p className="m-0 text-sm text-ems-muted">还没有版本。发布后会出现在这里，可回退到任意历史版本。</p>

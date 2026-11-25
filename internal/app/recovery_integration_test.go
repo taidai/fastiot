@@ -381,8 +381,16 @@ func TestOfflineRestoreKeepsHistoryAlarmsAndAudit(t *testing.T) {
 	var baseline struct {
 		ID string `json:"id"`
 	}
+	var inspected struct {
+		Fingerprint string `json:"fingerprint"`
+		Status      string `json:"status"`
+	}
+	mustCall(t, application, "GET", "/delivery/gates?site="+site.ID, token, nil, &inspected)
+	if inspected.Fingerprint == "" || inspected.Status == "fail" {
+		t.Fatalf("recovery preflight: %+v", inspected)
+	}
 	mustCall(t, application, "POST", "/projects/publish", token, map[string]any{
-		"site": site.ID, "note": "恢复前基线", "confirm": true,
+		"site": site.ID, "note": "恢复前基线", "expected_fingerprint": inspected.Fingerprint,
 	}, &baseline)
 	if baseline.ID == "" {
 		t.Fatal("publish returned no version")

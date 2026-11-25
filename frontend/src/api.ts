@@ -193,7 +193,10 @@ const errorTexts: Record<string, string> = {
   source_not_accepted: "源项目还没有发布版本，不能作为复用源",
   source_must_be_site: "只能从站点创建新项目",
   target_parent_unavailable: "当前账号无权在项目下新建站点",
-  preflight_failed: "预检存在阻断项，确认后才能冻结版本",
+  preflight_failed: "预检存在阻断项，请修复后重新预检，不能确认绕过",
+  fingerprint_required: "请先读取当前工程预检，再发布版本",
+  version_conflict: "工程已变更，请重新预检后发布",
+  version_not_deliverable: "此记录是非可交付快照，不能作为已发布包导出",
   preflight_unavailable: "预检暂不可用，请检查运行服务",
   version_save_failed: "版本保存失败，请稍后重试",
   version_not_found: "版本不存在或已删除",
@@ -275,8 +278,8 @@ export function recoveryStatus(token: string) {
   return request<RecoveryStatus>(token, "/recovery")
 }
 
-export async function downloadProjectPackage(token: string, site: string, filename = "project.package.json") {
-  const response = await fetch(`/api/projects/export?site=${encodeURIComponent(site)}`, { headers: { Authorization: `Bearer ${token}` } })
+export async function downloadProjectPackage(token: string, site: string, filename = "project.package.json", version = "") {
+  const response = await fetch(`/api/projects/export?site=${encodeURIComponent(site)}${version ? `&version=${encodeURIComponent(version)}` : ""}`, { headers: { Authorization: `Bearer ${token}` } })
   if (!response.ok) {
     const result = await response.json().catch(() => ({ error: "" }))
     throw new ApiError(errorMessage(result.error, response.status), response.status, result.error || "")

@@ -23,6 +23,24 @@ import (
 	"fastiot/internal/emsapi"
 )
 
+// Recovery tests need incomplete configuration baselines, not deliverable releases.
+// This is fixture setup through the existing internal snapshot contract, never an
+// HTTP publication bypass; the assertions still exercise the real restore API.
+func freezeRecoveryBaseline(t *testing.T, h *Handler, identity Identity, site, note string) versionSummary {
+	t.Helper()
+	version, err := h.snapshotSite(identity, site, note)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.saveVersion(version); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.loadVersion(site, version.ID); err != nil {
+		t.Fatalf("recovery baseline readback: %v", err)
+	}
+	return versionSummary{ID: version.ID, Nodes: len(version.Nodes)}
+}
+
 func TestProjectVersionPublishAndRollback(t *testing.T) {
 	dataDir := filepath.Join(t.TempDir(), "data")
 	var users api.UserAuthority
@@ -97,7 +115,7 @@ func TestProjectVersionPublishAndRollback(t *testing.T) {
 		t.Fatalf("viewer publish = %d, want 403", recorder.Code)
 	}
 
-	// 站点没有可用通道时应先被预检阻断；确认后才允许冻结版本。
+	// 普通发布无论是否确认，都不能绕过阻断。
 	recorder = httptest.NewRecorder()
 	handler.publishHandler(recorder, admin, siteID, "首次发布", false)
 	if recorder.Code != 409 {
@@ -106,13 +124,21 @@ func TestProjectVersionPublishAndRollback(t *testing.T) {
 
 	recorder = httptest.NewRecorder()
 	handler.publishHandler(recorder, admin, siteID, "首次发布", true)
-	if recorder.Code != 200 {
-		t.Fatalf("publish = %d %s", recorder.Code, recorder.Body.String())
+	if recorder.Code != 409 {
+		t.Fatalf("confirmed publish bypassed blockers = %d %s", recorder.Code, recorder.Body.String())
 	}
-	var published versionSummary
-	if err := json.Unmarshal(recorder.Body.Bytes(), &published); err != nil {
+	if versions, err := handler.listVersions(siteID); err != nil || len(versions) != 0 {
+		t.Fatalf("blocked publish created a version: %v %v", versions, err)
+	}
+	// Internal recovery snapshots remain available; they are not published delivery versions.
+	snapshot, err := handler.snapshotSite(admin, siteID, "回退测试基线")
+	if err != nil {
 		t.Fatal(err)
 	}
+	if err := handler.saveVersion(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	published := versionSummary{ID: snapshot.ID, Nodes: len(snapshot.Nodes)}
 	if published.ID == "" || published.Nodes < 4 {
 		t.Fatalf("published = %#v", published)
 	}

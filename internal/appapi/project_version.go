@@ -31,26 +31,33 @@ type versionNode struct {
 }
 
 type projectVersion struct {
-	ID          string        `json:"id"`
-	SiteID      string        `json:"site_id"`
-	SiteName    string        `json:"site_name"`
-	CreatedAt   time.Time     `json:"created_at"`
-	Operator    string        `json:"operator"`
-	Note        string        `json:"note,omitempty"`
-	Preflight   string        `json:"preflight_status,omitempty"`
-	PreflightID string        `json:"preflight_id,omitempty"`
-	Nodes       []versionNode `json:"nodes"`
+	ID          string           `json:"id"`
+	SiteID      string           `json:"site_id"`
+	SiteName    string           `json:"site_name"`
+	CreatedAt   time.Time        `json:"created_at"`
+	Operator    string           `json:"operator"`
+	Note        string           `json:"note,omitempty"`
+	Preflight   string           `json:"preflight_status,omitempty"`
+	PreflightID string           `json:"preflight_id,omitempty"`
+	Nodes       []versionNode    `json:"nodes"`
+	Deliverable bool             `json:"deliverable"`
+	Fingerprint string           `json:"fingerprint,omitempty"`
+	Integrity   string           `json:"integrity,omitempty"`
+	Report      *preflightReport `json:"report,omitempty"`
+	Package     *projectPackage  `json:"package,omitempty"`
 }
 
 type versionSummary struct {
-	ID        string    `json:"id"`
-	SiteID    string    `json:"site_id"`
-	SiteName  string    `json:"site_name"`
-	CreatedAt time.Time `json:"created_at"`
-	Operator  string    `json:"operator"`
-	Note      string    `json:"note,omitempty"`
-	Preflight string    `json:"preflight_status,omitempty"`
-	Nodes     int       `json:"nodes"`
+	ID          string    `json:"id"`
+	SiteID      string    `json:"site_id"`
+	SiteName    string    `json:"site_name"`
+	CreatedAt   time.Time `json:"created_at"`
+	Operator    string    `json:"operator"`
+	Note        string    `json:"note,omitempty"`
+	Preflight   string    `json:"preflight_status,omitempty"`
+	Nodes       int       `json:"nodes"`
+	Deliverable bool      `json:"deliverable"`
+	Fingerprint string    `json:"fingerprint,omitempty"`
 }
 
 type rollbackResult struct {
@@ -62,9 +69,10 @@ type rollbackResult struct {
 }
 
 type publishRequest struct {
-	Site    string `json:"site"`
-	Note    string `json:"note"`
-	Confirm bool   `json:"confirm"`
+	Site                string `json:"site"`
+	Note                string `json:"note"`
+	Confirm             bool   `json:"confirm"`
+	ExpectedFingerprint string `json:"expected_fingerprint"`
 }
 
 type rollbackRequest struct {
@@ -82,6 +90,11 @@ func (h *Handler) snapshotSite(identity Identity, siteID, note string) (projectV
 	if err != nil {
 		return projectVersion{}, err
 	}
+	return h.snapshotNodes(identity, siteID, note, nodes)
+}
+
+func (h *Handler) snapshotNodes(identity Identity, siteID, note string, nodes []data.NodeEdge) (projectVersion, error) {
+	var err error
 	skipped := skippedNodes(nodes)
 	version := projectVersion{
 		ID:        "pv-" + data.NewID(),
@@ -94,17 +107,13 @@ func (h *Handler) snapshotSite(identity Identity, siteID, note string) (projectV
 	if version.Operator == "" {
 		version.Operator = identity.UserID
 	}
-	if report, err := h.buildPreflight(identity, siteID); err == nil {
-		version.Preflight = report.Status
-		version.PreflightID = report.ID
-	}
 	for _, node := range orderByDepth(nodes) {
 		if skipped[node.ID] {
 			continue
 		}
 		points := make(data.Points, 0, len(node.Points))
 		for _, p := range node.Points {
-			if reuseRuntimePoints[p.Type] || isSecretPoint(p.Type) {
+			if reuseRuntimePoints[p.Type] || packageRuntimePoints[p.Type] || packageSecretKey(p.Type) {
 				continue
 			}
 			if node.Type == virtualInputType && p.Type == virtualInputDocument {
@@ -120,7 +129,7 @@ func (h *Handler) snapshotSite(identity Identity, siteID, note string) (projectV
 					return projectVersion{}, err
 				}
 			}
-			points = append(points, p)
+			points = append(points, packageWirePoint(p))
 		}
 		version.Nodes = append(version.Nodes, versionNode{ID: node.ID, Type: node.Type, Parent: node.Parent, Points: points})
 	}
@@ -135,16 +144,30 @@ func (h *Handler) saveVersion(version projectVersion) error {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
+	version.Integrity = ""
+	version.Integrity = contentDigest(version)
 	encoded, err := json.MarshalIndent(version, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := filepath.Join(dir, version.ID+".tmp")
-	final := filepath.Join(dir, version.ID+".json")
-	if err := os.WriteFile(tmp, encoded, 0600); err != nil {
+	tmp, err := os.CreateTemp(dir, ".version-*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, final)
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(encoded); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	// Link publishes the complete file atomically and refuses an existing ID.
+	return os.Link(tmp.Name(), filepath.Join(dir, version.ID+".json"))
 }
 
 func (h *Handler) loadVersion(siteID, versionID string) (projectVersion, error) {
@@ -158,6 +181,19 @@ func (h *Handler) loadVersion(siteID, versionID string) (projectVersion, error) 
 	var version projectVersion
 	if err := json.Unmarshal(raw, &version); err != nil {
 		return projectVersion{}, err
+	}
+	if version.ID != versionID || version.SiteID != siteID {
+		return projectVersion{}, fmt.Errorf("version_identity_mismatch")
+	}
+	if version.Integrity != "" {
+		digest := version.Integrity
+		version.Integrity = ""
+		if contentDigest(version) != digest {
+			return projectVersion{}, fmt.Errorf("version_integrity_mismatch")
+		}
+		version.Integrity = digest
+	} else if version.Deliverable {
+		return projectVersion{}, fmt.Errorf("version_integrity_missing")
 	}
 	return version, nil
 }
@@ -175,40 +211,70 @@ func (h *Handler) listVersions(siteID string) ([]versionSummary, error) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
-		raw, err := os.ReadFile(filepath.Join(h.projectDir(siteID), entry.Name()))
+		version, err := h.loadVersion(siteID, strings.TrimSuffix(entry.Name(), ".json"))
 		if err != nil {
-			continue
-		}
-		var version projectVersion
-		if json.Unmarshal(raw, &version) != nil {
-			continue
+			return nil, err
 		}
 		summaries = append(summaries, versionSummary{
 			ID: version.ID, SiteID: version.SiteID, SiteName: version.SiteName,
 			CreatedAt: version.CreatedAt, Operator: version.Operator, Note: version.Note,
-			Preflight: version.Preflight, Nodes: len(version.Nodes),
+			Preflight: version.Preflight, Nodes: len(version.Nodes), Deliverable: version.Deliverable, Fingerprint: version.Fingerprint,
 		})
 	}
 	sort.Slice(summaries, func(i, j int) bool { return summaries[i].CreatedAt.After(summaries[j].CreatedAt) })
 	return summaries, nil
 }
 
-func (h *Handler) publishHandler(w http.ResponseWriter, identity Identity, siteID, note string, confirm bool) {
-	// 预检不可用或存在阻断项时，必须由交付人员显式确认，才允许冻结版本。
-	report, err := h.buildPreflight(identity, siteID)
+func (h *Handler) publishHandler(w http.ResponseWriter, identity Identity, siteID, note string, confirm bool, expected ...string) {
+	// Publication, inspection and packaging share this one captured definition set.
+	nodes, pkg, report, err := h.captureRelease(identity, siteID)
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "preflight_unavailable")
+		writePreflightError(w, err)
 		return
 	}
-	if report.Status == "fail" && !confirm {
+	if report.Status == "fail" {
 		writeError(w, http.StatusConflict, "preflight_failed")
 		return
 	}
-	version, err := h.snapshotSite(identity, siteID, note)
+	if len(expected) == 0 || expected[0] == "" {
+		writeError(w, http.StatusConflict, "fingerprint_required")
+		return
+	}
+	if expected[0] != report.Fingerprint {
+		writeError(w, http.StatusConflict, "version_conflict")
+		return
+	}
+	version, err := h.snapshotNodes(identity, siteID, note, nodes)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Recheck external/store edits as well as the HTTP mutation lock.
+	_, _, current, err := h.captureRelease(identity, siteID)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "preflight_unavailable")
+		return
+	}
+	if current.Fingerprint != report.Fingerprint {
+		writeError(w, http.StatusConflict, "version_conflict")
+		return
+	}
+	if current.Status == "fail" {
+		writeError(w, http.StatusConflict, "preflight_failed")
+		return
+	}
+	version.Deliverable, version.Fingerprint = true, report.Fingerprint
+	version.Preflight, version.PreflightID, version.Report = report.Status, report.ID, &report
+	pkg.SourceVersion, pkg.SourceFingerprint, pkg.Deliverable = version.ID, report.Fingerprint, true
+	pkg.CreatedAt, pkg.ID = version.CreatedAt, "pp-"+version.ID
+	versions, err := h.listVersions(siteID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "version_list_failed")
+		return
+	}
+	pkg.Version = len(versions) + 1
+	pkg.seal()
+	version.Package = &pkg
 	if err := h.saveVersion(version); err != nil {
 		writeError(w, http.StatusInternalServerError, "version_save_failed")
 		return
@@ -224,7 +290,7 @@ func (h *Handler) publishHandler(w http.ResponseWriter, identity Identity, siteI
 	writeJSON(w, versionSummary{
 		ID: version.ID, SiteID: version.SiteID, SiteName: version.SiteName,
 		CreatedAt: version.CreatedAt, Operator: version.Operator, Note: version.Note,
-		Preflight: version.Preflight, Nodes: len(version.Nodes),
+		Preflight: version.Preflight, Nodes: len(version.Nodes), Deliverable: version.Deliverable, Fingerprint: version.Fingerprint,
 	})
 }
 
@@ -237,6 +303,19 @@ func (h *Handler) versionsHandler(w http.ResponseWriter, identity Identity, site
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "version_list_failed")
 		return
+	}
+	for _, summary := range summaries {
+		version, err := h.loadVersion(siteID, summary.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "version_read_failed")
+			return
+		}
+		for _, node := range version.Nodes {
+			if !h.allows(identity, node.ID) {
+				writeError(w, http.StatusForbidden, "source_forbidden")
+				return
+			}
+		}
 	}
 	writeJSON(w, map[string]any{"versions": summaries})
 }

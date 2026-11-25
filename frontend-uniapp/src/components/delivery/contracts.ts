@@ -77,7 +77,13 @@ export function actionText(action: string) {
 }
 
 const ERROR_LABELS: Record<string, string> = {
-  preflight_failed: "预检存在阻断项；确认后仍可发布，但发布不等于部署",
+  version_conflict: "工程已被修改，请重新预检后发布；未生成版本",
+  fingerprint_required: "请先读取当前工程预检，再发布版本",
+  version_not_deliverable: "此记录是非可交付快照，不能作为已发布项目包导出",
+  preflight_unavailable: "预检服务不可用，不能把读取失败当作空工程或通过",
+  package_integrity_mismatch: "项目包完整性校验失败",
+  version_integrity_mismatch: "冻结版本完整性校验失败",
+  preflight_failed: "预检存在阻断项；请修复后重新预检，不能发布可交付版本",
   calculation_rollback_unsupported: "当前版本或工程包含计算点，后端不支持回退",
   virtual_input_rollback_unsupported: "当前版本或工程包含虚拟输入点，后端不支持回退",
   package_in_use: "行业配置仍在使用，后端已拒绝停用",

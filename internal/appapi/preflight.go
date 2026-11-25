@@ -32,6 +32,8 @@ type preflightGate struct {
 	Detail        string `json:"detail"`
 	Object        string `json:"object,omitempty"`
 	NextStep      string `json:"next_step,omitempty"`
+	RepairNode    string `json:"repair_node,omitempty"`
+	RepairStep    string `json:"repair_step,omitempty"`
 	Informational bool   `json:"informational,omitempty"` // 只展示，不参与总状态
 }
 
@@ -43,6 +45,8 @@ type preflightReport struct {
 	Status      string          `json:"status"`
 	Summary     map[string]int  `json:"summary"`
 	Gates       []preflightGate `json:"gates"`
+	Fingerprint string          `json:"fingerprint,omitempty"`
+	Content     *releaseContent `json:"content,omitempty"`
 }
 
 // deliveryGates 只读门槛：供页面轮询，不写存储。
@@ -52,7 +56,7 @@ func (h *Handler) deliveryGates(w http.ResponseWriter, identity Identity, siteID
 	}
 	report, err := h.buildPreflight(identity, siteID)
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "preflight_unavailable")
+		writePreflightError(w, err)
 		return
 	}
 	writeJSON(w, report)
@@ -65,7 +69,7 @@ func (h *Handler) runPreflight(w http.ResponseWriter, identity Identity, siteID 
 	}
 	report, err := h.buildPreflight(identity, siteID)
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "preflight_unavailable")
+		writePreflightError(w, err)
 		return
 	}
 	now := time.Now()
@@ -104,6 +108,14 @@ func (h *Handler) latestPreflight(w http.ResponseWriter, identity Identity, site
 	writeJSON(w, map[string]any{"latest": report})
 }
 
+func writePreflightError(w http.ResponseWriter, err error) {
+	if err.Error() == "source_forbidden" {
+		writeError(w, http.StatusForbidden, "source_forbidden")
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "preflight_unavailable")
+}
+
 func preflightResult(status string) string {
 	if status == "fail" {
 		return "failure"
@@ -112,6 +124,10 @@ func preflightResult(status string) string {
 }
 
 func (h *Handler) buildPreflight(identity Identity, siteID string) (preflightReport, error) {
+	if siteID != "" {
+		_, _, report, err := h.captureRelease(identity, siteID)
+		return report, err
+	}
 	if h.ems == nil || h.ems.Service == nil {
 		return preflightReport{}, fmt.Errorf("ems unavailable")
 	}
@@ -120,6 +136,10 @@ func (h *Handler) buildPreflight(identity Identity, siteID string) (preflightRep
 		return preflightReport{}, err
 	}
 	nodes = scopeNodesToSite(nodes, siteID)
+	return h.preflightNodes(siteID, nodes), nil
+}
+
+func (h *Handler) preflightNodes(siteID string, nodes []data.NodeEdge) preflightReport {
 	now := time.Now()
 	gates := make([]preflightGate, 0, 10)
 
@@ -129,8 +149,8 @@ func (h *Handler) buildPreflight(identity Identity, siteID string) (preflightRep
 	gates = append(gates, h.commandGate(nodes))
 	gates = append(gates, h.manualGate(nodes))
 	gates = append(gates, h.disabledGate(nodes))
-	gates = append(gates, h.alarmGate())
-	gates = append(gates, h.historyGate())
+	gates = append(gates, h.alarmGate(nodes))
+	gates = append(gates, h.historyGate(nodes))
 	gates = append(gates, h.backupGate())
 	gates = append(gates, preflightGate{
 		Key: "permissions", Title: "权限边界", Status: "pass",
@@ -150,7 +170,7 @@ func (h *Handler) buildPreflight(identity Identity, siteID string) (preflightRep
 			status = "warn"
 		}
 	}
-	return preflightReport{Site: siteID, GeneratedAt: now, Status: status, Summary: summary, Gates: gates}, nil
+	return preflightReport{Site: siteID, GeneratedAt: now, Status: status, Summary: summary, Gates: gates}
 }
 
 func (h *Handler) channelGate(nodes []data.NodeEdge, now time.Time) preflightGate {
@@ -248,7 +268,7 @@ func (h *Handler) pointGate(nodes []data.NodeEdge, now time.Time) preflightGate 
 	var total, criticalBad, criticalStale, otherStale int
 	var object string
 	for _, node := range nodes {
-		if node.Type != data.NodeTypeVariable && node.Type != data.NodeTypeModbusIO {
+		if node.Type != data.NodeTypeVariable && node.Type != data.NodeTypeModbusIO && node.Type != calculationType && node.Type != virtualInputType {
 			continue
 		}
 		total++
@@ -384,8 +404,18 @@ func (h *Handler) disabledGate(nodes []data.NodeEdge) preflightGate {
 	return gate
 }
 
-func (h *Handler) alarmGate() preflightGate {
-	active := h.ems.Service.Alarms.Active()
+func (h *Handler) alarmGate(nodes []data.NodeEdge) preflightGate {
+	ids := map[string]bool{}
+	for _, node := range nodes {
+		ids[node.ID] = true
+	}
+	active := 0
+	for _, alarm := range h.ems.Service.Alarms.List() {
+		device, _, _ := strings.Cut(alarm.DeviceID, "/")
+		if alarm.Active && (ids[alarm.PointID] || ids[alarm.DeviceID] || ids[device]) {
+			active++
+		}
+	}
 	gate := preflightGate{Key: "alarms", Title: "活动报警"}
 	if active > 0 {
 		gate.Status = "warn"
@@ -397,8 +427,18 @@ func (h *Handler) alarmGate() preflightGate {
 	return gate
 }
 
-func (h *Handler) historyGate() preflightGate {
-	points := len(h.ems.Service.History.Points())
+func (h *Handler) historyGate(nodes []data.NodeEdge) preflightGate {
+	ids := map[string]bool{}
+	for _, node := range nodes {
+		ids[node.ID] = true
+	}
+	points := 0
+	for _, key := range h.ems.Service.History.Points() {
+		_, id, found := strings.Cut(key, "\x00")
+		if found && ids[id] {
+			points++
+		}
+	}
 	gate := preflightGate{Key: "history", Title: "历史记录"}
 	if points == 0 {
 		gate.Status, gate.Detail, gate.NextStep = "warn", "还没有历史点位", "确认点位已采集并写入历史"

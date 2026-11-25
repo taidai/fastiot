@@ -21,13 +21,13 @@
           <view class="variant-head"><b>项目包与版本</b><span>这份工程是哪个版本、依赖什么？</span></view>
           <view class="package-grid">
             <section class="card glass package-card delivery-package">
-              <view class="row"><span>当前版本</span><view class="version-site"><span>{{ hasPublished ? versions[0]?.id || "未发布" : "未发布" }}</span><label class="site-field">Site<select v-model="selectedSite" class="site-select" :disabled="!sites.length" @change="!PREVIEW_MODE && selectLayer(selectedSite)"><option v-if="!sites.length" value="">没有可用 Site</option><option v-for="item in sites" :key="item.id" :value="item.id">{{ nameOf(item) }}</option></select></label></view></view>
+              <view class="row"><span>当前版本</span><view class="version-site"><span>{{ hasPublished ? currentVersion?.id || "未发布" : "未发布" }}</span><label class="site-field">Site<select v-model="selectedSite" class="site-select" :disabled="!sites.length" @change="!PREVIEW_MODE && selectLayer(selectedSite)"><option v-if="!sites.length" value="">没有可用 Site</option><option v-for="item in sites" :key="item.id" :value="item.id">{{ nameOf(item) }}</option></select></label></view></view>
               <view class="row"><span>依赖</span><span class="src">{{ packageDependencies }}</span></view>
               <view class="row"><span>现场绑定</span><span class="src">地址、凭据、控制启动与运行数据不进包</span></view>
               <view class="row"><span>预检</span><span v-if="gates" class="chip" :class="gates.status">{{ statusText(gates.status) }} · 通过 {{ gates.summary?.pass || 0 }} · 注意 {{ gates.summary?.warn || 0 }} · 阻断 {{ gates.summary?.fail || 0 }}<template v-if="PREVIEW_MODE && previewPreflightFail"> · PCS7 必需点未映射</template></span><span v-else class="src">{{ gateError ? "读取失败" : "—" }}</span></view>
               <view class="actions">
-                <button class="primary" :disabled="!selectedSite || !canConfigure || !!busy" @click="publish(false)">{{ busy === "publish" ? "发布中…" : hasPublished ? "重新发布" : "发布版本" }}</button>
-                <button class="ghost" :disabled="!selectedSite || !canExport || !!busy" @click="exportPackage">{{ busy === "export" ? "导出中…" : "导出项目包" }}</button>
+                <button class="primary" :disabled="!selectedSite || !canConfigure || !!busy" @click="publish()">{{ busy === "publish" ? "发布中…" : hasPublished ? "重新发布" : "发布版本" }}</button>
+                <button class="ghost" :disabled="!selectedSite || !hasPublished || !canExport || !!busy" @click="exportPackage">{{ busy === "export" ? "导出中…" : "导出项目包" }}</button>
                 <button class="ghost" :disabled="!canExport || !!busy" @click="exportEvidence">{{ busy === "evidence" ? "导出中…" : "导出验收证据" }}</button>
                 <label class="publish-note"><input v-model="publishNote" aria-label="发布说明（可选）" placeholder="发布说明（可选）" /></label>
               </view>
@@ -36,18 +36,18 @@
                 <button class="ghost" :aria-pressed="previewDependencyMismatch" @click="togglePreviewDependency">模拟依赖不匹配{{ previewDependencyMismatch ? '：开' : '' }}</button>
               </view>
               <view v-if="publishBlocked" class="confirm-box">
-                <span>预检存在阻断项。发布只保存工程版本，不改变运行配置，也不等于部署。</span>
-                <button class="danger" :disabled="busy === 'publish'" @click="publish(true)">预检未通过，仍要发布</button>
+                <span>预检存在阻断项，不能发布可交付版本；请修复后重新预检。</span>
+                <button class="ghost" :disabled="!!busy" @click="runPreflight">重新预检</button>
               </view>
               <p class="note">部署到另一实例时必须重新绑定现场；稳定引用靠节点 ref 与画面 token。发布不改变运行配置，也不等于部署。</p>
             </section>
             <section class="card glass package-card package-contents">
-              <h5>包内容 <span class="h5-note">{{ packageSummary?.id || "—" }}</span></h5>
+              <h5>包内容 <span class="h5-note">{{ packageSummary?.source_version || (PREVIEW_MODE ? packageSummary?.id : hasPublished ? "正在读取冻结版本…" : "当前草稿 · 未发布") }}</span></h5>
               <table class="mini-table"><tbody>
-                <tr><td>对象</td><td class="src">{{ packageSummary ? `${packageSummary.nodes?.length || 0} 个节点` : "—" }}</td></tr>
-                <tr><td>点位</td><td class="src">{{ packageSummary ? `${packageSummary.point_count || 0} 个采集点 · 画面绑定已 token 化` : "—" }}</td></tr>
-                <tr><td>画面</td><td class="src">{{ packageSummary ? `${packageSummary.screens?.length || 0} 份本层配置 · 其余继承或默认` : "—" }}</td></tr>
-                <tr><td>策略</td><td class="src">{{ packageSummary ? `${packageSummary.strategy_count || 0} 条策略` : "—" }}</td></tr>
+                <tr><td>对象</td><td class="src">{{ contentSummary ? `${contentSummary.nodes} 个节点` : "—" }}</td></tr>
+                <tr><td>点位</td><td class="src">{{ contentSummary ? `${contentSummary.points} 个工程点位` : "—" }}</td></tr>
+                <tr><td>画面</td><td class="src">{{ contentSummary ? `${contentSummary.screens} 份画面定义 · 其余继承或默认` : "—" }}</td></tr>
+                <tr><td>策略</td><td class="src">{{ contentSummary ? `${contentSummary.strategies} 条规则或状态机` : "—" }}</td></tr>
                 <tr><td>依赖</td><td class="src">{{ packageDependencies }}</td></tr>
               </tbody></table>
               <view v-if="packageSummary?.warnings?.length" class="package-warnings">{{ packageSummary.warnings.join("；") }}</view>
@@ -59,7 +59,7 @@
             <h5>版本</h5>
             <view v-if="versionError" class="error">{{ versionError }}</view>
             <view v-else-if="versions.length" class="version-lines">
-              <view v-for="(version, index) in versions" :key="version.id" class="row version-line"><span class="version-id">{{ version.id }}</span><span class="src">{{ index === 0 ? "当前 · " : "" }}{{ clock(version.created_at) }} · {{ version.operator || "—" }} · {{ statusText(version.preflight_status) }} · {{ version.nodes }} 个节点{{ version.note ? ` · ${version.note}` : "" }}</span></view>
+              <view v-for="version in versions" :key="version.id" class="row version-line"><span class="version-id">{{ version.id }}</span><span class="src">{{ version.id === currentVersion?.id ? "当前可交付 · " : !PREVIEW_MODE && !version.deliverable ? "非可交付快照 · " : "" }}{{ clock(version.created_at) }} · {{ version.operator || "—" }} · {{ statusText(version.preflight_status) }} · {{ version.nodes }} 个节点{{ version.note ? ` · ${version.note}` : "" }}</span></view>
             </view>
             <view v-else class="empty compact-empty">{{ selectedSite ? "当前 Site 还没有发布版本。" : "选择真实 Site 后才能读取版本；项目根不能代替 Site。" }}</view>
           </section>
@@ -78,7 +78,7 @@
             </template>
             <p class="note">依赖不匹配会拒绝导入；地址与凭据须重新绑定，重绑完成前不能运行，控制不自动启动。</p>
           </section>
-          <PreflightPanel :report="gates" :latest="latestPreflight" :error="gateError || latestError" :busy="busy === 'preflight'" :can-run="canConfigure" @run="runPreflight" />
+          <PreflightPanel :report="gates" :latest="latestPreflight" :error="gateError || latestError" :busy="busy === 'preflight'" :can-run="canConfigure" @run="runPreflight" @repair="repairGate" />
         </template>
 
         <template v-else-if="current === 'deploy'">
@@ -155,9 +155,10 @@ import { acknowledgeAlarm, closeAlarm, layerPath, selectLayer, nameOf, pendingAl
 import { canAction, clock, deliveryError, statusText } from "../../components/delivery/contracts"
 
 type Gate = { key: string; title: string; status: string; detail: string; object?: string; next_step?: string; informational?: boolean }
-type PreflightReport = { id?: string; site?: string; generated_at?: string; operator?: string; status: string; summary: Record<string, number>; gates: Gate[] }
-type VersionSummary = { id: string; site_id: string; site_name: string; created_at: string; operator: string; note?: string; preflight_status?: string; nodes: number }
-type ProjectPackage = { id: string; name: string; point_count?: number; strategy_count?: number; dependencies?: { kind: string; id: string; version: string }[]; nodes?: unknown[]; screens?: unknown[]; stripped?: unknown[]; warnings?: string[] }
+type ReleaseContent = { nodes: number; points: number; strategies: number; screens: number; dependencies: { kind: string; id: string; version: string }[] }
+type PreflightReport = { id?: string; site?: string; generated_at?: string; operator?: string; status: string; summary: Record<string, number>; gates: Gate[]; fingerprint?: string; content?: ReleaseContent }
+type VersionSummary = { id: string; site_id: string; site_name: string; created_at: string; operator: string; note?: string; preflight_status?: string; nodes: number; deliverable?: boolean; fingerprint?: string }
+type ProjectPackage = { id: string; name: string; source_version?: string; source_fingerprint?: string; point_count?: number; strategy_count?: number; screen_count?: number; dependencies?: { kind: string; id: string; version: string }[]; nodes?: unknown[]; screens?: unknown[]; stripped?: unknown[]; warnings?: string[] }
 type ImportResult = { site_id: string; name: string; created: number; channels: number; rules: number; node_ids?: string[]; version_id?: string; warnings?: string[] }
 type RollbackResult = { version: string; updated: number; created: number; extra: number; preflight_status?: string }
 
@@ -172,7 +173,8 @@ const latestError = ref("")
 const versions = ref<VersionSummary[]>([])
 const versionError = ref("")
 const publishNote = PREVIEW_MODE ? toRef(deliveryPreviewState, "publishNote") : ref("")
-const hasPublished = computed(() => PREVIEW_MODE ? !!deliveryPreviewState.publishedSites[selectedSite.value] : versions.value.length > 0)
+const currentVersion = computed(() => versions.value.find(version => PREVIEW_MODE || version.deliverable))
+const hasPublished = computed(() => PREVIEW_MODE ? !!deliveryPreviewState.publishedSites[selectedSite.value] : !!currentVersion.value)
 const publishBlocked = ref(false)
 const message = ref("")
 const messageTone = ref<"success" | "warn" | "error">("success")
@@ -214,11 +216,15 @@ const siteName = computed(() => {
   const site = sites.value.find(node => node.id === selectedSite.value)
   return site ? nameOf(site) : ""
 })
+const contentSummary = computed(() => packageSummary.value ? {
+  nodes: packageSummary.value.nodes?.length || 0, points: packageSummary.value.point_count || 0,
+  strategies: packageSummary.value.strategy_count || 0, screens: packageSummary.value.screen_count ?? packageSummary.value.screens?.length ?? 0,
+  dependencies: packageSummary.value.dependencies || [],
+} : !hasPublished.value && !gateError.value ? gates.value?.content : undefined)
 const packageDependencies = computed(() => {
   if (!selectedSite.value) return "—"
-  if (!canExport.value) return "无导出权限"
-  if (!packageSummary.value) return packageError.value ? "读取失败" : packageLoading.value ? "正在读取…" : "—"
-  return packageSummary.value.dependencies?.length ? packageSummary.value.dependencies.map(dependencyText).join("；") : "无行业包或 Profile 依赖"
+  if (!contentSummary.value) return packageError.value || gateError.value ? "读取失败" : packageLoading.value ? "正在读取…" : "—"
+  return contentSummary.value.dependencies.length ? contentSummary.value.dependencies.map(dependencyText).join("；") : "无行业包或 Profile 依赖"
 })
 const canConfigure = computed(() => canAction(session.snapshot, "configure"))
 const canExport = computed(() => canAction(session.snapshot, "export"))
@@ -273,18 +279,20 @@ async function toggleEms() {
   } finally { busy.value = "" }
 }
 async function loadSiteData(site: string) {
-  await Promise.all([loadGates(site), loadLatest(site), loadVersions(site), loadPackage(site)])
+  await Promise.all([loadGates(site), loadLatest(site), loadVersions(site)])
+  if (site === selectedSite.value) await loadPackage(site)
 }
 async function loadPackage(site: string) {
-  if (!site || !canExport.value) { packageSummary.value = null; packageError.value = ""; packageLoading.value = false; return }
-  packageLoading.value = true; packageError.value = ""
+  if (!site || !canExport.value || !PREVIEW_MODE && !currentVersion.value) { packageSummary.value = null; packageError.value = ""; packageLoading.value = false; return }
+  const versionID = currentVersion.value?.id
+  packageLoading.value = true; packageError.value = ""; packageSummary.value = null
   try {
-    const result = await request<ProjectPackage>(`/projects/export${queryFor(site)}`)
-    if (site === selectedSite.value) packageSummary.value = result
+    const result = await request<ProjectPackage>(`/projects/export${queryFor(site)}${!PREVIEW_MODE && versionID ? `&version=${encodeURIComponent(versionID)}` : ""}`)
+    if (site === selectedSite.value && (PREVIEW_MODE || currentVersion.value?.id === versionID)) packageSummary.value = result
   } catch (error) {
-    if (site === selectedSite.value) { packageSummary.value = null; packageError.value = deliveryError(error) }
+    if (site === selectedSite.value && (PREVIEW_MODE || currentVersion.value?.id === versionID)) { packageSummary.value = null; packageError.value = deliveryError(error) }
   } finally {
-    if (site === selectedSite.value) packageLoading.value = false
+    if (site === selectedSite.value && (PREVIEW_MODE || currentVersion.value?.id === versionID)) packageLoading.value = false
   }
 }
 async function loadGates(site: string) {
@@ -306,24 +314,34 @@ async function loadVersions(site: string) {
     if (site === selectedSite.value) { versions.value = result.versions || []; versionError.value = "" }
   } catch (error) { if (site === selectedSite.value) { versions.value = []; versionError.value = deliveryError(error) } }
 }
+function repairGate(gate: { repair_node?: string; repair_step?: string }) {
+  if (!gate.repair_node || !session.snapshot?.nodes.some(node => node.id === gate.repair_node)) return
+  selectLayer(gate.repair_node)
+  uni.navigateTo({ url: `/pages/design/index?step=${encodeURIComponent(gate.repair_step || "tree")}` })
+}
 async function runPreflight() {
   const site = selectedSite.value
   busy.value = "preflight"; gateError.value = ""; latestError.value = ""
   try {
     const result = await request<PreflightReport>(`/delivery/preflight${queryFor(site)}`, "POST")
-    if (site === selectedSite.value) latestPreflight.value = result
+    if (site === selectedSite.value) {
+      latestPreflight.value = result
+      if (result.status !== "fail" && publishBlocked.value) { publishBlocked.value = false; message.value = "" }
+    }
     await loadGates(site)
   } catch (error) { gateError.value = deliveryError(error) } finally { busy.value = "" }
 }
-async function publish(confirm: boolean) {
+async function publish() {
   const site = selectedSite.value
   if (!site) { message.value = "请选择真实 Site"; messageTone.value = "error"; return }
   busy.value = "publish"; message.value = ""
   try {
-    const result = await request<VersionSummary>("/projects/publish", "POST", { site, note: publishNote.value.trim(), confirm })
+    const result = await request<VersionSummary>("/projects/publish", "POST", { site, note: publishNote.value.trim(), confirm: false, ...(!PREVIEW_MODE ? { expected_fingerprint: gates.value?.fingerprint } : {}) })
+    if (site !== selectedSite.value) return
     message.value = `已发布版本 ${result.id}（${result.nodes} 个节点）；未改变运行配置，不等于部署`
     messageTone.value = "success"; publishNote.value = ""; publishBlocked.value = false
-    await Promise.all([loadVersions(site), loadPackage(site)])
+    await loadVersions(site)
+    await loadPackage(site)
   } catch (error) {
     messageTone.value = "error"; message.value = deliveryError(error)
     if (error instanceof ApiError && error.status === 409 && error.code === "preflight_failed") {
@@ -338,10 +356,12 @@ function dependencyText(item: { kind: string; id: string; version: string }) {
 }
 async function exportPackage() {
   const site = selectedSite.value
-  if (!site) return
+  const versionID = currentVersion.value?.id
+  if (!site || !PREVIEW_MODE && !versionID) return
   busy.value = "export"; message.value = ""; packageError.value = ""
   try {
-    const result = await request<ProjectPackage>(`/projects/export${queryFor(site)}`)
+    const result = await request<ProjectPackage>(`/projects/export${queryFor(site)}${!PREVIEW_MODE && versionID ? `&version=${encodeURIComponent(versionID)}` : ""}`)
+    if (site !== selectedSite.value || !PREVIEW_MODE && currentVersion.value?.id !== versionID) return
     const filename = `${(result.name || siteName.value || "project").replace(/[\\/:*?"<>|]/g, "-")}.package.json`
     downloadText(filename, JSON.stringify(result, null, 2))
     packageSummary.value = result
