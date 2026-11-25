@@ -53,6 +53,13 @@ func New(limit int) *Store {
 
 func key(deviceID, pointID string) string { return deviceID + "\x00" + pointID }
 
+// Capacity returns the configured per-point, per-kind retention cap.
+func (s *Store) Capacity() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.Limit
+}
+
 // SetLimit changes the per-point cap and trims existing samples.
 func (s *Store) SetLimit(limit int) {
 	if limit <= 0 {

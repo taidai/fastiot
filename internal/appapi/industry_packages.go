@@ -7,13 +7,102 @@ import (
 	"sort"
 	"strconv"
 
+	"fastiot/internal/authz"
+	domainaccess "fastiot/internal/domain/access"
 	"fastiot/internal/industry"
+	"github.com/simpleiot/simpleiot/client"
+	"github.com/simpleiot/simpleiot/data"
 )
 
 // ReasonPackageNotInstalled is the stable denial for a route owned by an
 // industry package that this site has not installed. It is a capability
 // boundary, not a permission error: retrying with another account cannot help.
 const ReasonPackageNotInstalled = "industry_package_not_installed"
+const ReasonProjectIndustryUnavailable = "project_industry_dependency_unavailable"
+
+type projectIndustryState struct {
+	ID        string `json:"id"`
+	Version   string `json:"version"`
+	Installed bool   `json:"installed"`
+	Required  bool   `json:"required"`
+	Blocked   bool   `json:"blocked"`
+}
+
+func (h *Handler) projectIndustry(required bool) projectIndustryState {
+	installed := h.packageInstalled(industry.EMSPackageID)
+	return projectIndustryState{industry.EMSPackageID, industry.EMSPackageVersion, installed, required, required && !installed}
+}
+
+// Ancestors convey inherited dependency only, never extra object access. Do not
+// inspect sibling Sites or add ancestors to the caller's anchors/snapshot.
+func (h *Handler) projectRequiresIndustry(identity Identity, nodes []data.NodeEdge) (bool, error) {
+	if packageNeedsIndustry(nodes) {
+		return true, nil
+	}
+	root, err := client.GetRootNode(h.nc)
+	if err != nil {
+		return false, err
+	}
+	for _, anchor := range identity.Anchors {
+		seen := map[string]bool{}
+		for id := anchor; ; {
+			if id == "" || id == "root" || seen[id] {
+				return false, errors.New("invalid_industry_ancestry")
+			}
+			seen[id] = true
+			parents, err := client.GetNodes(h.nc, "all", id, "", false)
+			if err != nil {
+				return false, err
+			}
+			if len(parents) != 1 {
+				return false, errors.New("ambiguous_industry_ancestry")
+			}
+			if packageNeedsIndustry(parents) {
+				return true, nil
+			}
+			if id == root.ID {
+				break
+			}
+			id = parents[0].Parent
+		}
+	}
+	return false, nil
+}
+
+// Reads, diagnostics, alarm handling and system recovery are not control or
+// engineering activation. Keep them available on a blocked project.
+func industryDependentMutation(r *http.Request, route authz.Requirement) bool {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		return false
+	}
+	switch route.Action {
+	case authz.Configure, authz.Command, authz.WriteValue, authz.RulePublish, authz.Delete,
+		authz.VirtualInputApply, authz.VirtualInputWrite, authz.CalculationApply:
+		return true
+	}
+	return false
+}
+
+func (h *Handler) requireProjectIndustry(w http.ResponseWriter, identity Identity) bool {
+	if h.packageInstalled(industry.EMSPackageID) {
+		return true
+	}
+	nodes, err := h.visibleNodes(identity)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "project_context_unavailable")
+		return false
+	}
+	required, err := h.projectRequiresIndustry(identity, nodes)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "project_context_unavailable")
+		return false
+	}
+	if required {
+		writeError(w, http.StatusConflict, ReasonProjectIndustryUnavailable)
+		return false
+	}
+	return true
+}
 
 // packageInstalled reports whether an industry package owns the route and is
 // active. An empty package means the base product, which is always available.
@@ -98,6 +187,45 @@ func (h *Handler) uninstallIndustryPackage(w http.ResponseWriter, r *http.Reques
 	}
 }
 
+func templateNeedsIndustry(nodes []domainaccess.TemplateNode) bool {
+	for _, node := range nodes {
+		if packageNeedsIndustry([]data.NodeEdge{{Type: node.Type}}) || templateNeedsIndustry(node.Children) {
+			return true
+		}
+	}
+	return false
+}
+
+// industryConfiguration is the single content classifier for dependency pins,
+// activation blockers and workbench gates. Activation never changes ownership.
+func industryConfiguration(node data.NodeEdge) []string {
+	var labels []string
+	switch node.Type {
+	case NodeTypeEnergyUnit:
+		labels = append(labels, "能源单元")
+	case NodeTypePlant:
+		labels = append(labels, "电站")
+	case NodeTypeResourceGroup:
+		labels = append(labels, "资源集群")
+	}
+	for _, point := range node.Points {
+		if point.Tombstone%2 != 0 {
+			continue
+		}
+		switch point.Type {
+		case "easyemsAllocator":
+			labels = append(labels, "功率分配器")
+		case plan96Point:
+			labels = append(labels, "96 点计划")
+		case "easyemsTariff":
+			labels = append(labels, "站点电价")
+		case PointTypeSiteTarget, PointTypeSiteConstraint, PointTypePlantTarget, PointTypePlantConstraint, PointTypePCCFeedback:
+			labels = append(labels, "电站/站点目标与约束")
+		}
+	}
+	return labels
+}
+
 // packageDataInUse lists live industry configuration that an uninstall would
 // orphan. Empty means uninstall is safe. A read failure refuses the uninstall:
 // the operator must be able to prove no control configuration is active.
@@ -117,28 +245,8 @@ func (h *Handler) packageDataInUse(identity Identity) []string {
 		counts[label]++
 	}
 	for _, node := range nodes {
-		switch node.Type {
-		case NodeTypeEnergyUnit:
-			count(node.ID, "能源单元", node.Type)
-		case NodeTypePlant:
-			count(node.ID, "电站", node.Type)
-		case NodeTypeResourceGroup:
-			count(node.ID, "资源集群", node.Type)
-		}
-		for _, point := range node.Points {
-			if point.Tombstone%2 != 0 {
-				continue
-			}
-			switch point.Type {
-			case "easyemsAllocator":
-				count(node.ID, "功率分配器", point.Type)
-			case plan96Point:
-				count(node.ID, "96 点计划", point.Type)
-			case "easyemsTariff":
-				count(node.ID, "站点电价", point.Type)
-			case PointTypeSiteTarget, PointTypeSiteConstraint, PointTypePlantTarget, PointTypePlantConstraint, PointTypePCCFeedback:
-				count(node.ID, "电站/站点目标与约束", point.Type)
-			}
+		for _, label := range industryConfiguration(node) {
+			count(node.ID, label, label)
 		}
 	}
 	labels := make([]string, 0, len(counts))

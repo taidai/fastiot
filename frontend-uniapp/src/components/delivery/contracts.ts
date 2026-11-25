@@ -7,6 +7,18 @@ export type AccessPolicy = {
   actions?: string[]
 }
 
+export type AuthorizationCheck = { operation: string; action: string; allowed: boolean; reason: string }
+export type AuthorizationExplanation = { read_only: true; user_id: string; target_id: string; checks: AuthorizationCheck[] }
+
+export function authorizationText(check?: Pick<AuthorizationCheck, "allowed" | "reason">): string {
+  if (!check) return "未检查"
+  if (check.allowed) return "授权允许"
+  if (check.reason === "forbidden" || check.reason === "source_forbidden") return "拒绝 · 对象范围未授权"
+  if (["admin_required", "operator_required", "operation_not_allowed"].includes(check.reason)) return "拒绝 · 动作未授权"
+  if (check.reason === "no_access") return "拒绝 · 账号无有效范围"
+  return `拒绝 · ${check.reason}`
+}
+
 const ACTION_ORDER = [
   "configure", "write_value", "command", "rule_publish", "alarm_ack", "alarm_maintain",
   "delete", "export", "account_manage", "audit_view", "site_settings",
@@ -69,6 +81,9 @@ const ERROR_LABELS: Record<string, string> = {
   calculation_rollback_unsupported: "当前版本或工程包含计算点，后端不支持回退",
   virtual_input_rollback_unsupported: "当前版本或工程包含虚拟输入点，后端不支持回退",
   package_in_use: "行业配置仍在使用，后端已拒绝停用",
+  project_industry_dependency_unavailable: "项目依赖的 EMS 行业包未启用，相关配置与控制已阻断",
+  industry_package_not_installed: "EMS 行业包未启用，此行业能力不可用",
+  industry_scope_required: "行业包启停影响整个运行实例，需要项目根范围的站点设置权限",
   forbidden: "当前账号无权执行此操作",
   requires_site: "此操作需要选择真实 Site，项目根不能代替 Site",
   source_forbidden: "当前账号无权操作此项目",

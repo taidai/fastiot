@@ -17,6 +17,7 @@ import { nameOf, session } from "../stores/session"
 import type { EmsAlarm, Node as ApiNode } from "../types/api"
 import { boundDevicesForLayer, deviceKey, isBusinessLayer } from "../pages/overview/overview"
 import type { LedgerDevice } from "../pages/overview/overview"
+import { memberRolesOf } from "./design/members"
 
 const props = withDefaults(defineProps<{ selected: string; devices?: LedgerDevice[]; alarms?: EmsAlarm[] }>(), {
   devices: () => [],
@@ -34,10 +35,13 @@ const rows = computed<Row[]>(() => {
   const walk = (node: ApiNode, depth: number, keepEmpty = false) => {
     if (!isBusinessLayer(node)) return
     const kind = node.type === "site" ? "现场" : ["energyUnit", "energy_unit", "unit"].includes(node.type) ? "单元" : ["device", "modbus_device"].includes(node.type) ? "设备" : "区域"
-    const count = boundDevicesForLayer(node.id, session.snapshot!.nodes, props.devices).length
+    const count = boundDevicesForLayer(node.id, session.snapshot!.nodes, props.devices, memberRolesOf(node).flatMap(member => member.node_id ? [member.node_id] : [])).length
     if (!keepEmpty && count === 0) return
-    result.push({ key: node.id, name: nameOf(node), kindLabel: kind, depth, count: 0, index: result.length + 1 })
+    result.push({ key: node.id, name: nameOf(node), kindLabel: keepEmpty ? '项目' : kind, depth, count, index: result.length + 1 })
     session.snapshot!.nodes.filter(child => child.parent === node.id).forEach(child => walk(child, depth + 1))
+    // A business Device is already the canonical selectable row, not a second
+    // device below itself. Container bindings still need a runtime-device row.
+    if (!keepEmpty && kind === '设备') return
     props.devices.filter(device => device.business_node_id === node.id).forEach(device => {
       const id = deviceKey(device)
       const alarmCount = (props.alarms || []).filter(alarm => alarm.active && alarm.device_id === id).length

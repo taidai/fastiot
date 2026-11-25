@@ -81,6 +81,47 @@ func runtimeValue(at time.Time, value float64, quality signal.Quality) history.S
 	}
 }
 
+func TestAggregatePreservesInvalidAndStaleEvidence(t *testing.T) {
+	store := history.New(20)
+	late := runtimeValue(testAt, 0, signal.Good)
+	late.Late = true
+	store.Record([]history.Sample{
+		late,
+		runtimeValue(testAt.Add(time.Second), 99, signal.Stale),
+		runtimeValue(testAt.Add(2*time.Second), 100, signal.Invalid),
+		runtimeValue(testAt.Add(3*time.Second), 4, signal.Good),
+		runtimeValue(testAt.Add(5*time.Second), 101, signal.Uninitialized),
+		runtimeValue(testAt.Add(6*time.Second), 102, signal.Quality(255)),
+	})
+	store.RecordEvents([]history.Sample{{DeviceID: "dev", PointID: "point", SourceTime: testAt.Add(4 * time.Second), Kind: history.KindQualityEvent, Quality: signal.Invalid, Reason: "connection_lost"}})
+	query := Query{Nodes: nodeMap{"point": {ID: "point", Type: data.NodeTypeModbusIO}}, Runtime: &StoreRuntime{Store: store, Points: func() ([]DevicePoint, error) {
+		return []DevicePoint{{PointID: "point", DeviceID: "dev", IntervalMS: 1000}}, nil
+	}}}
+	results, matched, err := query.Execute(Request{NodeIDs: []string{"point"}, Aggregate: 5 * time.Second, Export: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := results[0].Records
+	if matched != 6 || len(records) != 6 {
+		t.Fatalf("aggregation erased quality evidence: %+v", records)
+	}
+	if !records[0].Late {
+		t.Fatal("mean hid its late contributor")
+	}
+	if records[0].Value == nil || *records[0].Value != 2 || records[0].SampleCount != 2 {
+		t.Fatalf("mean includes invalid inputs: %+v", records[0])
+	}
+	if records[1].Quality != "stale" || records[2].Quality != "invalid" || records[3].Kind != "quality_event" {
+		t.Fatalf("quality not preserved: %+v", records)
+	}
+	if records[4].Quality != "uninitialized" || records[5].Quality != "quality(255)" || records[4].Aggregate != "" || records[5].Aggregate != "" {
+		t.Fatalf("uninitialized/unknown evidence lost: %+v", records)
+	}
+	if records[1].Aggregate != "" || !records[1].ReceivedTime.Equal(testAt.Add(time.Second+time.Millisecond)) {
+		t.Fatal("raw quality evidence lost its original time")
+	}
+}
+
 func TestExecuteSelectsSourcePerNode(t *testing.T) {
 	runtimeNode := Node{ID: "point", Type: data.NodeTypeModbusIO, Units: "C"}
 	siot := &fakeSIOT{points: []data.Point{siotValue(testAt, 1, "mqtt-adapter")}}
@@ -297,7 +338,7 @@ func TestExecuteAggregatesRuntimeRecordsPerBucket(t *testing.T) {
 		t.Fatal(err)
 	}
 	records := results[0].Records
-	if len(records) != 3 {
+	if len(records) != 4 {
 		t.Fatalf("aggregate records = %+v", records)
 	}
 	first := records[0]
@@ -309,8 +350,11 @@ func TestExecuteAggregatesRuntimeRecordsPerBucket(t *testing.T) {
 	if records[1].Value == nil || *records[1].Value != 8 || records[1].SampleCount != 1 {
 		t.Fatalf("second bucket = %+v", records[1])
 	}
-	if records[2].Kind != history.KindQualityEvent || records[2].Quality != "stale" || !records[2].SourceTime.Equal(event.SourceTime) {
-		t.Fatalf("quality event not carried through = %+v", records[2])
+	if records[2].Kind != history.KindObservation || records[2].Quality != "stale" {
+		t.Fatalf("stale observation discarded: %+v", records[2])
+	}
+	if records[3].Kind != history.KindQualityEvent || records[3].Quality != "stale" || !records[3].SourceTime.Equal(event.SourceTime) {
+		t.Fatalf("quality event not carried through = %+v", records[3])
 	}
 }
 

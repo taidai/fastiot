@@ -22,7 +22,7 @@
         <text v-if="selectedPoint.record.reason"> · {{ selectedPoint.record.reason }}</text>
       </view>
       <view v-else class="readout muted">移动指针或使用方向键读取观测；单点也会显示。</view>
-      <view class="trend-foot">无效观测、质量事件与超过声明采样周期的空档不连线；所有值可在数据表中读取。</view>
+      <view class="trend-foot">无效、过期、质量事件与超过声明采样周期的空档不连线；周期未知及窗口平均仅显示点，不声称连续实测。所有记录可在数据表中读取。</view>
     </view>
     <view v-else class="empty">这个时间范围没有可绘制的数值观测。质量事件与无效记录仍可在数据表中查看。</view>
   </view>

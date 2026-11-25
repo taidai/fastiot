@@ -16,7 +16,8 @@
         </view>
       </aside>
       <main class="stage">
-        <template v-if="current === 'package'">
+        <IndustryGate v-if="industryBlocked && assetTabs.some(tab => tab.key === current)" />
+        <template v-else-if="current === 'package'">
           <view class="variant-head"><b>项目包与版本</b><span>这份工程是哪个版本、依赖什么？</span></view>
           <view class="package-grid">
             <section class="card glass package-card delivery-package">
@@ -127,7 +128,7 @@
 
         <AccountsPanel v-else-if="current === 'users'" :root-id="projectRootId" :nodes="session.snapshot?.nodes || []" :can-manage="canManageAccounts" />
         <AuditPanel v-else-if="current === 'audit'" :can-view="canViewAudit" />
-        <IndustryPanel v-else :can-change="canSiteSettings" />
+        <IndustryPanel v-else :can-change="canSiteSettings" @changed="loadIndustryStatus" />
       </main>
     </view>
     <AlarmCenter v-if="alarmOpen" :alarms="session.alarms" @close="alarmOpen = false" @ack="acknowledge" @close-alarm="close" />
@@ -135,6 +136,8 @@
 </template>
 
 <script setup lang="ts">
+import IndustryGate from '../../components/IndustryGate.vue'
+import { industryBlocked } from '../../stores/session'
 import { currentProject } from '../../stores/projects'
 import { computed, nextTick, onMounted, onUnmounted, ref, toRef, watch } from "vue"
 import TopBar from "../../components/TopBar.vue"
@@ -221,7 +224,7 @@ const canConfigure = computed(() => canAction(session.snapshot, "configure"))
 const canExport = computed(() => canAction(session.snapshot, "export"))
 const canManageAccounts = computed(() => canAction(session.snapshot, "account_manage"))
 const canViewAudit = computed(() => canAction(session.snapshot, "audit_view"))
-const canSiteSettings = computed(() => canAction(session.snapshot, "site_settings"))
+const canSiteSettings = computed(() => canAction(session.snapshot, "site_settings") && (PREVIEW_MODE || !!session.snapshot?.roots.includes(projectRootId.value)))
 
 watch(() => previewWorkspace.projectId, () => { if (PREVIEW_MODE) void changePreviewProject() })
 watch(() => previewWorkspace.emsEnabled, enabled => { if (PREVIEW_MODE) emsInstalled.value = enabled }, { immediate: true })

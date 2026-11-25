@@ -244,7 +244,8 @@ func (h *Handler) createProjectFromSource(identity Identity, req reuseRequest) (
 		}
 		points, unresolved := rewriteReferences(node, idMap)
 		if len(points) > 0 {
-			if err := client.SendPoints(h.nc, client.SubjectNodePoints(newID), points, false); err != nil {
+			// Reference documents must be stored before the copied project is returned.
+			if err := client.SendPoints(h.nc, client.SubjectNodePoints(newID), points, true); err != nil {
 				return reuseResult{}, fmt.Errorf("rewrite_failed: %w", err)
 			}
 		}

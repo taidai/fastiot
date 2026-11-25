@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"fastiot/internal/calculation"
+	siotclient "github.com/simpleiot/simpleiot/client"
 	"github.com/simpleiot/simpleiot/data"
 )
 
@@ -66,10 +67,27 @@ func TestCalculationProjectCopyRemapsDraftReferences(t *testing.T) {
 	if status != 200 {
 		t.Fatalf("publish fixture configuration: %d %s", status, body)
 	}
+	writes, err := h.nc.SubscribeSync(siotclient.SubjectNodePoints("*") + "." + calculationDocument + ".>")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = writes.Unsubscribe() })
+	if err := h.nc.Flush(); err != nil {
+		t.Fatal(err)
+	}
 	var cloned reuseResult
 	status, body = call(t, http.MethodPost, base+"/projects/reuse", token, reuseRequest{Source: site, Name: "copy"}, &cloned)
 	if status != 200 {
 		t.Fatalf("copy: %d %s", status, body)
+	}
+	for i := 0; i < 3; i++ {
+		write, err := writes.NextMsg(time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if write.Reply == "" {
+			t.Fatal("project copy must await storage acknowledgement for each rewritten calculation document")
+		}
 	}
 	var listed struct {
 		Calculations []struct {
