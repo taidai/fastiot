@@ -22,7 +22,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue"
-import { request } from "../../api/client"
+import { request, ApiError } from "../../api/client"
 import { nameOf } from "../../types/api"
 import type { Snapshot } from "../../types/api"
 import { memberRolesOf, missingRequiredMembers } from "./members"
@@ -31,6 +31,7 @@ import type { MemberRole } from "./members"
 const props = withDefaults(defineProps<{ snapshot: Snapshot | null; nodeId: string; readOnly?: boolean }>(), { readOnly: false })
 const emit = defineEmits<{ (event: "refresh"): void }>()
 const draft = ref<MemberRole[]>([])
+const membersVersion = ref(0)
 const busy = ref(false)
 const error = ref("")
 const notice = ref("")
@@ -39,11 +40,13 @@ const missing = computed(() => missingRequiredMembers(draft.value))
 const targets = computed(() => (props.snapshot?.nodes || []).filter(item => ["device", "variable", "modbusIo"].includes(item.type)).map(item => ({
   id: item.id, name: nameOf(item), kind: item.type === "device" ? "设备" : item.type === "modbusIo" ? "物理点" : "数据点",
 })))
-watch(() => [props.nodeId, node.value?.points] as const, () => {
+// A snapshot refresh must not replace an editor's draft or its baseline version.
+watch(() => node.value?.id, () => {
   draft.value = memberRolesOf(node.value).map(member => ({ ...member }))
+  membersVersion.value = node.value?.points.find(point => point.type === 'easyemsUnitMembersVersion' && (point.tombstone || 0) % 2 === 0)?.value || 0
   error.value = ""
   notice.value = ""
-}, { immediate: true, deep: true })
+}, { immediate: true })
 async function save() {
   if (!node.value) return
   const roles = draft.value.map(member => ({ ...member, role: member.role.trim(), node_id: member.node_id?.trim() || "" }))
@@ -53,11 +56,14 @@ async function save() {
   error.value = ""
   notice.value = ""
   try {
-    const result = await request<{ missing_required: string[] }>(`/nodes/${encodeURIComponent(node.value.id)}`, "PATCH", { description: nameOf(node.value), members: roles })
+    const result = await request<{ missing_required: string[]; members_version: number }>(`/nodes/${encodeURIComponent(node.value.id)}`, "PATCH", { description: nameOf(node.value), members: roles, members_version: membersVersion.value })
+    membersVersion.value = result.members_version ?? membersVersion.value + 1
     notice.value = result.missing_required?.length ? `草稿已保存；必需角色仍未绑定：${result.missing_required.join("、")}` : "成员角色已保存"
     emit("refresh")
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "成员绑定保存失败"
+    error.value = cause instanceof ApiError && cause.code === 'members_version_conflict'
+      ? '成员绑定已被其他人修改；请刷新页面载入最新版本，再编辑保存。当前草稿未提交。'
+      : cause instanceof Error ? cause.message : "成员绑定保存失败"
   } finally { busy.value = false }
 }
 </script>
