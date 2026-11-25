@@ -2,8 +2,8 @@
   <section class="panel glass device-panel">
     <view class="card-title">设备状态<text>{{ device.name }}</text></view>
     <view class="tabs device-tabs" role="tablist" aria-label="设备数据">
-      <button :class="{ on: tab === 'live' }" role="tab" :aria-selected="tab === 'live'" @click="tab = 'live'">实时数据</button>
-      <button :class="{ on: tab === 'params' }" role="tab" :aria-selected="tab === 'params'" @click="tab = 'params'">设备参数</button>
+      <button v-if="allowedTabs.includes('realtime')" :class="{ on: tab === 'live' }" role="tab" :aria-selected="tab === 'live'" @click="tab = 'live'">实时数据</button>
+      <button v-if="allowedTabs.includes('parameters')" :class="{ on: tab === 'params' }" role="tab" :aria-selected="tab === 'params'" @click="tab = 'params'">设备参数</button>
     </view>
     <view v-if="modelError" class="error" role="alert">{{ modelError }}</view>
     <view v-else-if="loading" class="empty">正在读取设备 Profile 与点位…</view>
@@ -54,8 +54,11 @@ import type { LedgerDevice } from "./overview"
 import { loadOperationRecords, loadUnitModel } from "./operations"
 import type { OperationRecord, UnitModel } from "./operations"
 import OperationDrawer from './OperationDrawer.vue'
-const props = defineProps<{ device: LedgerDevice; values: StateValue[]; nodes: ApiNode[] }>()
+const props = withDefaults(defineProps<{ device: LedgerDevice; values: StateValue[]; nodes: ApiNode[]; allowedTabs?: string[] }>(), { allowedTabs: () => ['realtime', 'parameters'] })
 const tab = ref<"live" | "params">("live")
+watch(() => [deviceKey(props.device), props.allowedTabs.join('|')], () => {
+  if (!props.allowedTabs.includes(tab.value === 'live' ? 'realtime' : 'parameters')) tab.value = props.allowedTabs.includes('realtime') ? 'live' : 'params'
+}, { immediate: true, flush: 'sync' })
 const drawerOpen = ref(false)
 const model = ref<UnitModel | null>(null)
 const loading = ref(false), modelError = ref(""), recordError = ref("")

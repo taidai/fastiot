@@ -24,13 +24,10 @@ test("prototype tools remain reachable without inventing placeholder functionali
   assert.ok(delivery.includes("emit('tool', 'retention')"))
 })
 
-test("preview-only side cards and published version diff match final prototype", () => {
-  for (const fixture of ["饮水线冲洗", "备用泵试转", "采暖预循环", "早高峰放电", "批量并网", "10:42 · 启动"]) assert.ok(ui.includes(fixture), fixture)
-  assert.match(ui, /v-if="PREVIEW_MODE"[^>]*data-preview="today"/)
-  assert.match(ui, /v-if="PREVIEW_MODE"[^>]*data-preview="oplog"/)
-  assert.match(ui, /v-if="PREVIEW_MODE"[^>]*data-preview="trend"/)
-  assert.match(ui, /后端未提供“今日执行”查询 API/)
-  assert.match(ui, /尚未读取历史序列，不生成演示曲线。/)
+test("configurator shares the customer renderer instead of owning fake side-card state", () => {
+  assert.match(ui, /<ScreenRenderer[^>]*:document="draft"/)
+  for (const fixture of ["饮水线冲洗", "备用泵试转", "采暖预循环", "早高峰放电", "批量并网", "10:42 · 启动"]) assert.ok(!ui.includes(fixture), fixture)
+  assert.doesNotMatch(ui, /data-preview="(?:today|oplog|trend)"/)
   assert.match(delivery, /v-if="PREVIEW_MODE && versions.length"[\s\S]*?版本差异/)
   assert.match(delivery, /\+1 设备 · \+1 画面 · 规则 2 → 3/)
   assert.match(delivery, /previewChecks/)

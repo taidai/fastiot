@@ -106,9 +106,10 @@ type Request struct {
 
 // Node is the resolved product node a history request reads.
 type Node struct {
-	ID    string
-	Type  string
-	Units string
+	Aggregate bool
+	ID        string
+	Type      string
+	Units     string
 }
 
 // Resolver resolves product nodes, returning ErrForbidden or ErrNotSupported.
@@ -142,9 +143,12 @@ var (
 
 // Query owns source selection and the record pipeline.
 type Query struct {
-	Nodes   Resolver
-	SIOT    SIOT
-	Runtime Runtime
+	// AggregateMemberAllowed authorizes nested member evidence before projection
+	// or display aggregation. HTTP adapters supply the current reader's scope.
+	AggregateMemberAllowed func(string) bool
+	Nodes                  Resolver
+	SIOT                   SIOT
+	Runtime                Runtime
 }
 
 type readResult struct {
@@ -229,6 +233,18 @@ func (q *Query) Execute(req Request) ([]PointResult, int, error) {
 // aggregated result.
 func (q *Query) read(node Node, typ, key string, start, end time.Time, aggregate time.Duration) (readResult, error) {
 	out := readResult{source: SourceSIOT, records: []Record{}, aggregation: "raw", retention: Retention{Kind: "unknown"}}
+	if node.Aggregate {
+		if typ != AggregateValuePoint || (key != "" && key != "0") {
+			return out, ErrNotSupported
+		}
+		var err error
+		out, err = q.readAggregate(node, start, end)
+		if err != nil {
+			return out, err
+		}
+	} else if typ == AggregateValuePoint {
+		return out, ErrNotSupported
+	}
 	runtimePoint := node.Type == data.NodeTypeModbusIO && q.Runtime != nil
 	if runtimePoint {
 		deviceID, intervalMS, ok, err := q.Runtime.Locate(node.ID)
@@ -251,7 +267,7 @@ func (q *Query) read(node Node, typ, key string, start, end time.Time, aggregate
 			runtimePoint = false
 		}
 	}
-	if !runtimePoint {
+	if !runtimePoint && !node.Aggregate {
 		if q.SIOT == nil {
 			return out, ErrUnavailable
 		}

@@ -26,7 +26,7 @@ func normalizeAggregateQuality(policy string) string {
 	}
 }
 
-// parseAggregateWindow parses a rolling-window duration. An empty string means
+// parseAggregateWindow parses a closed-window duration. An empty string means
 // instantaneous (no window). The window is bounded to at most 24 hours so a
 // typo cannot trigger a pathological history scan.
 func parseAggregateWindow(s string) (time.Duration, error) {

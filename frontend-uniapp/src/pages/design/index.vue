@@ -122,7 +122,7 @@
 <script setup lang="ts">
 import IndustryGate from '../../components/IndustryGate.vue'
 import { industryBlocked } from '../../stores/session'
-import { currentProject } from '../../stores/projects'
+import { currentProject, projectContext } from '../../stores/projects'
 import { computed, onMounted, onUnmounted, ref, watch } from "vue"
 import TopBar from "../../components/TopBar.vue"
 import AlarmCenter from "../../components/AlarmCenter.vue"
@@ -397,10 +397,19 @@ async function handleScreenSaved() {
 }
 async function refreshDesign() {
   await refreshAll()
-  screen.value = session.layer ? await loadScreen(session.layer) : null
+  await loadSelectedScreen()
   await loadLayerScreens()
 }
-watch(() => session.layer, async id => { screen.value = id ? await loadScreen(id) : null }, { immediate: true })
+let screenRequest = 0
+async function loadSelectedScreen() {
+  const requestID = ++screenRequest
+  const id = session.layer
+  const generation = projectContext.generation
+  screen.value = null
+  const loaded = id ? await loadScreen(id) : null
+  if (requestID === screenRequest && id === session.layer && generation === projectContext.generation) screen.value = loaded
+}
+watch(() => session.layer, () => { void loadSelectedScreen() }, { immediate: true })
 watch(() => businessRows.value.map(row => row.node.id).join("|"), () => { void loadLayerScreens() }, { immediate: true })
 function navigate(key: string) { if (key !== "design") uni.navigateTo({ url: `/pages/${key}/index` }) }
 async function acknowledge(id: string) { await acknowledgeAlarm(id) }

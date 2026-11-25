@@ -4,12 +4,16 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"sync"
 
 	"github.com/simpleiot/simpleiot/client"
 	"github.com/simpleiot/simpleiot/data"
 )
 
 const screenPointType = "easyemsScreen"
+
+// Serialize screen API compare-and-save within this runtime; not a storage transaction.
+var screenSaveMu sync.Mutex
 
 // getScreen returns the nearest saved running-screen layout. Ancestor layouts
 // are marked explicitly so an inherited draft is never mistaken for an own save.
@@ -52,6 +56,8 @@ func (h *Handler) getScreen(w http.ResponseWriter, identity Identity, id string)
 // putScreen stores layouts as node points. Structured documents are validated
 // and versioned; legacy JSON remains readable and writable for existing clients.
 func (h *Handler) putScreen(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
+	screenSaveMu.Lock()
+	defer screenSaveMu.Unlock()
 	node, ok := h.routeNode(w, id)
 	if !ok {
 		return
@@ -76,11 +82,24 @@ func (h *Handler) putScreen(w http.ResponseWriter, r *http.Request, identity Ide
 		h.putStructuredScreen(w, identity, node, body, probe)
 		return
 	}
+	if savedScreenVersion(node) > 0 {
+		writeError(w, http.StatusConflict, "version_conflict")
+		return
+	}
 	if rawIDs, ok := probe["point_ids"]; ok {
 		var ids []string
-		if remarshalScreenBinding(rawIDs, &ids) != nil || h.validateScreenReferences(identity, id, ids) != nil {
+		if remarshalScreenBinding(rawIDs, &ids) != nil {
 			writeError(w, http.StatusBadRequest, "invalid_binding")
 			return
+		}
+		// Legacy screens predate business-device bindings; preserve their subtree
+		// contract without allowing them to overwrite a versioned document.
+		for _, pointID := range ids {
+			nodes, err := client.GetNodes(h.nc, "all", pointID, "", false)
+			if pointID == "" || !h.allows(identity, pointID) || err != nil || len(nodes) == 0 || pointID != id && !h.users.IsUnder(pointID, id) {
+				writeError(w, http.StatusBadRequest, "invalid_binding")
+				return
+			}
 		}
 	}
 	h.storeScreen(w, identity, id, body)
@@ -109,8 +128,21 @@ func (h *Handler) putStructuredScreen(w http.ResponseWriter, identity Identity, 
 			return
 		}
 	}
+	versions := map[string]int{}
+	if raw, exists := probe["target_versions"]; exists && raw != nil {
+		if remarshalScreenBinding(raw, &versions) != nil {
+			writeError(w, http.StatusBadRequest, "invalid_version")
+			return
+		}
+	}
 	payloads := make([][]byte, len(targets))
 	for i, target := range targets {
+		version, supplied := versions[target.ID]
+		stored, exists := target.Points.Find(screenPointType, "")
+		if target.ID != node.ID && (version != savedScreenVersion(target) || !supplied && exists && stored.Tombstone%2 == 0) {
+			writeError(w, http.StatusConflict, "version_conflict")
+			return
+		}
 		candidate := document
 		candidate.Layer = target.ID
 		candidate.Version = savedScreenVersion(target) + 1
@@ -129,7 +161,9 @@ func (h *Handler) putStructuredScreen(w http.ResponseWriter, identity Identity, 
 		point := data.NewPointString(screenPointType, "", string(payloads[i]))
 		point.Origin = identity.UserID
 		if err := client.SendNodePoint(h.nc, target.ID, point, true); err != nil {
-			writeError(w, http.StatusBadGateway, "save_failed")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			writeJSON(w, map[string]any{"error": "save_failed", "applied": i, "failed_target": target.ID})
 			return
 		}
 	}
