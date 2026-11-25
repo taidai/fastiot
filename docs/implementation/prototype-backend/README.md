@@ -21,8 +21,8 @@ The worktree starts at the current committed source plus only task-related pendi
 | 03 | [从模板建立并维护真实台账](03.md) | 02 | integrated — 3dceb63 |
 | 04 | [行业包依赖门禁](04.md) | 02 | integrated — 3ec9fdb |
 | 05 | [单设备 Profile 接入与只读验证](05.md) | 03 | integrated — b633be0; shared auth stability open |
-| 06 | [批量接入与 CSV 逐台结果](06.md) | 05 | queued — frontier open |
-| 07 | [操作抽屉与命令回读闭环](07.md) | 05 | queued — frontier open |
+| 06 | [批量接入与 CSV 逐台结果](06.md) | 05 | in progress — isolated worktree |
+| 07 | [操作抽屉与命令回读闭环](07.md) | 05 | in progress — isolated worktree |
 | 08 | [L3 安全写回读验证](08.md) | 07 | pending |
 | 09 | [按层总览与可信实时数据](09.md) | 02 | integrated — b74d6e2 |
 | 10 | [历史查询、断线曲线与 CSV](10.md) | 02 | integrated — b399379 |
@@ -32,7 +32,7 @@ The worktree starts at the current committed source plus only task-related pendi
 | 14 | [状态机定义、模拟与受控执行](14.md) | 07 | pending |
 | 15 | [持续运行的聚合点](15.md) | 09, 10 | in progress — isolated worktree |
 | 16 | [今日执行统一查询](16.md) | 13, 14 | pending |
-| 17 | [配界面保存到客户总览](17.md) | 09, 11, 12 (active-alarm and statistics bindings) | in progress — checkpoint; joint verification pending |
+| 17 | [配界面保存到客户总览](17.md) | 09, 11, 12 (active-alarm and statistics bindings) | in progress — joint integration resumed |
 | 18 | [派生输入与已配置画面的联动验收](18.md) | 13, 14, 15, 17 | pending |
 | 19 | [账号、对象范围与只读权限演练](19.md) | 02 | integrated — de84402 |
 | 20 | [真实预检、不可变发布与包导出](20.md) | 06, 13, 14, 17 | pending |
