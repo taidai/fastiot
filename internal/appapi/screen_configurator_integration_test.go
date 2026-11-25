@@ -133,6 +133,141 @@ func TestScreenConfiguratorValidatesBindingsAndKeepsSimpleCompatibility(t *testi
 	}
 }
 
+func TestScreenConfiguratorSameKindApplyStaysInsideAuthorizedScope(t *testing.T) {
+	f := newPointConfigFixture(t)
+	root := snapshotRoot(t, f.base, f.token)
+	inside := createNodeAPI(t, f.base, f.token, "group", root, "Allowed", 0)
+	child := createNodeAPI(t, f.base, f.token, "group", inside, "Allowed child", 0)
+	outside := createNodeAPI(t, f.base, f.token, "group", root, "Private", 0)
+	token := inputAccount(t, f, inside, "viewer", []string{ActionConfigure})
+	draft := automaticScreen(inside, 0)
+	draft["apply_to_same"] = true
+	var result struct {
+		Applied int `json:"applied"`
+	}
+	status, body := call(t, http.MethodPut, f.base+"/ems/screen/"+inside, token, draft, &result)
+	if status != http.StatusOK || result.Applied != 2 {
+		t.Fatalf("authorized batch: %d %s", status, body)
+	}
+	status, _ = call(t, http.MethodGet, f.base+"/ems/screen/"+child, token, nil, nil)
+	if status != http.StatusOK {
+		t.Fatalf("child not saved: %d", status)
+	}
+	status, _ = call(t, http.MethodGet, f.base+"/ems/screen/"+outside, f.token, nil, nil)
+	if status != http.StatusNotFound {
+		t.Fatalf("out of scope target modified: %d", status)
+	}
+	status, _ = call(t, http.MethodPut, f.base+"/ems/screen/"+outside, token, automaticScreen(outside, 0), nil)
+	if status != http.StatusForbidden {
+		t.Fatalf("unauthorized direct save: %d", status)
+	}
+}
+
+func TestScreenConfiguratorLegacyWriteCannotBypassSavedVersion(t *testing.T) {
+	f := newPointConfigFixture(t)
+	root := snapshotRoot(t, f.base, f.token)
+	status, body := call(t, http.MethodPut, f.base+"/ems/screen/"+root, f.token, automaticScreen(root, 0), nil)
+	if status != http.StatusOK {
+		t.Fatalf("seed: %d %s", status, body)
+	}
+	status, body = call(t, http.MethodPut, f.base+"/ems/screen/"+root, f.token, map[string]any{"title": "stale legacy client", "point_ids": []string{}}, nil)
+	if status != http.StatusConflict {
+		t.Fatalf("legacy version bypass: %d %s", status, body)
+	}
+}
+
+func TestScreenConfiguratorBindsOnlyPointsOfBoundBusinessDevices(t *testing.T) {
+	base, token, _, ids := overviewLiveFixture(t)
+	unit := createNodeAPI(t, base, token, "unit", ids["North"], "Referenced member", 0)
+	status, body := call(t, http.MethodPatch, base+"/nodes/"+unit, token, map[string]any{"description": "Referenced member", "members_version": 0, "members": []map[string]any{{"role": "drive", "node_id": ids["North pump"], "required": true}}}, nil)
+	if status != http.StatusOK {
+		t.Fatalf("member binding: %d %s", status, body)
+	}
+	for _, item := range []struct {
+		layer, point string
+		want         int
+	}{
+		{ids["North"], ids["Zero pressure"], http.StatusOK},
+		{unit, ids["Zero pressure"], http.StatusOK},
+		{ids["North"], ids["South pressure"], http.StatusBadRequest},
+		{ids["root"], ids["Unbound telemetry"], http.StatusBadRequest},
+	} {
+		draft := automaticScreen(item.layer, 0)
+		if item.layer == ids["North"] && item.want != http.StatusOK {
+			draft["version"] = 1
+		}
+		draft["blocks"] = append(draft["blocks"].([]any), map[string]any{"type": "trend", "binding": map[string]any{"point_id": item.point}, "span": 2})
+		draft["slots"].(map[string]any)["side"] = []string{"trend"}
+		status, body := call(t, http.MethodPut, base+"/ems/screen/"+item.layer, token, draft, nil)
+		if status != item.want {
+			t.Fatalf("binding scope %s: got %d want %d: %s", item.point, status, item.want, body)
+		}
+	}
+}
+
+func TestScreenConfiguratorRejectsNonPointAndUnknownBindingFields(t *testing.T) {
+	f := newPointConfigFixture(t)
+	root := snapshotRoot(t, f.base, f.token)
+	area := createNodeAPI(t, f.base, f.token, "group", root, "Not a point", 0)
+	for _, binding := range []map[string]any{
+		{"point_id": area},
+		{"point_id": "", "script": "not allowed"},
+	} {
+		draft := automaticScreen(root, 0)
+		draft["blocks"] = append(draft["blocks"].([]any), map[string]any{"type": "trend", "binding": binding, "span": 2})
+		draft["slots"].(map[string]any)["side"] = []string{"trend"}
+		status, body := call(t, http.MethodPut, f.base+"/ems/screen/"+root, f.token, draft, nil)
+		if status != http.StatusBadRequest {
+			t.Fatalf("non-declarative/non-point binding accepted: %d %s", status, body)
+		}
+	}
+}
+
+func TestScreenConfiguratorSameKindPreflightsEveryVersion(t *testing.T) {
+	f := newPointConfigFixture(t)
+	root := snapshotRoot(t, f.base, f.token)
+	area := createNodeAPI(t, f.base, f.token, "group", root, "Source", 0)
+	sibling := createNodeAPI(t, f.base, f.token, "group", root, "Target", 0)
+	status, body := call(t, http.MethodPut, f.base+"/ems/screen/"+sibling, f.token, automaticScreen(sibling, 0), nil)
+	if status != http.StatusOK {
+		t.Fatalf("seed: %d %s", status, body)
+	}
+	draft := automaticScreen(area, 0)
+	draft["apply_to_same"] = true
+	for _, versions := range []any{nil, map[string]int{sibling: 0}} {
+		draft["target_versions"] = versions
+		status, body = call(t, http.MethodPut, f.base+"/ems/screen/"+area, f.token, draft, nil)
+		if status != http.StatusConflict {
+			t.Fatalf("stale/unknown sibling overwritten: %d %s", status, body)
+		}
+		status, _ = call(t, http.MethodGet, f.base+"/ems/screen/"+area, f.token, nil, nil)
+		if status != http.StatusNotFound {
+			t.Fatalf("failed preflight partially saved source: %d", status)
+		}
+	}
+	draft["target_versions"] = map[string]int{sibling: 1}
+	status, body = call(t, http.MethodPut, f.base+"/ems/screen/"+area, f.token, draft, nil)
+	if status != http.StatusOK {
+		t.Fatalf("fresh batch rejected: %d %s", status, body)
+	}
+	var saved map[string]any
+	call(t, http.MethodGet, f.base+"/ems/screen/"+sibling, f.token, nil, &saved)
+	if saved["version"] != float64(2) {
+		t.Fatalf("target version did not advance: %+v", saved)
+	}
+}
+
+func TestScreenConfiguratorRejectsMovingBlocksAcrossFixedSlots(t *testing.T) {
+	f := newPointConfigFixture(t)
+	root := snapshotRoot(t, f.base, f.token)
+	draft := automaticScreen(root, 0)
+	draft["slots"] = map[string]any{"top": []string{"kpi"}, "main": []string{"status"}, "side": []string{}}
+	status, body := call(t, http.MethodPut, f.base+"/ems/screen/"+root, f.token, draft, nil)
+	if status != http.StatusBadRequest {
+		t.Fatalf("fixed-slot violation accepted: %d %s", status, body)
+	}
+}
+
 func TestScreenConfiguratorRejectsApplyWithOutOfScopeTarget(t *testing.T) {
 	f := newPointConfigFixture(t)
 	root := snapshotRoot(t, f.base, f.token)

@@ -69,7 +69,6 @@ export function makeScreenDraft(screen: ScreenLike | null, layer: string, title:
     draft.title = title
     draft.version = inherited ? 0 : screen.version || 0
     delete draft.inherited_from
-    if (inherited) dropOutOfScopeBindings(draft, points)
     return syncScreenPointIDs(draft)
   }
   const draft = defaultScreen(layer, title, kind, points)
@@ -141,24 +140,6 @@ export function toScreenPayload(draft: ScreenDocument, applyToSame: boolean) {
   delete payload.inherited_from
   payload.apply_to_same = applyToSame
   return payload
-}
-
-function dropOutOfScopeBindings(draft: ScreenDocument, points: ScreenPointOption[]) {
-  const allowed = new Set(points.map(point => point.id))
-  const metrics = draft.blocks.find(block => block.type === "kpi")?.binding.metrics as ScreenMetric[] | undefined
-  for (const metric of metrics || []) {
-    if (!metric.point_id || allowed.has(metric.point_id)) continue
-    const used = new Set((metrics || []).map(item => item.metric).filter(Boolean))
-    const fallback = automaticMetrics.find(item => !used.has(item.key)) || automaticMetrics[0]
-    delete metric.point_id
-    metric.metric = fallback.key
-    metric.label = fallback.label
-    metric.target = ""
-  }
-  const recent = draft.blocks.find(block => block.type === "recent")?.binding
-  if (recent) recent.point_ids = (recent.point_ids || []).filter((id: string) => allowed.has(id))
-  const trend = draft.blocks.find(block => block.type === "trend")?.binding
-  if (trend && trend.point_id && !allowed.has(trend.point_id)) trend.point_id = ""
 }
 
 function defaultBinding(type: string, points: ScreenPointOption[]): Record<string, any> {

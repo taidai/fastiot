@@ -1,8 +1,11 @@
 package appapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+
+	domainaccess "fastiot/internal/domain/access"
 
 	"github.com/simpleiot/simpleiot/client"
 	"github.com/simpleiot/simpleiot/data"
@@ -107,9 +110,9 @@ func (h *Handler) validateScreenDocument(identity Identity, node data.NodeEdge, 
 		}
 	}
 	slotted := map[string]bool{}
-	for _, ids := range document.Slots {
+	for slot, ids := range document.Slots {
 		for _, id := range ids {
-			if slotted[id] || blocks[id].Type == "" {
+			if slotted[id] || blocks[id].Type == "" || screenBlockSlot(id) != slot {
 				return fmt.Errorf("invalid_slots")
 			}
 			slotted[id] = true
@@ -122,10 +125,30 @@ func (h *Handler) validateScreenDocument(identity Identity, node data.NodeEdge, 
 	return nil
 }
 
+func screenBlockSlot(kind string) string {
+	switch kind {
+	case "status", "kpi":
+		return "top"
+	case "flow", "children", "members", "deviceData", "devices", "recent":
+		return "main"
+	default:
+		return "side"
+	}
+}
+
 func (h *Handler) validateScreenBinding(identity Identity, node data.NodeEdge, block screenBlock) ([]string, error) {
 	binding := block.Binding
 	if binding == nil {
 		binding = map[string]any{}
+	}
+	allowedKeys := map[string]map[string]bool{
+		"kpi": {"metrics": true}, "recent": {"point_ids": true, "columns": true, "rows": true},
+		"trend": {"point_id": true}, "devices": {"columns": true}, "deviceData": {"tabs": true}, "flow": {"detail": true},
+	}
+	for key := range binding {
+		if !allowedKeys[block.Type][key] {
+			return nil, fmt.Errorf("invalid_binding")
+		}
 	}
 	switch block.Type {
 	case "kpi":
@@ -195,7 +218,9 @@ func remarshalScreenBinding(input any, target any) error {
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal(raw, target)
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(target)
 }
 
 func validateStringEnum(input any, allowed map[string]bool) error {
@@ -228,5 +253,42 @@ func (h *Handler) screenReferenceAllowed(identity Identity, layer, id string) bo
 	if err != nil || len(nodes) == 0 {
 		return false
 	}
-	return id == layer || h.users.IsUnder(id, layer)
+	if nodes[0].Type != "variable" && nodes[0].Type != data.NodeTypeModbusIO && nodes[0].Type != calculationType {
+		return false
+	}
+	point := nodes[0]
+	if point.Type == data.NodeTypeModbusIO {
+		channels, err := client.GetNodes(h.nc, "all", point.Parent, "", false)
+		if err != nil || len(channels) == 0 {
+			return false
+		}
+		server, _ := point.Points.ValueInt(data.PointTypeID, "")
+		model, bound := unitModelFor(channels[0], server)
+		return bound && model.BusinessNodeID != "" && h.allows(identity, model.BusinessNodeID) && h.screenReferenceInLayer(identity, layer, model.BusinessNodeID)
+	}
+	return h.screenReferenceInLayer(identity, layer, id)
+}
+
+func (h *Handler) screenReferenceInLayer(identity Identity, layer, id string) bool {
+	if id == layer || h.users.IsUnder(id, layer) {
+		return true
+	}
+	nodes, err := client.GetNodes(h.nc, "all", layer, "", false)
+	if err != nil || len(nodes) == 0 || screenLayerKind(nodes[0]) != "unit" {
+		return false
+	}
+	point, found := nodes[0].Points.Find(domainaccess.MembersPoint, "")
+	if !found || point.Tombstone%2 != 0 {
+		return false
+	}
+	var members []domainaccess.MemberRole
+	if json.Unmarshal([]byte(point.Txt()), &members) != nil {
+		return false
+	}
+	for _, member := range members {
+		if member.NodeID != "" && h.allows(identity, member.NodeID) && (id == member.NodeID || h.users.IsUnder(id, member.NodeID)) {
+			return true
+		}
+	}
+	return false
 }
