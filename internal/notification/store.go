@@ -248,6 +248,12 @@ func (s *Store) List(userID, before string, limit int, allow func(string) bool) 
 	page := Page{Items: []Item{}}
 	start := len(s.order) - 1
 	if before != "" {
+		// A cursor is a record reference, so authorize it before using its
+		// journal position. Hidden and unknown IDs must produce the same page.
+		cursor := s.records[before]
+		if cursor == nil || !slices.Contains(cursor.Request.RecipientIDs, userID) || !allow(cursor.Request.ScopeNodeID) {
+			return page
+		}
 		start = slices.Index(s.order, before) - 1
 	}
 	for i := start; i >= 0; i-- {

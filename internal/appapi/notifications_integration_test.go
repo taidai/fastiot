@@ -31,6 +31,68 @@ func inboxRule(t *testing.T, h *Handler, scope string) string {
 	return id
 }
 
+func TestNotificationsHTTPCursorAuthorization(t *testing.T) {
+	password := "isolated-cursor-fixture"
+	base, admin, h, _ := startInputServer(t, t.TempDir(), password)
+	root := snapshotRoot(t, base, admin)
+	a := createNodeAPI(t, base, admin, "site", root, "A", 0)
+	b := createNodeAPI(t, base, admin, "site", root, "B", 0)
+	moved := createNodeAPI(t, base, admin, "area", a, "Movable scope", 0)
+	aliceID := inboxAccount(t, base, admin, a, "alice@example.test", password)
+	bobID := inboxAccount(t, base, admin, a, "bob@example.test", password)
+	alice := loginAPI(t, base, "alice@example.test", password)
+	rules := map[string]string{a: inboxRule(t, h, a), moved: inboxRule(t, h, moved)}
+	create := func(action, recipient, scope string) string {
+		t.Helper()
+		created, err := h.CreateRuleNotification(notification.Request{RuleID: rules[scope], SourceRevision: "v1", ExecutionID: "execution", ActionID: action, ScopeNodeID: scope, RecipientIDs: []string{recipient}, Title: action})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return created.ID
+	}
+	oldest := create("oldest", aliceID, a)
+	older := create("older", aliceID, a)
+	foreign := create("foreign", bobID, a)
+	revoked := create("revoked", aliceID, moved)
+	newest := create("newest", aliceID, a)
+	status, body := call(t, "POST", base+"/nodes/"+moved+"/move", admin, map[string]any{"old_parent": a, "new_parent": b}, nil)
+	if status != 200 {
+		t.Fatalf("move: %d %s", status, body)
+	}
+	unknownStatus, unknownBody := call(t, "GET", base+"/notifications?limit=1&before=unknown", alice, nil, nil)
+	if unknownStatus != 200 {
+		t.Fatalf("unknown cursor: %d %s", unknownStatus, unknownBody)
+	}
+	for _, cursor := range []string{foreign, revoked} {
+		status, body := call(t, "GET", base+"/notifications?limit=1&before="+cursor, alice, nil, nil)
+		if status != unknownStatus || body != unknownBody {
+			t.Errorf("hidden cursor differs from unknown: %s: %d %s; unknown: %d %s", cursor, status, body, unknownStatus, unknownBody)
+		}
+	}
+	before := ""
+	for i, id := range []string{newest, older, oldest} {
+		var page notification.Page
+		status, body := call(t, "GET", base+"/notifications?limit=1&before="+before, alice, nil, &page)
+		next := id
+		if i == 2 {
+			next = ""
+		}
+		if status != 200 || len(page.Items) != 1 || page.Items[0].ID != id || page.NextBefore != next {
+			t.Fatalf("visible page %d: %d %s", i, status, body)
+		}
+		before = page.NextBefore
+	}
+	status, body = call(t, "POST", base+"/nodes/"+moved+"/move", admin, map[string]any{"old_parent": b, "new_parent": a}, nil)
+	if status != 200 {
+		t.Fatalf("restore: %d %s", status, body)
+	}
+	var restored notification.Page
+	status, body = call(t, "GET", base+"/notifications?limit=1&before="+revoked, alice, nil, &restored)
+	if status != 200 || len(restored.Items) != 1 || restored.Items[0].ID != older || restored.NextBefore != older {
+		t.Fatalf("restored cursor: %d %s", status, body)
+	}
+}
+
 func TestNotificationsHTTPAccountsScopeAndRestart(t *testing.T) {
 	dir, password := t.TempDir(), "isolated-inbox-fixture"
 	base, admin, h, stop := startInputServer(t, dir, password)

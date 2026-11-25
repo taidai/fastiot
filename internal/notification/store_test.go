@@ -9,6 +9,43 @@ import (
 	"testing"
 )
 
+func TestCursorMustBeCurrentlyVisibleToRecipient(t *testing.T) {
+	s, err := notification.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	create := func(action, recipient, scope string) string {
+		t.Helper()
+		result, err := s.Create(notification.Request{SourceRevision: "v1", RuleID: "r", ExecutionID: "e", ActionID: action, ScopeNodeID: scope, RecipientIDs: []string{recipient}, Title: action})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result.ID
+	}
+	oldest := create("oldest", "alice", "site")
+	older := create("older", "alice", "site")
+	foreign := create("foreign", "bob", "site")
+	revoked := create("revoked", "alice", "moved")
+	newest := create("newest", "alice", "site")
+	allow := func(scope string) bool { return scope == "site" }
+	for _, cursor := range []string{foreign, revoked, "unknown"} {
+		page := s.List("alice", cursor, 1, allow)
+		if len(page.Items) != 0 || page.NextBefore != "" {
+			t.Errorf("hidden/unknown cursor leaked pagination: %s %+v", cursor, page)
+		}
+	}
+	first := s.List("alice", "", 1, allow)
+	second := s.List("alice", first.NextBefore, 1, allow)
+	third := s.List("alice", second.NextBefore, 1, allow)
+	if len(first.Items) != 1 || first.Items[0].ID != newest || first.NextBefore != newest || len(second.Items) != 1 || second.Items[0].ID != older || second.NextBefore != older || len(third.Items) != 1 || third.Items[0].ID != oldest || third.NextBefore != "" {
+		t.Fatalf("visible pagination changed: %+v %+v %+v", first, second, third)
+	}
+	restored := s.List("alice", revoked, 1, func(string) bool { return true })
+	if len(restored.Items) != 1 || restored.Items[0].ID != older || restored.NextBefore != older {
+		t.Fatalf("restored scope cursor: %+v", restored)
+	}
+}
+
 func TestReadIsExplicitOwnScopedIdempotentAndDurable(t *testing.T) {
 	dir := t.TempDir()
 	s, err := notification.Open(dir)
