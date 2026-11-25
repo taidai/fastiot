@@ -571,7 +571,7 @@ async function setEnabled(value: boolean) {
 <style scoped>
 .tool-line { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; color: var(--faint); font-size: 12px; }
 .tool-line uni-button { margin: 0; min-height: 25px; padding: 2px 8px; font-size: 11px; }
-.strategy { display: grid; gap: 12px; min-width: 0; }
+.strategy { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; }
 .strategy-head, .rule-summary, .publish-bar, .editor-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .step-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .step-head b { font-size: 16px; }
