@@ -9,6 +9,10 @@ export class ApiError extends Error {
 
 const ERROR_TEXTS: Record<string, string> = {
   forbidden: "当前账号无权执行此操作",
+  industry_package_not_installed: "EMS 行业包未启用，此行业能力不可用",
+  project_industry_dependency_unavailable: "项目依赖的 EMS 行业包未启用，相关配置与控制已阻断",
+  industry_scope_required: "行业包启停需要项目根范围的站点设置权限",
+  package_in_use: "行业配置仍在使用，后端已拒绝停用",
   project_context_mismatch: "项目与当前运行实例不匹配，请刷新后重新选择",
   project_context_unavailable: "项目目录暂时无法读取，请稍后重试",
   project_versions_unavailable: "项目版本暂时无法读取，请稍后重试",

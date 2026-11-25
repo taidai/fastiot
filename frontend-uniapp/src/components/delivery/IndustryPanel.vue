@@ -15,12 +15,12 @@
         <view v-if="pkg.installed" class="package-provides">
           <view v-for="item in pkg.provides || []" :key="item" class="row capability-row"><span>{{ item }}</span><span class="src">{{ provideType(item) }}</span></view>
         </view>
-        <p v-else class="note">停用不删除已配置的能源对象；再次启用时它们仍在。启用不等于购买。</p>
+        <p v-else class="note">停用不删除已配置的能源对象；再次启用时它们仍在。启用不等于购买、部署或控制授权。</p>
         <view class="installed-at">{{ pkg.installed_at ? `启用时间：${clock(pkg.installed_at)}` : pkg.installed ? "默认启用；本站尚无单独启用记录" : "本站未启用" }}</view>
         <button v-if="pkg.installed && canChange" class="tag industry-toggle" :class="{ danger: confirmId === pkg.id }" :disabled="!!busy" @click="uninstall(pkg)">
           {{ busy === pkg.id ? "处理中…" : confirmId === pkg.id ? "确认停用（不删除数据）" : "停用（不删除数据）" }}
         </button>
-        <p v-if="pkg.installed" class="note">启用不等于购买；停用只关闭行业能力入口，不删除已配置对象。依赖版本不匹配时，项目包导入仍由后端拒绝。</p>
+        <p v-if="pkg.installed" class="note">启用不等于购买、部署或控制授权。工程仍使用此包时，后端拒绝停用；停用不删除依赖或已配置对象。依赖版本不匹配时，项目包导入仍由后端拒绝。</p>
       </section>
     </template>
   </template>
@@ -28,11 +28,13 @@
 
 <script setup lang="ts">
 import { onMounted, ref } from "vue"
+import { refreshAll } from '../../stores/session'
 import { request } from "../../api/client"
 import { clock, deliveryError } from "./contracts"
 
 type IndustryPackage = { id: string; version: string; label: string; provides?: string[]; installed: boolean; installed_at?: string }
 defineProps<{ canChange: boolean }>()
+const emit = defineEmits<{ (event: 'changed'): void }>()
 const packages = ref<IndustryPackage[]>([])
 const loading = ref(false)
 const busy = ref("")
@@ -59,7 +61,8 @@ async function install(pkg: IndustryPackage) {
   try {
     await request("/industry/packages", "POST", { id: pkg.id, version: pkg.version })
     message.value = `${pkg.label || pkg.id} 已启用；不代表购买或部署`
-    await load()
+    await Promise.all([load(), refreshAll()])
+    emit('changed')
   } catch (cause) { error.value = deliveryError(cause) } finally { busy.value = "" }
 }
 async function uninstall(pkg: IndustryPackage) {
@@ -69,7 +72,8 @@ async function uninstall(pkg: IndustryPackage) {
     await request(`/industry/packages/${encodeURIComponent(pkg.id)}`, "DELETE")
     message.value = `${pkg.label || pkg.id} 已停用；配置数据保留`
     confirmId.value = ""
-    await load()
+    await Promise.all([load(), refreshAll()])
+    emit('changed')
   } catch (cause) { error.value = deliveryError(cause) } finally { busy.value = "" }
 }
 onMounted(() => { void load() })

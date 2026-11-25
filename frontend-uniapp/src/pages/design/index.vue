@@ -3,6 +3,8 @@
     <TopBar active="design" :project="projectName" :meta="PREVIEW_MODE ? '原型预览数据 · 操作仅保存在当前会话' : '按步骤牵引，不使用演示配置'" :pending="pendingAlarms.length" :alpha="42"
       show-ems :ems-installed="PREVIEW_MODE ? previewWorkspace.emsEnabled : emsInstalled" :ems-busy="industryBusy" @project-change="changeProject" @new-project="newPreviewProject" @import-project="navigate('delivery')" @toggle-ems="toggleEms" @navigate="navigate" @bell="alarmOpen = true" @alpha="() => {}" />
     <view v-if="!PREVIEW_MODE && session.error" class="error">{{ session.error }}</view>
+    <IndustryGate v-if="industryBlocked" />
+    <template v-else>
     <view class="statebar">
       <span>项目 <b>{{ projectName }}</b></span><span>工作台 <b>设计</b></span><span>页面 <b>{{ activeTool || '台账树' }}</b></span><span v-if="selectedRow">选中 <b>{{ selectedRow.name }}</b> · {{ selectedRow.kind }}</span><span>EMS <b>{{ emsInstalled === null ? "—" : emsInstalled ? "已启用" : "未启用" }}</b></span>
     </view>
@@ -113,10 +115,13 @@
       </main>
     </view>
     <AlarmCenter v-if="alarmOpen" :alarms="session.alarms" @close="alarmOpen = false" @ack="acknowledge" @close-alarm="close" />
+    </template>
   </view>
 </template>
 
 <script setup lang="ts">
+import IndustryGate from '../../components/IndustryGate.vue'
+import { industryBlocked } from '../../stores/session'
 import { currentProject } from '../../stores/projects'
 import { computed, onMounted, onUnmounted, ref, watch } from "vue"
 import TopBar from "../../components/TopBar.vue"

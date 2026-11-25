@@ -50,6 +50,7 @@ type Handler struct {
 	deepseek           *deepseek.Service
 	generatedScreens   *genscreen.Store
 	packages           atomic.Pointer[industry.Registry]
+	industryMu         sync.RWMutex // activation is exclusive with engineering/control mutations
 
 	siteGoalMu    sync.Mutex
 	siteGoalCache map[string]siteGoalEntry
@@ -248,6 +249,18 @@ func (h *Handler) authorizeRoute(w http.ResponseWriter, r *http.Request, identit
 		writeError(w, http.StatusForbidden, route.Reason)
 		return false
 	}
+	// Activation changes the whole runtime, not only the caller's visible Site.
+	if r.Method != http.MethodGet && strings.HasPrefix(strings.Trim(r.URL.Path, "/"), "industry/packages") {
+		root, err := client.GetRootNode(h.nc)
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "project_context_unavailable")
+			return false
+		}
+		if !h.allows(identity, root.ID) {
+			writeError(w, http.StatusForbidden, "industry_scope_required")
+			return false
+		}
+	}
 	if route.UnknownTarget != nil && !identity.Policy.Admin {
 		writeError(w, route.UnknownTarget.Status, route.UnknownTarget.Reason)
 		return false
@@ -322,6 +335,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Keep the dependency check and the eventual mutation in the same activation
+	// epoch: uninstall cannot pass its empty-project check during EMS creation.
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		if strings.HasPrefix(path, "industry/packages") {
+			h.industryMu.Lock()
+			defer h.industryMu.Unlock()
+		} else {
+			h.industryMu.RLock()
+			defer h.industryMu.RUnlock()
+		}
+	}
 	if route, declared := authz.Required(r); declared && !h.packageInstalled(route.Package) {
 		writeError(w, http.StatusConflict, ReasonPackageNotInstalled)
 		return
@@ -331,6 +355,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		!strings.HasPrefix(path, "ems/acceptance/") &&
 		!strings.HasPrefix(path, "ems/allocators/")
 	if !delegateEMS && !h.authorizeRoute(w, r, identity) {
+		return
+	}
+	if route, declared := authz.Required(r); declared && industryDependentMutation(r, route) && !h.requireProjectIndustry(w, identity) {
 		return
 	}
 	if delegateEMS {
@@ -757,8 +784,14 @@ func (h *Handler) snapshot(w http.ResponseWriter, identity Identity) {
 		writeError(w, http.StatusServiceUnavailable, "snapshot_unavailable")
 		return
 	}
+	required, err := h.projectRequiresIndustry(identity, nodes)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "project_context_unavailable")
+		return
+	}
 	writeJSON(w, map[string]any{
 		"user": identity, "roots": identity.Anchors, "nodes": data.RedactNodes(publicInputNodes(markSiteRoot(nodes))),
+		"industry":                h.projectIndustry(required),
 		"session_timeout_seconds": int(h.sessionTimeout / time.Second),
 	})
 }
@@ -836,6 +869,10 @@ func (h *Handler) createNode(w http.ResponseWriter, r *http.Request, identity Id
 	input.Description = strings.TrimSpace(input.Description)
 	if input.Description == "" || input.Parent == "" {
 		writeError(w, http.StatusBadRequest, "invalid_node")
+		return
+	}
+	if !h.packageInstalled(industry.EMSPackageID) && packageNeedsIndustry([]data.NodeEdge{{Type: input.Type}}) {
+		writeError(w, http.StatusConflict, ReasonPackageNotInstalled)
 		return
 	}
 	if input.SiteTemplate != "" {

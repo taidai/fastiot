@@ -39,6 +39,8 @@ watch(() => session.layer, id => {
   if (session.snapshot?.nodes.some(node => node.id === id)) rememberLayer(id)
 }, { flush: 'sync' })
 
+export const industryBlocked = computed(() => !PREVIEW_MODE && session.snapshot?.industry?.blocked === true)
+
 export const pendingAlarms = computed(() => session.alarms.filter(alarm => alarm.active))
 export const currentLayer = computed(() => {
   if (!session.snapshot) return null

@@ -3,6 +3,8 @@
     <TopBar active="overview" :project="projectName" :meta="syncMeta" :pending="unackedAlarms.length" :alpha="appearance.alpha"
       :theme="appearance.theme" themes show-appearance show-bell @navigate="navigate" @bell="alarmOpen = true" @alpha="setAlpha" @theme="setTheme" @reset="resetAppearance" />
 
+    <IndustryGate v-if="industryBlocked" />
+    <template v-else>
     <view class="layout">
       <LedgerTree :selected="selectedKey" :devices="ledger" :alarms="session.alarms" @select="selectLayer" />
       <main class="stage">
@@ -83,11 +85,14 @@
 
     <AlarmCenter v-if="alarmOpen" :alarms="session.alarms" :busy-id="alarmBusy" :error="alarmError" @close="alarmOpen = false"
       @ack="runAlarm('ack', $event)" @close-alarm="runAlarm('close', $event)" @history="openHistory" @locate="locateDevice" />
+    </template>
     <view v-if="session.error" class="error page-error">{{ session.error }}</view>
   </view>
 </template>
 
 <script setup lang="ts">
+import IndustryGate from '../../components/IndustryGate.vue'
+import { industryBlocked } from '../../stores/session'
 import { currentProject } from '../../stores/projects'
 import { computed, onMounted, ref, watch } from "vue"
 import "./theme.css"

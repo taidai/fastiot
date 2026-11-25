@@ -25,6 +25,7 @@ export type Snapshot = {
   roots: string[]
   nodes: Node[]
   session_timeout_seconds?: number
+  industry?: { id: string; version: string; installed: boolean; required: boolean; blocked: boolean }
 }
 
 export type StateValue = {
