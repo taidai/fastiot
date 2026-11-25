@@ -367,20 +367,7 @@ func packageReferences(node data.NodeEdge, p data.Point) []string {
 		if json.Unmarshal([]byte(p.Txt()), &document) != nil {
 			return nil
 		}
-		for _, target := range document.Draft.Bindings.Points {
-			refs = append(refs, target.NodeID)
-		}
-		for _, target := range document.Draft.Bindings.Actions {
-			refs = append(refs, target.NodeID)
-		}
-		if document.Applied != nil {
-			for _, target := range document.Applied.Bindings.Points {
-				refs = append(refs, target.NodeID)
-			}
-			for _, target := range document.Applied.Bindings.Actions {
-				refs = append(refs, target.NodeID)
-			}
-		}
+		document.MapReferences(func(id string) string { refs = append(refs, id); return id })
 	}
 	out := refs[:0]
 	for _, ref := range refs {
@@ -758,40 +745,13 @@ func rewritePackagePoint(node data.NodeEdge, p data.Point, idMap map[string]stri
 			return &point, true, nil
 		}
 		var unresolved []string
-		rewriteDefinition := func(def *decision.StateMachineDefinition) {
-			points := make(map[string]decision.Target, len(def.Bindings.Points))
-			for key, target := range def.Bindings.Points {
-				if target.NodeID == "" {
-					points[key] = target
-					continue
-				}
-				if mapped, ok := idMap[target.NodeID]; ok {
-					target.NodeID = mapped
-					points[key] = target
-				} else {
-					unresolved = append(unresolved, target.NodeID)
-				}
+		document.MapReferences(func(id string) string {
+			if mapped, ok := idMap[id]; ok {
+				return mapped
 			}
-			def.Bindings.Points = points
-			actions := make(map[string]decision.Target, len(def.Bindings.Actions))
-			for key, target := range def.Bindings.Actions {
-				if target.NodeID == "" {
-					actions[key] = target
-					continue
-				}
-				if mapped, ok := idMap[target.NodeID]; ok {
-					target.NodeID = mapped
-					actions[key] = target
-				} else {
-					unresolved = append(unresolved, target.NodeID)
-				}
-			}
-			def.Bindings.Actions = actions
-		}
-		rewriteDefinition(&document.Draft)
-		if document.Applied != nil {
-			rewriteDefinition(document.Applied)
-		}
+			unresolved = append(unresolved, id)
+			return ""
+		})
 		// 运行状态不随包迁移：重置到初始状态并剥离执行证据。
 		document.CurrentState = document.Draft.InitialState
 		document.LastExecution = nil

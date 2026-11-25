@@ -47,6 +47,7 @@ type Handler struct {
 	inputStart         time.Time
 	inputLastWall      time.Time
 	ownershipMu        sync.Mutex
+	stateMachineMu     sync.Mutex
 	ems                *emsapi.Handler
 	localCommands      *command.Manager
 	opcua              *OpcuaManager

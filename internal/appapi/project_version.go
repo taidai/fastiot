@@ -114,6 +114,12 @@ func (h *Handler) snapshotSite(identity Identity, siteID, note string) (projectV
 				}
 				p = data.NewPointString(virtualInputDocument, "0", encoded)
 			}
+			if node.Type == stateMachineType && p.Type == stateMachineDocumentPoint {
+				p, err = machineConfigurationPoint(p)
+				if err != nil {
+					return projectVersion{}, err
+				}
+			}
 			points = append(points, p)
 		}
 		version.Nodes = append(version.Nodes, versionNode{ID: node.ID, Type: node.Type, Parent: node.Parent, Points: points})
@@ -236,6 +242,8 @@ func (h *Handler) versionsHandler(w http.ResponseWriter, identity Identity, site
 }
 
 func (h *Handler) rollbackHandler(w http.ResponseWriter, identity Identity, siteID, versionID string) {
+	h.stateMachineMu.Lock()
+	defer h.stateMachineMu.Unlock()
 	if siteID == "" {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
@@ -270,6 +278,24 @@ func (h *Handler) rollbackHandler(w http.ResponseWriter, identity Identity, site
 			return
 		}
 	}
+	for i, saved := range version.Nodes {
+		if saved.Type != stateMachineType {
+			continue
+		}
+		var live data.NodeEdge
+		for _, node := range currentNodes {
+			if node.ID == saved.ID {
+				live = node
+				break
+			}
+		}
+		prepared, err := h.prepareMachineVersionRestore(saved, live)
+		if err != nil {
+			writeError(w, 409, err.Error())
+			return
+		}
+		version.Nodes[i] = prepared
+	}
 	// 回退前先冻结当前配置，回退失败或需要反悔时有据可查。
 	if current, err := h.snapshotSite(identity, siteID, "回退前自动快照"); err == nil {
 		_ = h.saveVersion(current)
@@ -292,9 +318,16 @@ func (h *Handler) rollbackHandler(w http.ResponseWriter, identity Identity, site
 		}
 		if existing[node.ID] {
 			if len(points) > 0 {
-				if err := client.SendPoints(h.nc, client.SubjectNodePoints(node.ID), points, false); err != nil {
+				if err := client.SendPoints(h.nc, client.SubjectNodePoints(node.ID), points, node.Type == stateMachineType); err != nil {
 					writeError(w, http.StatusBadGateway, "restore_failed")
 					return
+				}
+				if node.Type == stateMachineType {
+					expected, _ := points.Text(stateMachineDocumentPoint, "")
+					if h.verifyStateMachine(node.ID, expected) != nil {
+						writeError(w, 503, "state_machine_persistence_unconfirmed")
+						return
+					}
 				}
 			}
 			result.Updated++
