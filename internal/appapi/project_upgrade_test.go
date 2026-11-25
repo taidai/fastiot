@@ -333,9 +333,24 @@ func TestProjectUpgradeRefusesUnresolvedConflictUntilSomeoneChooses(t *testing.T
 		t.Fatal("blocked upgrade wrote a runtime value into the live project")
 	}
 
+	writes, err := fixture.nc.SubscribeSync(siotclient.SubjectNodePoints(fixture.plantID) + ".assetCode.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = writes.Unsubscribe() })
+	if err := fixture.nc.Flush(); err != nil {
+		t.Fatal(err)
+	}
 	status, body = fixture.apply(t, fixture.siteID, baseline, template, map[string]string{conflictID: upgradeResolutionTemplate})
 	if status != 200 {
 		t.Fatalf("resolved apply = %d %s", status, body)
+	}
+	write, err := writes.NextMsg(time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if write.Reply == "" {
+		t.Fatal("upgrade configuration write must request storage acknowledgement before freezing its version")
 	}
 	var result upgradeResult
 	if err := json.Unmarshal([]byte(body), &result); err != nil {
@@ -350,6 +365,21 @@ func TestProjectUpgradeRefusesUnresolvedConflictUntilSomeoneChooses(t *testing.T
 	versions, err := fixture.handler.listVersions(fixture.siteID)
 	if err != nil || len(versions) < 3 {
 		t.Fatalf("versions after upgrade = %d, %v", len(versions), err)
+	}
+	frozen, err := fixture.handler.loadVersion(fixture.siteID, result.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frozenAsset := ""
+	for _, node := range frozen.Nodes {
+		if node.ID == fixture.plantID {
+			if point, found := node.Points.Find(PointTypeAssetCode, ""); found {
+				frozenAsset = point.Txt()
+			}
+		}
+	}
+	if frozenAsset != "PLANT-C" {
+		t.Fatalf("new baseline froze stale configuration: %q", frozenAsset)
 	}
 	meter, found = fixture.childByName(t, fixture.plantID, "计量点")
 	if !found {
