@@ -44,7 +44,7 @@ The worktree starts at the current committed source plus only task-related pendi
 
 ## Execution log
 
-- Baseline checkpoint: `55b40dc`; 110 frontend tests and type-check passed. Go baseline verification is running in an isolated Docker named volume.
+- Baseline checkpoint: `55b40dc`; 110 frontend tests and type-check passed. Go authz, decision, appapi and domain/access suites passed from an isolated Docker named volume (appapi 106.5s).
 - Ticket 01 runs on `refs/heads/ticket/prototype-backend-01`, explicitly based on the integration checkpoint. The automatic agent worktree initially chose a different base; that mismatch was detected before editing and replaced with the correctly based worktree.
 - Frontier starts at 01; 02 follows. Independent branches open after 02 passes integration.
 - Local baseline and per-ticket verification must be recorded before marking a ticket complete.
