@@ -14,12 +14,16 @@ export const session = reactive({
   layer: "",
   loading: false,
   error: "",
+  runtimeError: "",
   lastSync: "",
 })
 
 let timer: ReturnType<typeof setInterval> | undefined
+let runtimeSerial = 0
 
 function clearProjectData() {
+  runtimeSerial++
+  session.runtimeError = ""
   session.snapshot = null
   session.values = []
   session.alarms = []
@@ -96,15 +100,35 @@ async function refreshSnapshot() {
 }
 
 async function refreshRuntime() {
-  const [state, quality, alarms] = await Promise.all([
-    request<{ values: StateValue[]; evaluated_at: string }>("/ems/state"),
-    request<{ channels: unknown[]; devices: unknown[] }>("/ems/quality"),
-    request<{ alarms: EmsAlarm[] }>("/ems/alarms"),
-  ])
-  session.values = state.values
-  session.quality = quality
-  session.alarms = alarms.alarms
-  session.lastSync = state.evaluated_at
+  const serial = ++runtimeSerial
+  const generation = projectContext.generation
+  const token = session.token
+  const current = () => serial === runtimeSerial && generation === projectContext.generation && token === session.token
+  try {
+    const [state, quality, alarms] = await Promise.all([
+      request<{ values: StateValue[]; evaluated_at: string }>("/ems/state"),
+      request<{ channels: unknown[]; devices: unknown[] }>("/ems/quality"),
+      request<{ alarms: EmsAlarm[] }>("/ems/alarms"),
+    ])
+    if (!current()) return
+    session.values = state.values
+    session.quality = quality
+    session.alarms = alarms.alarms
+    session.lastSync = state.evaluated_at
+    if (session.error === session.runtimeError) session.error = ""
+    session.runtimeError = ""
+  } catch (error) {
+    if (!current()) return
+    // A failed query is not evidence of a device going offline. Do not keep
+    // displaying the preceding successful poll as current, either.
+    session.values = []
+    session.quality = { channels: [], devices: [] }
+    session.lastSync = ""
+    session.runtimeError = error instanceof ApiError
+      ? error.status === 403 ? `无权读取实时数据：${error.message}` : `实时数据查询失败：${error.message}`
+      : "服务连接中断，无法读取实时数据（不代表设备离线）"
+    throw new ApiError(session.runtimeError, error instanceof ApiError ? error.status : 0, error instanceof ApiError ? error.code : "connection_unavailable")
+  }
 }
 
 export async function refreshAll() {
@@ -136,6 +160,7 @@ export function startPolling() {
 }
 
 export function stopPolling() {
+  runtimeSerial++
   if (timer) clearInterval(timer)
   timer = undefined
 }

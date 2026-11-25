@@ -121,7 +121,7 @@ const pointRows = computed(() => devicePoints.value.map(point => {
   const node = props.nodes.find(item => item.id === point.id)
   const sample = props.values.find(item => item.point_id === point.id)
   const label = businessName(node, point.name || "未命名点位")
-  return { id: point.id, label, value: displaySample(sample, label), unit: unitOf(node) || point.unit || "", quality: qualityLabel(sample?.quality) }
+  return { id: point.id, label, value: sample?.quality === 'good' ? displaySample(sample, label) : '—', unit: unitOf(node) || point.unit || "", quality: sample ? qualityLabel(sample.quality) : '无数据' }
 }))
 const storedManualRecords = computed(() => {
   const result: DisplayRecord[] = []

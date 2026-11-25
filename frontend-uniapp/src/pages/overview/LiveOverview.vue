@@ -18,12 +18,13 @@
               :title="metrics[index] ? `${metrics[index].quality} · ${metrics[index].time}` : '未配置指标'"
               @click="metrics[index] && openHistory(metrics[index].id)" @keydown.enter="metrics[index] && openHistory(metrics[index].id)" @keydown.space.prevent="metrics[index] && openHistory(metrics[index].id)">
               <view class="k"><svg viewBox="0 0 24 24" aria-hidden="true"><path :d="metricIcons[index]" /></svg>{{ metrics[index]?.label || '未配置指标' }}</view><view class="v">{{ metrics[index]?.value || '—' }}<text v-if="metrics[index]?.unit">{{ metrics[index].unit }}</text></view>
+              <view v-if="metrics[index]" class="metric-quality">{{ metrics[index].quality }} · {{ metrics[index].time }}<text v-if="metrics[index].target"> · {{ metrics[index].target }}</text></view>
             </view>
           </view>
         </view>
 
         <view class="primary-region">
-        <FlowScene v-if="!isDevice" :layer-name="layerName" :metrics="flowMetrics" />
+        <FlowScene v-if="!isDevice" :layer-name="layerName" :metrics="flowMetrics" :topology="flowTopology" />
 
         <view class="lower">
           <DevicePanel v-if="selectedDevice" :device="selectedDevice" :values="scopedValues" :nodes="session.snapshot?.nodes || []" />
@@ -31,13 +32,13 @@
             <view class="card-title">设备清单<text>{{ scopedDevices.length }}</text></view>
             <view v-if="ledgerError" class="error">{{ ledgerError }}</view>
             <view class="table-wrap">
-              <table><thead><tr><th>设备</th><th>通信</th><th>运行</th><th>主要值</th><th>质量</th><th>更新</th></tr></thead>
+              <table><thead><tr><th>设备</th><th>通信</th><th>运行</th><th>维护</th><th>主要值</th><th>质量</th><th>更新</th></tr></thead>
                 <tbody v-if="deviceRows.length"><tr v-for="row in deviceRows" :key="row.id">
                   <td><button class="device-link" @click="selectDevice(row.id)">{{ row.name }}</button></td>
                   <td :class="{ warn: row.communication !== '在线' }">{{ row.communication }}</td>
-                  <td>{{ row.runState }}</td><td class="num">{{ row.value }}</td><td>{{ row.quality }}</td><td class="num">{{ row.time }}</td>
+                  <td>{{ row.runState }}</td><td>{{ row.maintenance }}</td><td class="num">{{ row.value }}</td><td>{{ row.quality }}</td><td class="num">{{ row.time }}</td>
                 </tr></tbody>
-                <tbody v-else><tr class="placeholder-row"><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td></tr></tbody>
+                <tbody v-else><tr class="placeholder-row"><td colspan="7">{{ ledgerError ? '查询不可用' : '没有已接入设备' }}</td></tr></tbody>
               </table>
             </view>
             <view class="card-title recent-changes">最近变化</view>
@@ -45,7 +46,7 @@
             <view v-if="!recentChanges.length" class="run"><span>—</span><span class="run-state">—</span></view>
           </section>
           <section class="panel glass">
-            <view class="card-title">最近数据<view class="link" role="button" tabindex="0" :aria-disabled="!recentPointId" @click="openHistory()" @keydown.enter="openHistory()" @keydown.space.prevent="openHistory()">查看全部</view></view>
+            <view class="card-title">最近数据 · {{ metrics[0]?.label || '未绑定点位' }}<view class="link" role="button" tabindex="0" :aria-disabled="!recentPointId" @click="openHistory()" @keydown.enter="openHistory()" @keydown.space.prevent="openHistory()">查看全部</view></view>
             <view v-if="recentLoading" class="empty">正在读取最近 15 分钟数据…</view>
             <view v-else-if="recentError" class="error">{{ recentError }}</view>
             <HistoryTable v-else :records="recent" compact />
@@ -85,6 +86,7 @@
 
     <AlarmCenter v-if="alarmOpen" :alarms="session.alarms" :busy-id="alarmBusy" :error="alarmError" @close="alarmOpen = false"
       @ack="runAlarm('ack', $event)" @close-alarm="runAlarm('close', $event)" @history="openHistory" @locate="locateDevice" />
+    <view v-if="screenError" class="error page-error">{{ screenError }}</view>
     </template>
     <view v-if="session.error" class="error page-error">{{ session.error }}</view>
   </view>
@@ -93,28 +95,29 @@
 <script setup lang="ts">
 import IndustryGate from '../../components/IndustryGate.vue'
 import { industryBlocked } from '../../stores/session'
-import { currentProject } from '../../stores/projects'
-import { computed, onMounted, ref, watch } from "vue"
+import { currentProject, projectContext } from '../../stores/projects'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import "./theme.css"
 import { onHide, onLoad, onShow } from "@dcloudio/uni-app"
 import TopBar from "../../components/TopBar.vue"
 import LedgerTree from "../../components/LedgerTree.vue"
 import FlowScene from "../../components/FlowScene.vue"
+import { memberRolesOf } from "../../components/design/members"
 import AlarmCenter from "../../components/AlarmCenter.vue"
 import HistoryTable from "../../components/HistoryTable.vue"
 import DevicePanel from "./DevicePanel.vue"
 import OverviewTrend from "./OverviewTrend.vue"
 import HandoverPanel from "./HandoverPanel.vue"
-import { request } from "../../api/client"
+import { ApiError, request } from "../../api/client"
 import {
-  acknowledgeAlarm, closeAlarm, currentLayer as currentNode, layerPath, loadHistory, loadScreen,
+  acknowledgeAlarm, closeAlarm, currentLayer as currentNode, layerPath, loadHistory,
   nameOf, requireAuth, session, startPolling, stopPolling,
 } from "../../stores/session"
 import type { HistoryRecord, ScreenConfig } from "../../types/api"
 import { historyValueText } from "../history/history"
 import {
   boundDevicesForLayer, businessName, descendantNodeIds, deviceKey, displaySample, healthLabel, metricForPoint,
-  qualityLabel, shortTime, summarizeSuccessRate, unitOf, valueInLayer, alarmInLayer,
+  qualityLabel, shortTime, summarizeSuccessRate, unitOf, valueInLayer, alarmInLayer, devicePointIds, screenMetricTarget,
 } from "./overview"
 import type { LedgerDevice, OverviewScreen, QualityStats } from "./overview"
 import { DEFAULT_APPEARANCE, applyAppearanceDocument, normalizeAppearance } from "./appearance"
@@ -124,6 +127,7 @@ const alarmOpen = ref(false)
 const alarmBusy = ref("")
 const alarmError = ref("")
 const screen = ref<(ScreenConfig & OverviewScreen) | null>(null)
+const screenError = ref("")
 const recent = ref<HistoryRecord[]>([])
 const recentLoading = ref(false)
 const recentError = ref("")
@@ -150,18 +154,20 @@ function setTheme(value: AppearanceTheme) { appearance.value = normalizeAppearan
 function resetAppearance() { appearance.value = { ...DEFAULT_APPEARANCE }; persistAppearance(); applyAppearanceDocument(appearance.value) }
 
 const projectName = computed(() => currentProject.value?.name || "未选择项目")
-const selectedDevice = computed(() => ledger.value.find(device => deviceKey(device) === selectedDeviceId.value) || null)
+const isBusinessDevice = computed(() => !!currentNode.value && !session.snapshot?.roots.includes(currentNode.value.id) && ["device", "modbus_device"].includes(currentNode.value.type))
+const selectedDevice = computed(() => ledger.value.find(device => selectedDeviceId.value ? deviceKey(device) === selectedDeviceId.value : isBusinessDevice.value && device.business_node_id === session.layer) || null)
 const selectedKey = computed(() => selectedDeviceId.value ? `device:${selectedDeviceId.value}` : session.layer)
 const layerName = computed(() => selectedDevice.value?.name || (currentNode.value ? nameOf(currentNode.value) : "未选择对象"))
 const pathText = computed(() => {
   const path = layerPath(session.layer).map(node => nameOf(node))
-  if (selectedDevice.value) path.push(selectedDevice.value.name)
+  if (selectedDevice.value && !isBusinessDevice.value) path.push(selectedDevice.value.name)
   return path.join(" / ") || "—"
 })
-const isDevice = computed(() => !!selectedDevice.value || !!currentNode.value && ["device", "modbus_device"].includes(currentNode.value.type))
+const isDevice = computed(() => !!selectedDevice.value || isBusinessDevice.value)
+const members = computed(() => memberRolesOf(currentNode.value))
 const scopedDevices = computed(() => {
   if (selectedDevice.value) return [selectedDevice.value]
-  return currentNode.value && session.snapshot ? boundDevicesForLayer(currentNode.value.id, session.snapshot.nodes, ledger.value) : []
+  return currentNode.value && session.snapshot ? boundDevicesForLayer(currentNode.value.id, session.snapshot.nodes, ledger.value, members.value.flatMap(member => member.node_id ? [member.node_id] : [])) : []
 })
 const scopedDeviceIds = computed(() => new Set(scopedDevices.value.map(device => deviceKey(device))))
 const knownDeviceIds = computed(() => new Set(ledger.value.map(device => deviceKey(device))))
@@ -171,11 +177,20 @@ const scopedValues = computed(() => session.values.filter(value => {
   if (!currentNode.value) return false
   return valueInLayer(value, scopeNodeIds.value, scopedDeviceIds.value, knownDeviceIds.value)
 }))
+const availablePointIds = computed(() => new Set([
+  ...devicePointIds(session.snapshot?.nodes || [], scopedDevices.value),
+  ...scopedValues.value.map(value => value.point_id),
+]))
 const pointIds = computed(() => {
-  if (!selectedDevice.value && screen.value?.point_ids?.length) return screen.value.point_ids.filter(id => scopeNodeIds.value.has(id)).slice(0, 6)
-  return [...new Set(scopedValues.value.map(value => value.point_id))].slice(0, 6)
+  if (screenError.value) return []
+  if (!selectedDevice.value && screen.value?.point_ids?.length) return screen.value.point_ids.filter(id => availablePointIds.value.has(id)).slice(0, 6)
+  return [...availablePointIds.value].slice(0, 6)
 })
-const metrics = computed(() => pointIds.value.map(id => metricForPoint(id, session.snapshot, scopedValues.value)))
+const metrics = computed(() => pointIds.value.map(id => ({
+  ...metricForPoint(id, session.snapshot, scopedValues.value),
+  ...(session.runtimeError ? { quality: session.runtimeError.startsWith('无权') ? '无权限' : '查询不可用' } : {}),
+  target: screenMetricTarget(screen.value, id),
+})))
 const metricIcons = [
   "M4 12a8 8 0 1 1 16 0M12 12l4-4M12 4v2M4 12h2M18 12h2",
   "M13 2L5 13h6l-1 9 8-12h-6z",
@@ -185,6 +200,23 @@ const metricIcons = [
   "M4 18v-4M9 18V9M14 18V5M19 18V2",
 ]
 const flowMetrics = computed(() => metrics.value.slice(0, 3))
+const flowTopology = computed(() => {
+  const nodes = session.snapshot?.nodes || []
+  const devices = scopedDevices.value.map(device => {
+    const business = nodes.find(node => node.id === device.business_node_id)
+    const primary = devicePointIds(nodes, [device])[0]
+    const metric = primary ? metricForPoint(primary, session.snapshot, scopedValues.value) : null
+    return {
+      id: deviceKey(device), label: businessName(business, device.name),
+      relation: `${businessName(nodes.find(node => node.id === business?.parent), layerName.value)} → 设备绑定`,
+      detail: metric ? `${metric.label} ${metric.value} ${metric.unit} · ${metric.quality}` : '无数据',
+    }
+  })
+  return [...devices, ...members.value.map(member => {
+    const target = nodes.find(node => node.id === member.node_id)
+    return { id: `member:${member.role}`, label: target ? businessName(target) : member.node_id ? '不可见成员' : '未绑定成员', relation: `${layerName.value} → ${member.role}${member.required ? '（必需）' : ''}`, detail: target ? '成员引用，不代表能量流向' : '无数据' }
+  })]
+})
 const recentPointId = computed(() => pointIds.value[0] || "")
 const recentChanges = computed(() => {
   const label = metrics.value[0]?.label || "观测值"
@@ -192,6 +224,7 @@ const recentChanges = computed(() => {
   for (let index = 1; index < recent.value.length && changes.length < 3; index += 1) {
     const current = recent.value[index - 1]
     const previous = recent.value[index]
+    if (![current, previous].every(record => ['good', '有效'].includes(record.quality || '') && record.kind !== 'quality_event')) continue
     const currentValue = historyValueText(current)
     const previousValue = historyValueText(previous)
     if (currentValue === "—" || previousValue === "—" || currentValue === previousValue) continue
@@ -212,7 +245,7 @@ const scopedChannels = computed(() => {
 })
 const onlineCount = computed(() => scopedDevices.value.filter(device => {
   const quality = qualityDevices.value.find(item => item.device_id === deviceKey(device))
-  return (quality?.health || device.health) === "healthy"
+  return quality?.health === "healthy"
 }).length)
 const goodValueCount = computed(() => scopedValues.value.filter(value => value.quality === "good" || value.quality === "有效").length)
 const scopedQualityDevices = computed(() => qualityDevices.value.filter(item => !!item.device_id && scopedDeviceIds.value.has(item.device_id)))
@@ -220,10 +253,13 @@ const successRate = computed(() => summarizeSuccessRate(scopedQualityDevices.val
 const selectedCommunication = computed(() => {
   if (!selectedDevice.value) return "—"
   const id = deviceKey(selectedDevice.value)
-  return healthLabel(qualityDevices.value.find(item => item.device_id === id)?.health || selectedDevice.value.health)
+  return healthLabel(qualityDevices.value.find(item => item.device_id === id)?.health || 'unknown')
 })
-const onlineText = computed(() => isDevice.value ? `通信${selectedCommunication.value} · ${scopedValues.value.length} 个观测` : `在线 ${onlineCount.value} / ${scopedDevices.value.length}`)
-const syncMeta = computed(() => `更新于 ${shortTime(session.lastSync)} · 通道 ${scopedChannels.value.length} · 有效观测 ${goodValueCount.value}/${scopedValues.value.length}`)
+const onlineText = computed(() => session.runtimeError ? '通信状态未知 · 实时查询不可用' : isDevice.value ? `通信${selectedCommunication.value} · ${scopedValues.value.length} 个观测` : `在线 ${onlineCount.value} / ${scopedDevices.value.length}`)
+const syncMeta = computed(() => {
+  const observed = scopedValues.value.map(value => value.source_time || '').filter(Boolean).sort().slice(-1)[0]
+  return `最近观测 ${shortTime(observed)} · 查询于 ${shortTime(session.lastSync)} · 通道 ${scopedChannels.value.length} · 有效观测 ${goodValueCount.value}/${scopedValues.value.length}`
+})
 const unackedAlarms = computed(() => session.alarms.filter(alarm => alarm.active && alarm.state === "active"))
 const layerPendingAlarms = computed(() => unackedAlarms.value.filter(alarm => alarmInLayer(alarm, scopeNodeIds.value, scopedDeviceIds.value)))
 const deviceRows = computed(() => scopedDevices.value.map(device => {
@@ -240,29 +276,44 @@ const deviceRows = computed(() => scopedDevices.value.map(device => {
     id,
     name: device.name,
     model: device.model || device.profile_id || "—",
-    communication: healthLabel(quality?.health || device.health),
-    runState: runSample ? displaySample(runSample, businessName(runNode)) : "—",
-    value: `${displaySample(primary, primaryLabel)}${unit ? ` ${unit}` : ""}`,
-    quality: qualityLabel(primary?.quality),
-    time: shortTime(primary?.source_time || primary?.received_time || quality?.last_success),
+    communication: session.runtimeError ? '查询不可用' : healthLabel(quality?.health || 'unknown'),
+    runState: runSample?.quality === 'good' ? displaySample(runSample, businessName(runNode)) : '未知',
+    maintenance: '未知',
+    value: `${primary?.quality === 'good' ? displaySample(primary, primaryLabel) : '—'}${unit ? ` ${unit}` : ""}`,
+    quality: primary ? qualityLabel(primary.quality) : session.runtimeError ? '查询不可用' : '无数据',
+    time: shortTime(primary?.source_time),
   }
 }))
 
 let layerSerial = 0
 let recentSerial = 0
+let ledgerSerial = 0
 async function loadLayer() {
-  if (!session.layer) return
   const serial = ++layerSerial
   const layer = session.layer
   screen.value = null
-  const result = await loadScreen(layer)
-  if (serial !== layerSerial || layer !== session.layer) return
-  screen.value = result
+  screenError.value = ""
+  recentSerial++; trendSerial++
+  recent.value = []; trendRecords.value = []
+  recentError.value = ""; trendError.value = ""
+  if (!layer) return
+  try {
+    const result = await request<ScreenConfig & OverviewScreen>(`/ems/screen/${encodeURIComponent(layer)}`)
+    if (serial !== layerSerial || layer !== session.layer) return
+    screen.value = result
+  } catch (error) {
+    if (serial !== layerSerial || layer !== session.layer) return
+    if (!(error instanceof ApiError && error.status === 404 && error.code === 'screen_not_found')) {
+      screenError.value = `画面读取失败：${error instanceof Error ? error.message : '服务连接中断'}`
+      return
+    }
+  }
   await Promise.all([loadRecent(), loadDailyTrend()])
 }
 async function loadRecent() {
   const id = recentPointId.value
   const serial = ++recentSerial
+  recent.value = []
   recentError.value = ""
   if (!id) { recent.value = []; recentLoading.value = false; return }
   recentLoading.value = true
@@ -303,21 +354,25 @@ async function loadDailyTrend() {
   }
 }
 async function loadDevices() {
+  const serial = ++ledgerSerial
   ledgerError.value = ""
   try {
     const result = await request<{ devices: LedgerDevice[] }>("/device-ledger")
-    ledger.value = result.devices || []
+    if (serial !== ledgerSerial) return
+    ledger.value = (result.devices || []).filter(device => !!device.business_node_id && (device.point_count || 0) > 0)
     if (selectedDeviceId.value && !ledger.value.some(device => deviceKey(device) === selectedDeviceId.value)) selectedDeviceId.value = ""
   } catch (error) {
+    if (serial !== ledgerSerial) return
     ledger.value = []
-    ledgerError.value = `设备台账读取失败：${error instanceof Error ? error.message : String(error)}`
+    ledgerError.value = `设备台账读取失败：${error instanceof Error ? error.message : '服务连接中断'}`
   }
 }
 function selectLayer(key: string) {
   if (key.startsWith("device:")) {
     const id = key.slice(7)
     const device = ledger.value.find(item => deviceKey(item) === id)
-    selectedDeviceId.value = id
+    const business = session.snapshot?.nodes.find(node => node.id === device?.business_node_id)
+    selectedDeviceId.value = business && ['device', 'modbus_device'].includes(business.type) ? '' : id
     if (device?.business_node_id) session.layer = device.business_node_id
   } else {
     selectedDeviceId.value = ""
@@ -343,24 +398,28 @@ function locateDevice(id: string) {
   else selectDevice(id)
 }
 
-watch(() => session.snapshot, snapshot => {
-  if (selectedDeviceId.value && snapshot?.nodes.some(node => node.id === selectedDeviceId.value)) {
-    session.layer = selectedDeviceId.value
-    selectedDeviceId.value = ""
-  }
-})
-watch(() => session.layer, () => { void loadLayer() })
+function invalidateReads() { layerSerial++; recentSerial++; trendSerial++; ledgerSerial++ }
+watch(() => projectContext.generation, () => {
+  invalidateReads()
+  ledger.value = []; selectedDeviceId.value = ''; screen.value = null
+  recent.value = []; trendRecords.value = []; recentLoading.value = false
+  ledgerError.value = ''; recentError.value = ''; trendError.value = ''; screenError.value = ''
+}, { flush: 'sync' })
+watch(() => session.snapshot, snapshot => { if (snapshot) void loadDevices() })
+watch(() => session.layer, () => { void loadLayer() }, { flush: 'sync' })
 watch(recentPointId, () => { void loadRecent(); void loadDailyTrend() })
 watch(selectedDeviceId, () => { void loadRecent(); void loadDailyTrend() })
+watch(() => session.lastSync, value => { if (value && !recentLoading.value) void loadRecent() })
 onLoad(options => { selectedDeviceId.value = (options?.device as string) || "" })
 onMounted(() => {
   if (!requireAuth()) return
   applyAppearanceDocument(appearance.value)
-  void loadDevices()
+  if (session.snapshot) void loadDevices()
   void loadLayer()
 })
-onShow(() => { if (requireAuth()) { startPolling(); void loadDailyTrend() } })
-onHide(stopPolling)
+onShow(() => { if (requireAuth()) { startPolling(); void loadLayer() } })
+onHide(() => { stopPolling(); invalidateReads() })
+onBeforeUnmount(() => { stopPolling(); invalidateReads() })
 </script>
 
 <style scoped>
@@ -381,6 +440,7 @@ h1 { margin: 0; font-size: 34px; line-height: normal; letter-spacing: -.02em; }
 .metric .k svg { flex: none; width: 16px; height: 16px; fill: none; stroke: #3b8aa8; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .metric .v { margin-top: 4px; color: #183247; font-size: 24px; line-height: normal; letter-spacing: -.01em; font-weight: 600; overflow: visible; }
 .metric .v text { margin-left: 3px; color: var(--muted); font-size: 10px; font-weight: 400; }
+.metric-quality { margin-top: 3px; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
 .metric.vacant .v { color: var(--faint); }
 .lower { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 14px; min-height: 307px; }
 .panel { padding: 14px 16px; min-width: 0; }
