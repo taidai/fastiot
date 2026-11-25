@@ -87,8 +87,8 @@ export async function request<T>(path: string, method = "GET", body?: unknown, r
 export async function login(email: string, password: string) {
   const result = await request<{ token: string }>("/login", "POST", { email, password })
   if (!PREVIEW_MODE) {
-    resetProjectContext()
     uni.setStorageSync("fastems-token", result.token)
+    resetProjectContext()
   }
   redirectingToLogin = false
   return result.token
@@ -96,8 +96,9 @@ export async function login(email: string, password: string) {
 
 export function logout() {
   if (!PREVIEW_MODE) {
-    resetProjectContext()
+    // Revoke credentials before synchronous context subscribers can read again.
     uni.removeStorageSync("fastems-token")
+    resetProjectContext()
   }
   uni.$emit("session-ended")
   if (redirectingToLogin) return

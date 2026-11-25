@@ -28,7 +28,7 @@ async function application(preview = false, storage = new Map([['fastems-token',
     },
   }
   const result = await build({
-    stdin: { contents: 'export * from "./client.ts"; export * from "../stores/session.ts"; export * from "../stores/projects.ts"', resolveDir: fileURLToPath(new URL('.', import.meta.url)), loader: 'ts' },
+    stdin: { contents: 'export * from "./client.ts"; export * from "../stores/session.ts"; export * from "../stores/projects.ts"; export { watch } from "vue"', resolveDir: fileURLToPath(new URL('.', import.meta.url)), loader: 'ts' },
     bundle: true, write: false, platform: 'node', format: 'esm',
   })
   const api = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text + `\n//# sourceURL=client-test-${generation++}.mjs`).toString('base64')}`)
@@ -174,6 +174,94 @@ test('preview login, reads, writes and logout never touch live credentials or HT
   assert.equal(app.storage.get('fastems-token'), 'live-session')
   assert.deepEqual(app.storageReads, [])
   assert.deepEqual(app.requests, [])
+})
+
+test('logout publishes one cleared context even when a synchronous subscriber reads with the old layer', async context => {
+  context.mock.timers.enable({ apis: ['setInterval'] })
+  const app = await application()
+  context.after(() => app.api.stopPolling())
+  app.api.startPolling()
+  await new Promise(resolve => setImmediate(resolve))
+  app.requests.splice(0).forEach(request => request.success({ statusCode: 200, data: {
+    nodes: [{ id: 'layer-a' }], roots: ['layer-a'], values: [], channels: [], devices: [], alarms: [],
+  } }))
+  await new Promise(resolve => setImmediate(resolve))
+  const outgoing = [], errors = []
+  globalThis.uni.request = options => outgoing.push(options.url)
+  // Like HandoverPanel: child props still carry the last rendered layer while
+  // generation/session invalidation is synchronous, before Vue's queued render.
+  const stop = app.api.watch(() => [app.api.projectContext.generation, app.api.session.token], () => {
+    void app.api.request('/overview/handover?layer=layer-a').catch(error => errors.push(error))
+  }, { flush: 'sync' })
+  context.after(stop)
+  const before = app.api.projectContext.generation
+  app.api.logout()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(app.api.projectContext.generation - before, 1, 'logout must invalidate once without recursive reset')
+  assert.deepEqual(outgoing, [], 'teardown must not start directory or business requests')
+  assert.ok(errors.length > 0)
+  assert.ok(errors.every(error => error.code === 'session_changed'), 'no stack overflow or stale reads')
+  assert.equal(app.storage.has('fastems-token'), false)
+  assert.equal(app.api.session.token, '')
+  assert.equal(app.api.projectContext.id, '')
+  assert.equal(app.api.projectContext.layer, '')
+  assert.equal(app.api.session.snapshot, null)
+  assert.equal(app.api.session.layer, '')
+  assert.deepEqual(app.redirects, ['/pages/login/index'])
+  context.mock.timers.tick(4000)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(outgoing, [], 'logout stops polling')
+})
+
+test('context reset and activation publish a coherent owner, project and layer to synchronous readers', async context => {
+  const app = await application()
+  await app.api.ensureProjectContext()
+  app.api.rememberLayer('layer-a')
+  const paths = [], errors = [], published = []
+  const send = uni.request
+  uni.request = options => { paths.push(options.url); send(options) }
+  const stop = app.api.watch(() => app.api.projectContext.generation, () => {
+    published.push([app.api.projectContext.id, app.api.projectContext.layer])
+    void app.api.request('/overview/handover?layer=layer-a').catch(error => errors.push(error))
+  }, { flush: 'sync' })
+  context.after(stop)
+  const before = app.api.projectContext.generation
+  app.api.resetProjectContext()
+  assert.equal(app.api.projectContext.generation - before, 1, 'a reentrant reader must join the new directory load, not reset recursively')
+  assert.deepEqual(published, [['', '']])
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(paths.filter(path => path === '/api/projects').length, 1)
+  assert.deepEqual(published, [['', ''], ['project-a', 'layer-a']])
+  app.requests.splice(0).forEach(request => request.success({ statusCode: 200, data: { handover: null } }))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(errors, [])
+  await app.api.selectProject('project-b', async () => true)
+  assert.deepEqual(published.at(-1), ['project-b', ''])
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(app.requests[0].header['X-Fastiot-Project'], 'project-b')
+  app.requests.shift().success({ statusCode: 200, data: { handover: null } })
+})
+
+test('login publishes the new credential before synchronous context readers resume', async context => {
+  const app = await application()
+  await app.api.ensureProjectContext()
+  const credentials = [], errors = []
+  const stop = app.api.watch(() => app.api.projectContext.generation, () => {
+    credentials.push(app.storage.get('fastems-token'))
+    void app.api.request('/overview/handover?layer=layer-a').catch(error => errors.push(error))
+  }, { flush: 'sync' })
+  context.after(stop)
+  const login = app.api.login('operator', 'valid-fixture')
+  app.requests.shift().success({ statusCode: 200, data: { token: 'new-live-session' } })
+  assert.equal(await login, 'new-live-session')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(credentials, ['new-live-session', 'new-live-session'])
+  for (const request of app.requests.splice(0)) {
+    assert.equal(request.header.Authorization, 'Bearer new-live-session')
+    request.success({ statusCode: 200, data: { handover: null } })
+  }
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(errors, [])
 })
 
 test('concurrent 401s clear memory and storage once; late responses cannot restore the session', async () => {

@@ -11,10 +11,21 @@ import { promisify } from 'node:util'
 
 const root = fileURLToPath(new URL('../../../../internal/web/dist/uniapp/', import.meta.url))
 const requests = []
+// Response-only timing faults keep the real app, routing and stores untouched.
+const scenario = process.env.AUTH_SCENARIO || 'baseline'
+assert.ok(['baseline', 'late-initial-runtime', 'state-first', 'alarms-first'].includes(scenario))
 let expired = false
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost')
-  const json = (status, data) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(data)) }
+  const json = (status, data) => {
+    let delay = 0
+    if (status === 200 && scenario === 'late-initial-runtime' && url.pathname.startsWith('/api/ems/')) delay = 3000
+    if (status === 401 && scenario === 'state-first' && url.pathname !== '/api/ems/state') delay = 600
+    if (status === 401 && scenario === 'alarms-first' && url.pathname !== '/api/ems/alarms') delay = 600
+    const send = () => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(data)) }
+    if (delay) setTimeout(send, delay)
+    else send()
+  }
   if (url.pathname.startsWith('/api/')) {
     let text = ''
     for await (const chunk of req) text += chunk
@@ -143,7 +154,7 @@ if (process.argv.includes('--serve')) {
     assert.equal(await page.evaluate(() => localStorage.getItem('fastems-token')), liveToken)
     assert.deepEqual(errors, [])
     assert.deepEqual(requests.filter(r => r.method !== 'GET' && r.path !== '/api/login'), [])
-    console.log(JSON.stringify({ ok: true, checks: ['default live routing', 'keyboard login and busy guard', '403/500/offline without fallback', 'HTTP bearer session', '401 expiry stops polling', 'explicit labelled preview', 'preview navigation/reload/login token isolation', 'zero physical writes'], requests: requests.length, heights }))
+    console.log(JSON.stringify({ ok: true, scenario, checks: ['default live routing', 'keyboard login and busy guard', '403/500/offline without fallback', 'HTTP bearer session', '401 expiry stops polling', 'explicit labelled preview', 'preview navigation/reload/login token isolation', 'zero physical writes'], requests: requests.length, heights }))
     for (const [script, variable, route] of [
       ['../overview/overview-preview.browser.mjs', 'PREVIEW_BASE_URL', 'overview'],
       ['../../components/design/design-preview.browser.mjs', 'DESIGN_PREVIEW_URL', 'design'],
