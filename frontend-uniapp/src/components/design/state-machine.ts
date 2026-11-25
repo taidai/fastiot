@@ -21,11 +21,15 @@ export type StateTransition = {
   match?: "all" | "any"
   actions: Action[]
 }
+export type MachineCommandBinding = { device_id: string; command_id: string; parameters?: Record<string, number> }
+export type MachineCommandOption = { device_id: string; device_name: string; command: import("../../pages/overview/operations").UnitCommand }
 export type StateMachineDefinition = {
   initial_state: string
   scope: "self" | "subtree"
   states: string[]
   transitions: StateTransition[]
+  state_actions?: Record<string, { entry?: Action[]; exit?: Action[] }>
+  command_bindings?: Record<string, MachineCommandBinding>
   bindings: { points: Record<string, Target>; actions: Record<string, Target> }
 }
 export type StateMachineSimulation = {
@@ -35,11 +39,16 @@ export type StateMachineSimulation = {
   to: string
   reason?: string
   actions?: Action[]
+  trace?: { transition_id: string; status: string; reason?: string }[]
 }
 export type StateMachineExecution = {
+  request_id?: string
+  version: number
+  commands?: { request_id: string; node_id: string; status?: string; reason?: string }[]
+  trace?: { transition_id: string; status: string; reason?: string }[]
   at: string
   event: string
-  status: "confirmed" | "failed" | "unknown" | "held"
+  status: "confirmed" | "rejected" | "failed" | "unknown" | "held"
   transition_id?: string
   from: string
   to: string
@@ -81,7 +90,8 @@ export function bindStateMachineDefinition(definition: StateMachineDefinition, n
   const result = JSON.parse(JSON.stringify(definition)) as StateMachineDefinition
   const discovered = withDiscoveredBindings(nodes)
   const referencedPoints = new Set(result.transitions.flatMap(transition => transition.conditions.filter(condition => condition.kind !== "time").map(condition => condition.point_id)))
-  const referencedActions = new Set(result.transitions.flatMap(transition => transition.actions.map(action => action.action_id)))
+  const stateActions = Object.values(result.state_actions || {}).flatMap(actions => [...(actions.entry || []), ...(actions.exit || [])])
+  const referencedActions = new Set([...result.transitions.flatMap(transition => transition.actions), ...stateActions].map(action => action.action_id))
   for (const id of Object.keys(result.bindings.points)) {
     if (!referencedPoints.has(id)) delete result.bindings.points[id]
   }
@@ -92,7 +102,11 @@ export function bindStateMachineDefinition(definition: StateMachineDefinition, n
     const target = discovered.points[id]
     if (target && !result.bindings.points[id]?.node_id) result.bindings.points[id] = target
   }
+  for (const id of Object.keys(result.command_bindings || {})) {
+    if (!referencedActions.has(id)) delete result.command_bindings![id]
+  }
   for (const id of referencedActions) {
+    if (result.command_bindings?.[id]) continue
     const target = discovered.actions[id]
     if (target && !result.bindings.actions[id]?.node_id) result.bindings.actions[id] = target
   }
@@ -115,5 +129,5 @@ export function stateMachineSimulationPayload(event: string, inputs: Record<stri
 }
 
 export function executionStatusText(status: string) {
-  return ({ confirmed: "已回读确认", failed: "执行失败", unknown: "结果未知", held: "保持原状态", pending: "等待执行", skipped: "未执行" } as Record<string, string>)[status] || status || "—"
+  return ({ confirmed: "已回读确认", accepted: "已接受，尚未确认", executing: "等待回读", submitted: "已提交，尚未确认", superseded: "已被替代", rejected: "请求被拒绝", failed: "执行失败", unknown: "结果未知", held: "保持原状态", pending: "等待执行", skipped: "未执行" } as Record<string, string>)[status] || status || "—"
 }

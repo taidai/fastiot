@@ -32,6 +32,15 @@ test("bindStateMachineDefinition binds only referenced points and maps businessI
   assert.equal(bound.bindings.points["n-other-site"], undefined)
 })
 
+test("state entry and exit action bindings survive editing without hidden targets", () => {
+  const definition = createStateMachineDefinition("", "")
+  definition.state_actions = { stopped: { exit: [{ action_id: "pump", value: 0, readback: { timeout_ms: 100 } }] } }
+  definition.bindings.actions.pump = { node_id: "stable-pump", point_type: "valueSet" }
+  const bound = bindStateMachineDefinition(definition, [])
+  assert.equal(bound.bindings.actions.pump.node_id, "stable-pump")
+  assert.deepEqual(bound.state_actions, definition.state_actions)
+})
+
 test("simulation payload keeps zero and execution status never calls unknown success", () => {
   const payload = stateMachineSimulationPayload("start", { permit: 0 }, { mode: "auto" }, "2026-11-23T10:00")
   assert.equal(payload.inputs.permit, 0)

@@ -13,11 +13,33 @@ import (
 )
 
 type StateMachineDefinition struct {
-	InitialState string            `json:"initial_state"`
-	Scope        string            `json:"scope,omitempty"` // self (default) or subtree
-	States       []string          `json:"states"`
-	Transitions  []StateTransition `json:"transitions"`
-	Bindings     BindingSet        `json:"bindings"`
+	InitialState    string                                `json:"initial_state"`
+	Scope           string                                `json:"scope,omitempty"` // self (default) or subtree
+	States          []string                              `json:"states"`
+	Transitions     []StateTransition                     `json:"transitions"`
+	Bindings        BindingSet                            `json:"bindings"`
+	StateActions    map[string]StateActions               `json:"state_actions,omitempty"`
+	CommandBindings map[string]StateMachineCommandBinding `json:"command_bindings,omitempty"`
+}
+
+// DeviceID is a stable business device identity, never a transport address.
+type StateMachineCommandBinding struct {
+	DeviceID   string             `json:"device_id"`
+	CommandID  string             `json:"command_id"`
+	Parameters map[string]float64 `json:"parameters,omitempty"`
+}
+
+// StateActions share the same bounded, readback-confirmed action vocabulary as
+// transition actions. A transition plans exit, transition, then entry actions.
+type StateActions struct {
+	Entry []Action `json:"entry,omitempty"`
+	Exit  []Action `json:"exit,omitempty"`
+}
+
+type StateMachineTrace struct {
+	TransitionID string `json:"transition_id"`
+	Status       string `json:"status"`
+	Reason       string `json:"reason,omitempty"`
 }
 
 type StateTransition struct {
@@ -31,33 +53,46 @@ type StateTransition struct {
 }
 
 type StateMachineSimulation struct {
-	Status       string             `json:"status"` // matched or held
-	TransitionID string             `json:"transition_id,omitempty"`
-	From         string             `json:"from"`
-	To           string             `json:"to"`
-	Reason       string             `json:"reason,omitempty"`
-	Actions      []SimulationAction `json:"actions,omitempty"`
+	Status       string              `json:"status"` // matched or held
+	TransitionID string              `json:"transition_id,omitempty"`
+	From         string              `json:"from"`
+	To           string              `json:"to"`
+	Reason       string              `json:"reason,omitempty"`
+	Actions      []SimulationAction  `json:"actions,omitempty"`
+	Trace        []StateMachineTrace `json:"trace"`
+}
+
+type StateMachineCommand struct {
+	RequestID string `json:"request_id"`
+	NodeID    string `json:"node_id"`
+	Status    string `json:"status,omitempty"`
+	Reason    string `json:"reason,omitempty"`
 }
 
 type StateMachineExecution struct {
-	At           time.Time     `json:"at"`
-	Event        string        `json:"event"`
-	Status       string        `json:"status"` // confirmed, failed, unknown or held
-	TransitionID string        `json:"transition_id,omitempty"`
-	From         string        `json:"from"`
-	To           string        `json:"to"`
-	Reason       string        `json:"reason,omitempty"`
-	Actions      []CheckAction `json:"actions,omitempty"`
+	RequestID    string                `json:"request_id,omitempty"`
+	Version      uint64                `json:"version"`
+	Trace        []StateMachineTrace   `json:"trace,omitempty"`
+	Commands     []StateMachineCommand `json:"commands,omitempty"`
+	At           time.Time             `json:"at"`
+	Event        string                `json:"event"`
+	Status       string                `json:"status"` // confirmed, failed, unknown or held
+	TransitionID string                `json:"transition_id,omitempty"`
+	From         string                `json:"from"`
+	To           string                `json:"to"`
+	Reason       string                `json:"reason,omitempty"`
+	Actions      []CheckAction         `json:"actions,omitempty"`
 }
 
 type StateMachineDocument struct {
-	Schema        int                     `json:"schema"`
-	Revision      uint64                  `json:"revision"`
-	Version       uint64                  `json:"version"`
-	Draft         StateMachineDefinition  `json:"draft"`
-	Applied       *StateMachineDefinition `json:"applied,omitempty"`
-	CurrentState  string                  `json:"current_state"`
-	LastExecution *StateMachineExecution  `json:"last_execution,omitempty"`
+	Schema        int                               `json:"schema"`
+	Revision      uint64                            `json:"revision"`
+	Version       uint64                            `json:"version"`
+	Draft         StateMachineDefinition            `json:"draft"`
+	Applied       *StateMachineDefinition           `json:"applied,omitempty"`
+	Versions      map[uint64]StateMachineDefinition `json:"versions,omitempty"`
+	CurrentState  string                            `json:"current_state"`
+	LastExecution *StateMachineExecution            `json:"last_execution,omitempty"`
 }
 
 func cloneStateMachineDefinition(d StateMachineDefinition) StateMachineDefinition {
@@ -88,14 +123,42 @@ func (d StateMachineDefinition) Validate() error {
 			return fmt.Errorf("invalid transition %q", transition.ID)
 		}
 		ids[transition.ID] = true
-		row := Row{ID: transition.ID, Conditions: transition.Conditions, Match: transition.Match, Actions: transition.Actions}
-		document := Document{Table: Table{Rows: []Row{row}}, Bindings: d.Bindings}
+	}
+	for state := range d.StateActions {
+		if !states[state] {
+			return fmt.Errorf("actions for undefined state %q", state)
+		}
+	}
+	bindings := BindingSet{Points: d.Bindings.Points, Actions: map[string]Target{}}
+	for id, target := range d.Bindings.Actions {
+		bindings.Actions[id] = target
+	}
+	for id, binding := range d.CommandBindings {
+		if binding.DeviceID == "" || binding.CommandID == "" || id == "" {
+			return fmt.Errorf("invalid command binding")
+		}
+		if _, ambiguous := bindings.Actions[id]; ambiguous {
+			return fmt.Errorf("ambiguous action binding %s", id)
+		}
+		for _, value := range binding.Parameters {
+			if !finite(value) {
+				return fmt.Errorf("nonfinite command parameter")
+			}
+		}
+		bindings.Actions[id] = Target{NodeID: binding.DeviceID}
+	}
+	for _, row := range stateMachineRows(d) {
+		document := Document{Table: Table{Rows: []Row{row}}, Bindings: bindings}
 		if err := document.Validate(); err != nil {
 			return err
 		}
-		for _, action := range transition.Actions {
-			if action.Readback == nil {
-				return fmt.Errorf("transition %s: every state machine action needs readback", transition.ID)
+		for _, action := range row.Actions {
+			_, named := d.CommandBindings[action.ActionID]
+			if action.Readback == nil && !named {
+				return fmt.Errorf("%s: every point action needs readback", row.ID)
+			}
+			if named && action.Readback != nil && action.Readback.Target.NodeID == "" {
+				return fmt.Errorf("command process readback needs an explicit target")
 			}
 		}
 	}
@@ -135,9 +198,18 @@ func (d StateMachineDocument) Publish(revision uint64) (StateMachineDocument, er
 	if !valid {
 		return d, fmt.Errorf("current_state_not_defined")
 	}
+	versions := make(map[uint64]StateMachineDefinition, len(d.Versions)+1)
+	for version, definition := range d.Versions {
+		versions[version] = cloneStateMachineDefinition(definition)
+	}
+	if d.Applied != nil {
+		versions[d.Version] = cloneStateMachineDefinition(*d.Applied)
+	}
 	applied := cloneStateMachineDefinition(d.Draft)
 	d.Applied = &applied
 	d.Version++
+	versions[d.Version] = cloneStateMachineDefinition(applied)
+	d.Versions = versions
 	d.Revision++
 	return d, nil
 }
@@ -146,10 +218,20 @@ func (d StateMachineDefinition) Simulate(current, event string, inputs map[strin
 	if err := d.Validate(); err != nil {
 		return StateMachineSimulation{}, err
 	}
+	valid := false
+	for _, state := range d.States {
+		valid = valid || current == state
+	}
+	if !valid {
+		return StateMachineSimulation{}, fmt.Errorf("current_state_not_defined")
+	}
 	samples := SamplesFromValues(inputs, texts, now)
-	result := StateMachineSimulation{Status: "held", From: current, To: current, Reason: "no transition for event"}
+	result := StateMachineSimulation{Status: "held", From: current, To: current, Reason: "no transition for event", Trace: []StateMachineTrace{}}
 	for _, transition := range d.Transitions {
+		trace := StateMachineTrace{TransitionID: transition.ID, Status: "skipped"}
 		if transition.Event != event || (transition.From != "*" && transition.From != current) {
+			trace.Reason = "state or event does not match"
+			result.Trace = append(result.Trace, trace)
 			continue
 		}
 		matched := transition.Match != "any" || len(transition.Conditions) == 0
@@ -166,6 +248,8 @@ func (d StateMachineDefinition) Simulate(current, event string, inputs map[strin
 			}
 		}
 		if !matched {
+			trace.Status, trace.Reason = "held", joinReasons(reasons)
+			result.Trace = append(result.Trace, trace)
 			// A different transition for the same event may still be the
 			// intended path; keep looking and report the first failure.
 			if result.TransitionID == "" {
@@ -178,7 +262,9 @@ func (d StateMachineDefinition) Simulate(current, event string, inputs map[strin
 		result.TransitionID = transition.ID
 		result.To = transition.To
 		result.Reason = ""
-		for _, action := range transition.Actions {
+		trace.Status = "matched"
+		result.Trace = append(result.Trace, trace)
+		for _, action := range d.TransitionActions(current, transition) {
 			result.Actions = append(result.Actions, SimulationAction{ActionID: action.ActionID, Value: action.Value, DelayMS: action.DelayMS})
 		}
 		return result, nil
@@ -193,16 +279,72 @@ func (d StateMachineDocument) Plan(event string, inputs map[string]float64, text
 	return d.Applied.Simulate(d.CurrentState, event, inputs, texts, now)
 }
 
+func (d StateMachineDefinition) TransitionActions(current string, transition StateTransition) []Action {
+	actions := append([]Action{}, d.StateActions[current].Exit...)
+	actions = append(actions, transition.Actions...)
+	return append(actions, d.StateActions[transition.To].Entry...)
+}
+
 func stateMachineRows(d StateMachineDefinition) []Row {
 	rows := make([]Row, 0, len(d.Transitions))
 	for _, transition := range d.Transitions {
 		rows = append(rows, Row{ID: transition.ID, Conditions: transition.Conditions, Match: transition.Match, Actions: transition.Actions})
+	}
+	for _, state := range d.States {
+		actions := d.StateActions[state]
+		rows = append(rows, Row{ID: "entry:" + state, Actions: actions.Entry}, Row{ID: "exit:" + state, Actions: actions.Exit})
 	}
 	return rows
 }
 
 func (d StateMachineDefinition) DecisionDocument() Document {
 	return Document{Table: Table{Rows: stateMachineRows(d)}, Bindings: d.Bindings}
+}
+
+// MapReferences visits engineering references, never event or command identities.
+// Callers own the decoded definition; published runtime snapshots are untouched.
+func (d *StateMachineDefinition) MapReferences(mapID func(string) string) {
+	for key, target := range d.Bindings.Points {
+		if target.NodeID != "" {
+			target.NodeID = mapID(target.NodeID)
+			d.Bindings.Points[key] = target
+		}
+	}
+	for key, target := range d.Bindings.Actions {
+		if target.NodeID != "" {
+			target.NodeID = mapID(target.NodeID)
+			d.Bindings.Actions[key] = target
+		}
+	}
+	for key, binding := range d.CommandBindings {
+		binding.DeviceID = mapID(binding.DeviceID)
+		d.CommandBindings[key] = binding
+	}
+	mapActions := func(actions []Action) {
+		for i := range actions {
+			if actions[i].Readback != nil && actions[i].Readback.Target.NodeID != "" {
+				actions[i].Readback.Target.NodeID = mapID(actions[i].Readback.Target.NodeID)
+			}
+		}
+	}
+	for i := range d.Transitions {
+		mapActions(d.Transitions[i].Actions)
+	}
+	for _, actions := range d.StateActions {
+		mapActions(actions.Entry)
+		mapActions(actions.Exit)
+	}
+}
+
+func (d *StateMachineDocument) MapReferences(mapID func(string) string) {
+	d.Draft.MapReferences(mapID)
+	if d.Applied != nil {
+		d.Applied.MapReferences(mapID)
+	}
+	for version, definition := range d.Versions {
+		definition.MapReferences(mapID)
+		d.Versions[version] = definition
+	}
 }
 
 // ReadLiveInputs uses the same scope, point decoding and freshness checks as

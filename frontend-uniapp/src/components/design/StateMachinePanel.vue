@@ -12,7 +12,7 @@
       <view v-if="!machines.length" class="empty">此对象还没有状态机。新建只保存草稿，不会执行动作。</view>
       <template v-if="record && draft">
         <view class="machine-summary">
-          <span class="chip ok">当前 {{ record.current_state }}</span>
+          <span class="chip ok">过程状态 {{ record.current_state }}（非设备反馈）</span>
           <span class="chip">{{ record.version ? `已发布 v${record.version}` : '尚未发布' }}</span>
           <span v-if="dirty" class="chip warn">有未保存修改</span>
         </view>
@@ -28,9 +28,9 @@
             </label>
             <label>模拟时刻<input type="datetime-local" v-model="simAt"></label>
           </view>
-          <view class="machine-actions"><button class="ghost" :disabled="busy" @click="simulate">模拟守卫</button><label class="confirm"><input type="checkbox" v-model="confirmed"> 确认执行真实动作</label><button class="primary" :disabled="readOnly || busy || !confirmed || !record.version || dirty || !record.permissions.execute" @click="execute">执行事件</button></view>
-          <view v-if="simulation" class="execution-result"><strong>{{ simulation.status === 'matched' ? `可转移：${simulation.from} → ${simulation.to}` : `保持 ${simulation.to}` }}</strong><span>{{ simulation.reason || '模拟未写设备' }}</span></view>
-          <view v-if="record.last_execution" class="execution-result" :class="record.last_execution.status"><strong>{{ executionStatusText(record.last_execution.status) }}：{{ record.last_execution.from }} → {{ record.last_execution.to }}</strong><span>{{ record.last_execution.reason || '执行结果已持久化' }}</span><view v-for="(action, index) in record.last_execution.actions || []" :key="index">{{ displayName(action.output) }}：{{ executionStatusText(action.status) }} {{ action.reason || '' }}</view></view>
+          <view class="machine-actions"><button class="ghost" :disabled="busy" @click="simulate">模拟守卫</button><label class="confirm"><input type="checkbox" v-model="confirmed"> 确认执行真实动作</label><button class="primary" :disabled="readOnly || busy || !confirmed || !record.version || dirty || !record.permissions.execute" @click="execute">{{ pendingEvent ? `查询原事件 ${pendingEvent.event}` : '执行事件' }}</button></view>
+          <view v-if="simulation" class="execution-result"><strong>{{ simulation.status === 'matched' ? `可转移：${simulation.from} → ${simulation.to}` : `保持 ${simulation.to}` }}</strong><span>{{ simulation.reason || '模拟未写设备' }}</span><view v-for="trace in simulation.trace || []" :key="trace.transition_id">{{ trace.transition_id }}：{{ trace.status }} {{ trace.reason || '' }}</view></view>
+          <view v-if="record.last_execution" class="execution-result" :class="record.last_execution.status"><strong>{{ executionStatusText(record.last_execution.status) }}：{{ record.last_execution.from }} → {{ record.last_execution.to }}</strong><span>{{ record.last_execution.reason || '执行结果已持久化' }}</span><span>来源 v{{ record.last_execution.version }} · 事件 {{ record.last_execution.request_id || '旧记录' }}</span><view v-for="command in record.last_execution.commands || []" :key="command.request_id">命令 {{ command.request_id }}：{{ executionStatusText(command.status || 'unknown') }} {{ command.reason || '' }}</view><view v-for="(action, index) in record.last_execution.actions || []" :key="index">{{ displayName(action.output) }}：{{ executionStatusText(action.status) }} {{ action.reason || '' }}</view></view>
         </view>
         <view class="transition-heading"><strong>转移表</strong><button class="ghost" @click="addTransition">＋ 转移</button></view>
         <div class="table-wrap"><table class="mini-table machine-table"><thead><tr><th>当前</th><th>事件</th><th>守卫</th><th>下一状态</th><th>动作</th><th></th></tr></thead><tbody><tr v-for="transition in draft.transitions" :key="transition.transition_id"><td>{{ transition.from === '*' ? '任意' : transition.from }}</td><td>{{ transition.event }}</td><td>{{ guardText(transition) }}</td><td>{{ transition.to }}</td><td>{{ transitionActionText(transition) }}</td><td class="row-actions"><button class="ghost" @click="editTransition(transition.transition_id)">编辑</button><button class="ghost danger" :disabled="readOnly || busy || !record.permissions.edit" @click="removeTransition(transition.transition_id)">删除</button></td></tr></tbody></table></div>
@@ -65,19 +65,16 @@
             </view>
             <view class="transition-detail">
               <strong>动作序列</strong>
-              <view v-for="(action, actionIndex) in transition.actions" :key="actionIndex" class="inline-editor">
-                <span>{{ actionIndex + 1 }}</span>
-                <select :value="action.action_id" @change="action.action_id = inputValue($event); changed()"><option v-for="node in outputs" :key="node.id" :value="businessId(node)">{{ nameOf(node) }}</option></select>
-                <input aria-label="状态机动作值" type="number" step="any" :value="action.value" @input="action.value = inputNumber($event); changed()">
-                <label>延时秒<input type="number" min="0" step="0.1" :value="(action.delay_ms || 0) / 1000" @input="action.delay_ms = Math.max(0, Math.round(inputNumber($event) * 1000)); changed()"></label>
-                <label>回读秒<input type="number" min="0.1" max="120" step="0.1" :value="(action.readback?.timeout_ms || 5000) / 1000" @input="setTimeout(action, $event)"></label>
-                <button class="ghost" @click="transition.actions.splice(actionIndex, 1); changed()">×</button>
-              </view>
-              <button class="link" :disabled="!outputs.length" @click="addAction(transition)">＋ 动作</button>
+              <StateMachineActionEditor :actions="transition.actions" :definition="draft" :inputs="available" :outputs="outputs" :commands="commandOptions" @change="changed" />
               <span v-if="!transition.actions.length" class="src">无动作：仅记录状态转移</span>
             </view>
           </view>
           <view v-if="!draft.transitions.length" class="empty">尚无转移。</view>
+          <details v-for="state in states" :key="state" class="transition-detail"><summary>{{ state }} · 进入／退出动作</summary>
+            <strong>退出 {{ state }}</strong><StateMachineActionEditor :actions="lifecycleActions(state, 'exit')" :definition="draft" :inputs="available" :outputs="outputs" :commands="commandOptions" @change="changed" />
+            <strong>进入 {{ state }}</strong><StateMachineActionEditor :actions="lifecycleActions(state, 'entry')" :definition="draft" :inputs="available" :outputs="outputs" :commands="commandOptions" @change="changed" />
+          </details>
+          <p class="note">执行顺序：退出动作 → 转移动作 → 进入动作；全部确认后才推进过程状态。</p>
         </fieldset>
 
         <view class="machine-actions">
@@ -100,7 +97,10 @@ import type { Snapshot } from "../../types/api"
 import { businessId, conditionText, actionText, isRamped, isWritable } from "./strategy"
 import type { Condition, Action } from "./strategy"
 import { bindStateMachineDefinition, createStateMachineDefinition, executionStatusText, stateMachineSimulationPayload } from "./state-machine"
-import type { StateMachineDefinition, StateMachineRecord, StateMachineSimulation, StateTransition } from "./state-machine"
+import type { StateMachineDefinition, StateMachineRecord, StateMachineSimulation, StateTransition, MachineCommandOption } from "./state-machine"
+import StateMachineActionEditor from "./StateMachineActionEditor.vue"
+import { loadUnitModel } from "../../pages/overview/operations"
+import type { LedgerDevice } from "../../pages/overview/overview"
 
 const props = withDefaults(defineProps<{ snapshot: Snapshot | null; parent: string; readOnly?: boolean }>(), { readOnly: false })
 const emit = defineEmits<{ (event: "refresh"): void }>()
@@ -123,6 +123,9 @@ const inputs = ref<Record<string, number>>({})
 const textInputs = ref<Record<string, string>>({})
 const simAt = ref("")
 const simulation = ref<StateMachineSimulation | null>(null)
+const commandOptions = ref<MachineCommandOption[]>([])
+const pendingEvent = ref<{ request_id: string; event: string; revision: number; confirm: true } | null>(null)
+const eventStorageKey = (id: string) => `fastiot.machine-event.${id}`
 const nodes = computed(() => props.snapshot?.nodes || [])
 const available = computed(() => nodes.value.filter(node => node.type === "variable" || node.type === "modbusIo"))
 const outputs = computed(() => available.value.filter(node => isWritable(node) && !isRamped(node)))
@@ -163,12 +166,31 @@ async function load() {
     canCreate.value = result.can_create
     if (!machines.value.some(machine => machine.id === selectedId.value)) selectedId.value = machines.value[0]?.id || ""
     selectMachine(selectedId.value)
+    await loadCommands()
   } catch (cause) { machines.value = []; record.value = null; error.value = cause instanceof Error ? cause.message : "状态机读取失败" }
   finally { busy.value = false }
+}
+async function loadCommands() {
+  commandOptions.value = []
+  try {
+    const ledger = await request<{ devices: (LedgerDevice & { bound?: boolean })[] }>("/device-ledger")
+    for (const device of ledger.devices.filter(item => item.bound && item.business_node_id)) {
+      const model = await loadUnitModel(device)
+      for (const command of model.commands || []) commandOptions.value.push({ device_id: device.business_node_id!, device_name: device.business_node_name || device.name, command })
+    }
+  } catch (cause) { notice.value = cause instanceof Error ? `声明命令目录不可用：${cause.message}` : "声明命令目录不可用" }
+}
+function lifecycleActions(state: string, phase: 'entry' | 'exit'): Action[] {
+  if (!draft.value) return []
+  draft.value.state_actions ||= {}
+  draft.value.state_actions[state] ||= {}
+  draft.value.state_actions[state][phase] ||= []
+  return draft.value.state_actions[state][phase]!
 }
 function selectMachine(id: string) {
   if (dirty.value && id !== selectedId.value) return
   selectedId.value = id
+  try { pendingEvent.value = JSON.parse(localStorage.getItem(eventStorageKey(id)) || 'null') } catch { pendingEvent.value = null }
   record.value = machines.value.find(machine => machine.id === id) || null
   draft.value = record.value ? bindStateMachineDefinition(record.value.draft, nodes.value) : null
   statesText.value = draft.value?.states.join(",") || "stopped,running"
@@ -178,8 +200,7 @@ function selectMachine(id: string) {
 async function createMachine() {
   busy.value = true; error.value = ""
   try {
-    const input = available.value[0], output = outputs.value[0]
-    const definition = bindStateMachineDefinition(createStateMachineDefinition(input ? businessId(input) : "", output ? businessId(output) : ""), nodes.value)
+    const definition = createStateMachineDefinition("", "")
     const result = await request<StateMachineRecord>("/state-machines", "POST", { parent: props.parent, name: "设备过程状态机", definition })
     machines.value.push(result); selectMachine(result.id); notice.value = "草稿已创建，尚未发布。"
   } catch (cause) { error.value = cause instanceof Error ? cause.message : "创建失败" }
@@ -226,9 +247,7 @@ function addTransition() {
   changed()
 }
 function addGuard(transition: StateTransition) { const first = available.value[0]; if (first) { transition.conditions.push({ point_id: businessId(first), operator: "gt", value: 0 }); changed() } }
-function addAction(transition: StateTransition) { const first = outputs.value[0]; if (first) { transition.actions.push({ action_id: businessId(first), value: 0, delay_ms: 0, readback: { timeout_ms: 5000, tolerance: 0 } }); changed() } }
 function changeGuardKind(condition: Condition, event: Event) { const kind = inputValue(event) as Condition["kind"]; condition.kind = kind; condition.operator = kind === "number" ? "gt" : "eq"; condition.value = kind === "bool" ? 1 : 0; condition.text = kind === "enum" ? condition.text || "" : ""; changed() }
-function setTimeout(action: Action, event: Event) { action.readback ||= { timeout_ms: 5000, tolerance: 0 }; action.readback.timeout_ms = Math.min(120000, Math.max(100, Math.round(inputNumber(event) * 1000))); changed() }
 async function simulate() {
   if (!record.value || busy.value) return
   busy.value = true; error.value = ""
@@ -245,13 +264,16 @@ async function execute() {
   if (!record.value || busy.value || !confirmed.value) return
   busy.value = true; error.value = ""; simulation.value = null
   try {
-    const result = await request<StateMachineRecord>(`/state-machines/${record.value.id}/execute`, "POST", { event: eventName.value, revision: record.value.revision, confirm: true })
+    pendingEvent.value ||= { request_id: crypto.randomUUID(), event: eventName.value, revision: record.value.revision, confirm: true }
+    localStorage.setItem(eventStorageKey(record.value.id), JSON.stringify(pendingEvent.value))
+    const result = await request<StateMachineRecord>(`/state-machines/${record.value.id}/execute`, "POST", pendingEvent.value)
+    localStorage.removeItem(eventStorageKey(record.value.id)); pendingEvent.value = null
     replaceRecord(result); confirmed.value = false; notice.value = result.execution?.status === "confirmed" ? "事件已回读确认。" : "事件未完整确认，未保存下一状态。"
     emit("refresh")
   } catch (cause) {
     const code = (cause as { code?: string })?.code
-    error.value = code === "state_persistence_unconfirmed"
-      ? "动作已执行，但状态保存未确认。请刷新后核对当前状态；不要直接重试，避免重复下发。"
+    error.value = code === "state_persistence_unconfirmed" || code === "state_machine_run_unconfirmed"
+      ? "执行记录保存未确认。再次确认只查询原事件，不重复下发；请核对过程状态与设备回读。"
       : cause instanceof Error ? cause.message : "执行失败"
   }
   finally { busy.value = false }
