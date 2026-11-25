@@ -13,7 +13,10 @@ type Table struct {
 type Row struct {
 	ID         string      `json:"row_id"`
 	Conditions []Condition `json:"conditions"`
-	// Match is "all" (default, AND) or "any" (OR). There is no nested logic.
+	// Joins belongs only to rule rows. Wire JSON keeps it on each condition;
+	// shared Condition (including StateMachine guards) is unchanged.
+	Joins []string `json:"-"`
+	// Match is the legacy default join: "all" (default, AND) or "any" (OR). There is no nested logic.
 	Match   string   `json:"match,omitempty"`
 	Actions []Action `json:"actions"`
 	// HoldMS delays firing until the conditions have held this long.
@@ -110,6 +113,17 @@ func (t Table) Validate() error {
 			return fmt.Errorf("row %d: duplicate row_id", i+1)
 		}
 		rows[row.ID] = true
+		if row.hasJoins() && len(row.Joins) != len(row.Conditions) {
+			return fmt.Errorf("row %s: condition join count mismatch", row.ID)
+		}
+		for index, join := range row.Joins {
+			if join != "" && join != "AND" && join != "OR" {
+				return fmt.Errorf("row %s: condition join must be AND or OR", row.ID)
+			}
+			if join != "" && index < len(row.Conditions) && row.Conditions[index].Kind == "time" {
+				return fmt.Errorf("row %s: time windows are independent of condition joins", row.ID)
+			}
+		}
 		if row.Match != "" && row.Match != "all" && row.Match != "any" {
 			return fmt.Errorf("row %s: condition group match must be all or any", row.ID)
 		}
@@ -196,6 +210,17 @@ func Evaluate(t Table, values map[string]float64) (Result, error) {
 		return Result{}, err
 	}
 	for _, row := range t.Rows {
+		if row.hasJoins() {
+			matched := true
+			now := time.Now()
+			for _, value := range conditionGroupValues(row, SamplesFromValues(values, nil, now), now) {
+				matched = matched && value
+			}
+			if matched {
+				return Result{RowID: row.ID, Actions: row.Actions}, nil
+			}
+			continue
+		}
 		matched := row.Match != "any" || len(row.Conditions) == 0
 		for _, condition := range row.Conditions {
 			conditionMatched := false

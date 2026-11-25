@@ -297,7 +297,7 @@ func (d Document) Simulate(inputs map[string]float64, texts map[string]string, n
 		trace := SimulationRow{RowID: row.ID, State: string(outcome.State), HeldMS: heldMS, RequiredMS: row.HoldMS}
 		if outcome.State == rule.StateNoMatch {
 			trace.State = "no-match"
-			if row.Match == "any" {
+			if row.Match == "any" || row.hasJoins() {
 				for _, condition := range row.Conditions {
 					group := conditionGroupInput(row.ID)
 					if condition.Kind == "time" {

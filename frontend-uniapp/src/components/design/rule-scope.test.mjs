@@ -5,6 +5,13 @@ import * as strategy from './strategy.ts'
 const node = (id, parent, type = 'group', points = []) => ({ id, parent, type, points })
 const rule = (id, parent, scope) => node(id, parent, 'decisionTable', [{ type: 'applied', text: JSON.stringify({ scope, table: { rows: [] } }) }])
 
+test('mixed per-condition joins survive parse and request binding projection', () => {
+ const document = strategy.parseDocument(JSON.stringify({ scope: 'self', revision: 'mixed-v1', table: { rows: [{ row_id: 'r', conditions: [{ point_id: 'a', operator: 'eq', value: 1 }, { point_id: 'b', operator: 'eq', value: 1, join: 'OR' }, { point_id: 'c', operator: 'eq', value: 1, join: 'AND' }], actions: [] }] }, bindings: { points: { a: { node_id: 'a' }, b: { node_id: 'b' }, c: { node_id: 'c' } }, actions: {} } }))
+ const payload = strategy.createSimulationPayload(strategy.referencedDocument(document), { a: 1, b: 0, c: 0 }, {}, '')
+ assert.deepEqual(payload.document.table.rows[0].conditions.map(condition => condition.join), [undefined, 'OR', 'AND'])
+ assert.equal(payload.document.revision, 'mixed-v1')
+})
+
 test('weekday group events preserve actual selections and reject malformed values', () => {
  assert.equal(strategy.ruleWeekdayMask({ detail: { value: ['1', '3'] } }), 10)
  assert.equal(strategy.ruleWeekdayMask({ detail: { value: ['0', '1', '2', '3', '4', '5', '6'] } }), 127)

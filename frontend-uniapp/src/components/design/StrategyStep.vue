@@ -51,9 +51,9 @@
                 <td class="num">{{ rowIndex + 1 }}</td>
                 <td>
                   <view v-if="!row.conditions.length" class="default-label">默认行</view>
-                  <view v-else class="condition-logic">{{ row.match === 'any' ? '任一满足（OR）' : '全部满足（AND）' }}</view>
+                  <view v-else class="condition-logic">{{ hasJoins(row) ? '逐项 AND/OR（从左到右）' : row.match === 'any' ? '任一满足（OR）' : '全部满足（AND）' }}</view>
                   <view v-for="(condition, conditionIndex) in pointConditions(row)" :key="conditionIndex" class="condition-summary">
-                    {{ conditionText(condition, displayName) }}
+                    {{ conditionIndex ? `${condition.join || (row.match === 'any' ? 'OR' : 'AND')} ` : '' }}{{ conditionText(condition, displayName) }}
                   </view>
                   <view v-if="!row.conditions.length && rowIndex < rows.length - 1" class="warning-text">其下规则不会执行</view>
                 </td>
@@ -78,11 +78,12 @@
                   <view class="editor-section">
                     <view class="editor-title"><strong>条件组</strong><span>同层逻辑，不嵌套；空条件为默认行</span></view>
                     <label class="group-match">条件关系
-                      <select aria-label="条件关系" :value="row.match || 'all'" @change="setMatch(row, $event)">
-                        <option value="all">全部满足（AND）</option><option value="any">任一满足（OR）</option>
+                      <select aria-label="条件关系" :value="hasJoins(row) ? 'mixed' : row.match || 'all'" @change="setMatch(row, $event)">
+                        <option value="all">全部满足（AND）</option><option value="any">任一满足（OR）</option><option value="mixed" disabled>逐项 AND/OR（从左到右）</option>
                       </select>
                     </label>
                     <view v-for="(condition, conditionIndex) in pointConditions(row)" :key="conditionIndex" class="condition-editor">
+                      <select v-if="conditionIndex > 0" :aria-label="`条件 ${conditionIndex + 1} 连接方式`" :value="condition.join || (row.match === 'any' ? 'OR' : 'AND')" @change="condition.join = inputValue($event) as 'AND' | 'OR'; changed()"><option value="AND">AND</option><option value="OR">OR</option></select>
                       <select aria-label="条件类型" :value="condition.kind || 'number'" @change="changeConditionKind(condition, $event)">
                         <option value="number">数值</option><option value="bool">布尔</option><option value="enum">枚举</option>
                       </select>
@@ -375,7 +376,14 @@ function timeWindowSummary(row: Row) {
   return windows.length ? windows.map(timeConditionText).join("；") : "常驻"
 }
 function traceFor(rowID: string) { return result.value?.rows?.find(row => row.row_id === rowID) }
-function setMatch(row: Row, event: Event) { row.match = inputValue(event) as "all" | "any"; changed() }
+function hasJoins(row: Row) { return pointConditions(row).some(condition => !!condition.join) }
+function setMatch(row: Row, event: Event) {
+  const match = inputValue(event)
+  if (match !== 'all' && match !== 'any') return
+  row.match = match
+  for (const condition of row.conditions) delete condition.join
+  changed()
+}
 function rowPosition(id: string) { const index = rows.value.findIndex(row => row.row_id === id); return index >= 0 ? index + 1 : "—" }
 function inputValue(event: Event) { return ruleInputValue(event) }
 function inputNumber(event: Event) { return ruleInputNumber(event) }

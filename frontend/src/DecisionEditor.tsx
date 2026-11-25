@@ -122,6 +122,11 @@ function operatorLabel(op: string) {
   return operatorNames.get(op) || op
 }
 
+function conditionJoinText(row: Row, index: number) {
+  if (row.conditions[index].kind === 'time' || !row.conditions.slice(0,index).some(condition => condition.kind !== 'time')) return ''
+  return (row.conditions[index].join || (row.match === 'any' ? 'OR' : 'AND')) + ' '
+}
+
 function conditionValueText(condition: Condition) {
   if (condition.kind === "enum") return condition.text || "—"
   if (condition.kind === "bool") return condition.value ? "是" : "否"
@@ -548,7 +553,7 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
       <div>
         <span className="section-kicker">有序决策表</span>
         <h2>{nameOf(rule)}</h2>
-        <p>同一行的条件必须同时满足。从上到下，命中首行即停止。</p>
+        <p>点位条件按 AND/OR 从左到右计算，时间窗独立约束。从上到下，命中首行即停止。</p>
       </div>
       <div className="rule-state">
         <span className={dirty ? "state-dot amber" : "state-dot"}>{dirty ? "有未保存修改" : "草稿已保存"}</span>
@@ -573,7 +578,7 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
     </div>
     {viewMode === "table" && <div className="rule-table-wrap">
       <table className="rule-table">
-        <thead><tr><th>#</th><th>条件（全部满足）</th><th>执行动作</th><th>持续（秒）</th><th>冷却（秒）</th><th>操作</th></tr></thead>
+        <thead><tr><th>#</th><th>条件（从左到右）</th><th>执行动作</th><th>持续（秒）</th><th>冷却（秒）</th><th>操作</th></tr></thead>
         <tbody>
           {rows.map((row, rowIndex) => <tr key={row.row_id} className={result?.row_id === row.row_id ? "sim-hit" : ""} title="点击行编辑条件和动作"
             onClick={(event) => {
@@ -584,7 +589,7 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
             }}>
             <td>{rowIndex + 1}</td>
             <td><div className="rule-chips">
-              {row.conditions.length === 0 ? <span className="rule-chip default">默认行</span> : row.conditions.map((condition, index) => <span className="rule-chip" key={index}>{condition.kind === "time" ? `时间 ${timeConditionText(condition)}` : `${displayName(condition.point_id)} ${operatorLabel(condition.operator)} ${conditionValueText(condition)}`}</span>)}
+              {row.conditions.length === 0 ? <span className="rule-chip default">默认行</span> : row.conditions.map((condition, index) => <span className="rule-chip" key={index}>{condition.kind === "time" ? `时间 ${timeConditionText(condition)}` : `${conditionJoinText(row, index)}${displayName(condition.point_id)} ${operatorLabel(condition.operator)} ${conditionValueText(condition)}`}</span>)}
             </div></td>
             <td><div className="rule-chips">
               {row.actions.length === 0 ? <span className="rule-chip muted">不执行动作</span> : row.actions.map((action, index) => <span className="rule-chip" key={index}>{displayName(action.action_id)} = {action.value}</span>)}
@@ -695,7 +700,7 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
         <div className="row-main">
           {row.conditions.length === 0 && rowIndex < rows.length - 1 && <div className="row-warning" role="status">默认行会命中所有输入，下面的规则不会执行。</div>}
           <div className="logic-block">
-            <div className="logic-title"><span>当以下条件同时满足</span><button className="text-button" disabled={!available.length} title={!available.length ? "没有可用输入点位，先到设备页添加" : undefined} onClick={() => {
+            <div className="logic-title"><span>点位条件按连接方式从左到右计算，时间窗独立</span><button className="text-button" disabled={!available.length} title={!available.length ? "没有可用输入点位，先到设备页添加" : undefined} onClick={() => {
               if (!available[0]) return
               updateRow(rowIndex, { ...row, conditions: [...row.conditions, { point_id: businessId(available[0]), operator: "gt", value: 0 }] })
             }}>+ 条件</button></div>
@@ -703,6 +708,7 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
             {row.conditions.map((condition, conditionIndex) => {
               const kind = condition.kind || "number"
               return <div className="logic-line condition-line" key={conditionIndex}>
+                {kind !== "time" && row.conditions.slice(0,conditionIndex).some(item => item.kind !== "time") && <select aria-label={`条件 ${conditionIndex + 1} 连接方式`} disabled={readOnly} value={condition.join || (row.match === "any" ? "OR" : "AND")} onChange={event => updateCondition(rowIndex, conditionIndex, { join: event.target.value as "AND" | "OR" })}><option value="AND">AND</option><option value="OR">OR</option></select>}
                 {kind !== "time" && <select aria-label="输入点位" value={condition.point_id} onChange={(event) => updateCondition(rowIndex, conditionIndex, { point_id: event.target.value })}>
                   {available.map((node) => <option key={node.id} value={businessId(node)}>{nameOf(node)}</option>)}
                 </select>}

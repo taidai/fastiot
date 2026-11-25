@@ -11,6 +11,7 @@ export function getRuleAccess(node?: Node | null): RuleAccess {
 }
 
 export type Condition = {
+  join?: "AND" | "OR"
   point_id: string
   operator: string
   value: number
