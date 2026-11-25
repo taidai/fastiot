@@ -38,6 +38,16 @@ try {
   await page.locator("uni-button").filter({ hasText: "打开绑定" }).first().click()
   await page.locator(".pipeline uni-button").filter({ hasText: "验证" }).click()
   assert.match(await page.locator(".stage").innerText(), /L1|L2/)
+  await page.locator(".stepper uni-button").filter({ hasText: "配界面" }).click()
+  assert.deepEqual(await page.locator('.prototype-chart i').evaluateAll(bars => bars.map(bar => Number.parseFloat(bar.style.height))), [42, 55, 48, 63, 70, 66, 74, 61, 54, 59, 65, 69])
+  assert.match(await page.locator('.prototype-chart').getAttribute('aria-label'), /原型.*非实测/)
+  if (process.env.DESIGN_PREVIEW_SCREENSHOT) {
+    await page.screenshot({ path: process.env.DESIGN_PREVIEW_SCREENSHOT, fullPage: true })
+    await page.locator('.prototype-chart').screenshot({ path: process.env.DESIGN_PREVIEW_SCREENSHOT.replace(/\.png$/, '-trend.png') })
+  }
+  await page.locator('.screen-card uni-button').filter({ hasText: '看历史', exact: true }).click()
+  await page.locator('.preview-page .hist.open').waitFor()
+  assert.equal(await page.locator('.preview-page .hist-table tbody tr').count(), 30)
   assert.deepEqual(apiRequests, [])
   assert.equal(await page.evaluate(() => localStorage.getItem('fastems-token')), null)
   assert.deepEqual(errors, [])

@@ -42,7 +42,14 @@ export const POINTS = [["出口压力", "0.42", "MPa", "有效"], ["目标压力
 export const PARAMS = [["来源模板", "离心泵 v1.3"], ["型号", "CDL-32"], ["点位数", "12"], ["单位", "kPa / MPa / A"], ["最近验证", "2026-11-19 · 张工"]]
 export const MEMBERS = [["驱动泵（必需）", "1号泵", "0.42 MPa", "在线"], ["出口压力（必需）", "PT-01", "0.42 MPa", "在线"], ["液位反馈（必需）", "LT-01", "68%", "在线"]]
 export const RECENT_CHANGES = [["1号泵 出口压力 0.44 → 0.42 MPa", "2 分钟前"], ["水箱 液位 71 → 68%", "6 分钟前"], ["2号泵 启动请求已回读", "18 分钟前"]]
-export const TODAY_RUNS = [["14:00 饮水线冲洗", "完成"], ["09:00 备用泵试转", "完成"], ["07:00 采暖预循环", "跳过"], ["回水 36℃，无需预循环", ""]]
+// Final design prototype fixtures; shared data, never substituted for live reads.
+export const SCREEN_PREVIEW_RUNS: Record<string, [at: string, name: string, result: string, reason: string][]> = {
+  '教学泵房': [['14:00', '饮水线冲洗', '完成', '回读末端阀 · 30 秒'], ['09:00', '备用泵试转', '完成', '回读 5 秒'], ['07:00', '采暖预循环', '跳过', '回水 36℃，无需预循环']],
+  '储能站 A': [['08:00', '早高峰放电', '完成', '回读 8.0 kW'], ['12:00', '光伏限功率', '跳过', '无弃光'], ['23:00', '谷电充电', '完成', 'SOC 76% → 100%']],
+  '批量接入示例': [['08:00', '批量并网', '完成', '24 台 · 22 台回读'], ['12:00', 'SOC 校准', '跳过', '未到校准窗口'], ['23:00', '谷电充电', '完成', 'SOC 62% → 90%']],
+}
+export const SCREEN_PREVIEW_TREND_BARS = [42, 55, 48, 63, 70, 66, 74, 61, 54, 59, 65, 69]
+export const TODAY_RUNS = [...SCREEN_PREVIEW_RUNS['教学泵房'].map(([at, name, result]) => [`${at} ${name}`, result]), [SCREEN_PREVIEW_RUNS['教学泵房'][2][3], '']]
 export const INITIAL_ALARMS: PreviewAlarm[] = [
   { id: "a1", title: "2号泵 出口压力低", level: "预警", at: "3 分钟前", device: "2号泵", occurrences: 1 },
   { id: "a2", title: "水箱 液位偏低", level: "提示", at: "12 分钟前", device: "水箱", occurrences: 1 },

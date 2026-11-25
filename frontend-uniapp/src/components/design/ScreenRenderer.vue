@@ -30,10 +30,10 @@
         <section v-else-if="block.type === 'alarm'" class="panel glass">
           <slot name="alarm" :layer-id="layerId"><view class="card-title">本层告警 <text>{{ layerAlarms.length }}</text></view><view v-for="alarm in layerAlarms.slice(0, 3)" :key="alarm.id" class="alarm-mini"><b>{{ alarm.title }}</b><view class="meta">{{ alarm.severity }} · {{ shortTime(alarm.updated_at) }} · {{ alarm.state === 'acknowledged' ? '已接手，仍活动' : '待接手' }}</view></view><view v-if="!layerAlarms.length" class="empty">没有待处理告警</view></slot>
         </section>
-        <section v-else-if="block.type === 'today'" class="panel glass"><slot name="today" :layer-id="layerId"><view class="card-title">今日执行</view><view class="empty">暂无可用的执行记录 · 实际效果以设备回读为准</view></slot></section>
+        <section v-else-if="block.type === 'today'" class="panel glass screen-card"><slot name="today" :layer-id="layerId"><h5 class="card-title">今日执行</h5><template v-if="PREVIEW_MODE" data-preview="today"><view v-for="run in previewRuns" :key="run[0]" class="alarm-mini preview-run"><span><b>{{ run[0] }} · {{ run[1] }}</b><small>{{ run[3] }}</small></span><span class="chip" :class="{ ok: run[2] === '完成' }">{{ run[2] }}</span></view><p class="preview-note">本轮自动化的结果；实际效果以设备回读为准。</p></template><view v-else class="empty">暂无可用的执行记录 · 实际效果以设备回读为准</view></slot></section>
         <section v-else-if="block.type === 'summary'" class="panel glass"><slot name="summary" :layer-id="layerId" :result="dailyStats"><view class="card-title">运行摘要</view><view v-if="dailyError" class="error" role="alert">{{ dailyError }}</view><OverviewDailyStats :layer-id="layerId" :result="dailyStats" /></slot></section>
         <section v-else-if="block.type === 'oplog'" class="panel glass"><view class="card-title">操作记录</view><view v-if="operationError" class="error">{{ operationError }}</view><view v-for="record in operations" :key="record.request_id" class="run"><span>{{ shortTime(record.updated_at || record.started_at) }} · {{ record.command_id }}</span><span>{{ commandStateText(record.state) }}</span></view><view v-if="!operationError && !operations.length" class="empty">暂无操作记录</view></section>
-        <section v-else-if="block.type === 'trend'" class="panel glass"><view class="card-title">趋势 · {{ trendMetric.label }}</view><OverviewTrend :records="trendRecords" :start="trendStart" :end="trendEnd" :unit="trendMetric.unit" :label="trendMetric.label" @select="history(trendMetric.id)" /><view v-if="trendError" class="error">{{ trendError }}</view><view v-else-if="!trendMetric.id" class="empty">未绑定或不在本层范围 · —</view></section>
+        <section v-else-if="block.type === 'trend'" class="panel glass screen-card"><h5 class="card-title">趋势 · {{ trendMetric.label }}</h5><template v-if="PREVIEW_MODE" data-preview="trend"><view class="prototype-chart" role="img" aria-label="原型趋势示意，非实测历史"><i v-for="(height, index) in SCREEN_PREVIEW_TREND_BARS" :key="index" :style="{ height: `${height}%` }" :title="`示意 ${index + 1}：${height}%`" /></view><view class="preview-actions"><button class="ghost" @click="emit('history', trendMetric.id || layerId)">看历史</button></view></template><template v-else><OverviewTrend :records="trendRecords" :start="trendStart" :end="trendEnd" :unit="trendMetric.unit" :label="trendMetric.label" @select="history(trendMetric.id)" /><view v-if="trendError" class="error">{{ trendError }}</view><view v-else-if="!trendMetric.id" class="empty">未绑定或不在本层范围 · —</view></template></section>
       </view>
       <view v-if="slot === 'side' && $slots['after-side']" class="screen-peripheral" :style="{ gridColumn: `span ${document.columns}` }"><slot name="after-side" /></view>
     </view>
@@ -42,6 +42,8 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { PREVIEW_MODE } from '../../api/source'
+import { SCREEN_PREVIEW_RUNS, SCREEN_PREVIEW_TREND_BARS } from '../../pages/overview/preview-data'
 import { projectContext } from '../../stores/projects'
 import { ApiError } from '../../api/client'
 import { loadDailyStats } from '../../pages/overview/daily-stats-api'
@@ -66,6 +68,11 @@ import OverviewTrend from '../../pages/overview/OverviewTrend.vue'
 const props = withDefaults(defineProps<{ document: ScreenDocument; snapshot: Snapshot | null; values: StateValue[]; quality: { devices: unknown[]; channels: unknown[] }; alarms: EmsAlarm[]; ledger: LedgerDevice[]; layerId: string; deviceId?: string; lastSync?: string; runtimeError?: string }>(), { lastSync: '', runtimeError: '' })
 const emit = defineEmits<{ (event: 'history', id: string): void; (event: 'select', id: string): void }>()
 const nodes = computed(() => props.snapshot?.nodes || [])
+const previewRuns = computed(() => {
+ if (!PREVIEW_MODE) return []
+ const root = nodes.value.find(node => node.id === props.snapshot?.roots[0])
+ return SCREEN_PREVIEW_RUNS[root ? nameOf(root) : ''] || SCREEN_PREVIEW_RUNS['教学泵房']
+})
 const selected = computed(() => nodes.value.find(node => node.id === props.layerId) || null)
 const layerName = computed(() => selected.value ? nameOf(selected.value) : '未选择对象')
 const scopeNodes = computed(() => new Set([props.layerId, ...memberRolesOf(selected.value).flatMap(member => member.node_id ? [member.node_id] : [])].flatMap(id => [...descendantNodeIds(id, nodes.value)])))
@@ -164,7 +171,7 @@ const trendError = ref('')
 let trendSerial = 0
 watch(() => [props.layerId, trendMetric.value.id] as const, async ([, id]) => {
  const serial = ++trendSerial; trendRecords.value = []; trendError.value = ''
- if (!id) return
+ if (PREVIEW_MODE || !id) return
  const end = new Date(); const start = new Date(end.getTime() - 24 * 60 * 60 * 1000)
  trendStart.value = start; trendEnd.value = end
  try { const result = await loadHistory(id, start, end, '1h'); if (serial === trendSerial) trendRecords.value = result.results[0]?.records || [] }
@@ -196,6 +203,14 @@ th, td { padding:7px; text-align:left; }
 .object-link::after { border:0; }
 .run, .alarm-mini { padding:8px 0; border-top:1px solid var(--line); font-size:12px; }
 .run { display:flex; justify-content:space-between; gap:8px; }
+.screen-card h5 { margin:0 0 10px; }
+.preview-run { display:flex; align-items:center; justify-content:space-between; gap:7px; }
+.preview-run b, .preview-run small { display:block; }
+.preview-run small, .preview-note { color:var(--muted); font-size:10.5px; line-height:1.7; }
+.prototype-chart { display:flex; align-items:flex-end; gap:5px; height:96px; padding:6px 0; }
+.prototype-chart i { flex:1; border-radius:4px 4px 0 0; background:linear-gradient(0deg,#0c7d84,#79bdba); }
+.preview-actions { margin-top:10px; }
+.preview-actions uni-button { min-height:25px; padding:2px 7px; font-size:11px; }
 .meta, .empty { color:var(--muted); font-size:11px; line-height:1.7; }
 .tabs { display:flex; gap:5px; margin-bottom:10px; }
 .tabs button { min-height:0; padding:4px 8px; font-size:11px; }
