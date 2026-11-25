@@ -16,8 +16,8 @@ The worktree starts at the current committed source plus only task-related pendi
 
 | Ticket | Deliverable | Blocked by | Status |
 |---|---|---|---|
-| 01 | [真实登录与预览隔离](01.md) | None (can start immediately) | in progress — isolated worktree |
-| 02 | [项目选择与三工作台上下文统一](02.md) | 01 | pending |
+| 01 | [真实登录与预览隔离](01.md) | None (can start immediately) | integrated — 3374d57 |
+| 02 | [项目选择与三工作台上下文统一](02.md) | 01 | in progress — isolated worktree |
 | 03 | [从模板建立并维护真实台账](03.md) | 02 | pending |
 | 04 | [行业包依赖门禁](04.md) | 02 | pending |
 | 05 | [单设备 Profile 接入与只读验证](05.md) | 03 | pending |
@@ -46,5 +46,6 @@ The worktree starts at the current committed source plus only task-related pendi
 
 - Baseline checkpoint: `55b40dc`; 110 frontend tests and type-check passed. Go authz, decision, appapi and domain/access suites passed from an isolated Docker named volume (appapi 106.5s).
 - Ticket 01 runs on `refs/heads/ticket/prototype-backend-01`, explicitly based on the integration checkpoint. The automatic agent worktree initially chose a different base; that mismatch was detected before editing and replaced with the correctly based worktree.
-- Frontier starts at 01; 02 follows. Independent branches open after 02 passes integration.
+- Ticket 01 integrated by fast-forward at `3374d57`. Merger independently passed lockfile install, type-check, six authentication tests and diff whitespace checks; broader browser/Go evidence is in ticket 01, not rerun by merger.
+- Frontier is now 02. Tickets 03, 04, 09, 10 and 19 can run in parallel after 02 passes integration.
 - Local baseline and per-ticket verification must be recorded before marking a ticket complete.
