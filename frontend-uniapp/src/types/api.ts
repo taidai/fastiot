@@ -45,6 +45,12 @@ export type EmsAlarm = {
   id: string
   key: string
   revision: number
+  count?: number
+  last_raised_at?: string
+  input_state?: string
+  input_reason?: string
+  ack_note?: string
+  target?: { device_id?: string; point_id?: string; mapping_changed?: boolean }
   severity: "info" | "warning" | "critical"
   title: string
   detail: string

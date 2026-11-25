@@ -31,6 +31,7 @@ type LedgerDevice struct {
 	SuccessRate      float64 `json:"success_rate"`
 	AvgLatencyMS     float64 `json:"avg_latency_ms"`
 	Verified         bool    `json:"verified"`
+	Bound            bool    `json:"bound"`
 	Verifier         string  `json:"verifier,omitempty"`
 	VerifiedAt       string  `json:"verified_at,omitempty"`
 	DeviceSerial     string  `json:"device_serial,omitempty"`
@@ -104,6 +105,7 @@ func (h *Handler) ledgerDevices(identity Identity, siteID string) ([]LedgerDevic
 		}
 		for server := range servers {
 			model, hasModel := unitModelFor(node, server)
+			model = currentProfileModel(model, h.ems.Profiles, points)
 			item := LedgerDevice{
 				ChannelID: node.ID, ChannelName: node.Desc(), ServerID: server,
 				Name: "站号 " + strconv.Itoa(server), Protocol: protocol, Address: address,
@@ -124,13 +126,23 @@ func (h *Handler) ledgerDevices(identity Identity, siteID string) ([]LedgerDevic
 					item.Vendor = profile.Vendor
 					item.Model = profile.Model
 					item.CommandCount = len(profile.CommandSpecs)
+					item.Bound = model.BusinessNodeID != "" && len(model.PointMap) > 0
+					for _, spec := range profile.PointSpecs {
+						if !spec.RequiredPoint() {
+							continue
+						}
+						point, mapped := findPoint(byServer[server], model.PointMap[spec.Name])
+						if !mapped || point.Disabled || len(pointDifferences(spec, point)) != 0 {
+							item.Bound = false
+						}
+					}
 				}
 			}
 			deviceID := node.ID + "/" + strconv.Itoa(server)
 			if siteID != "" && !siteRefs[deviceID] && !siteNodes[item.BusinessNodeID] {
 				continue
 			}
-			if ch, ok := runtime[node.ID]; ok {
+			if ch, ok := runtime[node.ID]; ok && item.Bound {
 				item.Health = string(ch.Health(deviceID, now, h.ems.MaxAge))
 				stats := ch.Stats(deviceID)
 				if stats.Requests > 0 {

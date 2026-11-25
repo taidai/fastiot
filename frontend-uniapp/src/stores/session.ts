@@ -45,7 +45,7 @@ watch(() => session.layer, id => {
 
 export const industryBlocked = computed(() => !PREVIEW_MODE && session.snapshot?.industry?.blocked === true)
 
-export const pendingAlarms = computed(() => session.alarms.filter(alarm => alarm.active))
+export const pendingAlarms = computed(() => session.alarms.filter(alarm => alarm.active && alarm.state === "active"))
 export const currentLayer = computed(() => {
   if (!session.snapshot) return null
   return session.snapshot.nodes.find(node => node.id === session.layer) || null
@@ -122,6 +122,7 @@ async function refreshRuntime() {
     // A failed query is not evidence of a device going offline. Do not keep
     // displaying the preceding successful poll as current, either.
     session.values = []
+    session.alarms = []
     session.quality = { channels: [], devices: [] }
     session.lastSync = ""
     session.runtimeError = error instanceof ApiError

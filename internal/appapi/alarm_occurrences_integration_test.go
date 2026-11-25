@@ -186,6 +186,159 @@ func TestAlarmObservationsPreserveRecoveryBetweenScans(t *testing.T) {
 	}
 }
 
+func TestAlarmOccurrencesSurviveRuntimeRestart(t *testing.T) {
+	dir, password := t.TempDir(), data.NewID()
+	base, token, h, stop := startInputServer(t, dir, password)
+	service := runtime.NewService(nil, time.Minute, time.Second, 100)
+	defer service.Close()
+	h.SetEMS(emsapi.New(service, time.Minute))
+	root := snapshotRoot(t, base, token)
+	now := time.Now()
+	first, _ := service.Alarms.Raise(now, "persistent-condition", alarm.Warning, "Restart alarm", "high", root, "")
+	service.Alarms.Raise(now.Add(time.Millisecond), first.Key, alarm.Warning, first.Title, "high", root, "")
+	status, body := call(t, http.MethodPost, base+"/ems/alarms/"+first.ID+"/ack", token, map[string]any{"note": "still investigating"}, nil)
+	if status != 200 {
+		t.Fatal(body)
+	}
+	// A later identical abnormal observation must persist its count as well.
+	service.Alarms.Raise(now.Add(2*time.Millisecond), first.Key, alarm.Warning, first.Title, "high", root, "")
+	status, body = call(t, http.MethodPut, base+"/overview/handover?layer="+root, token, map[string]any{"note": "persist across store restart"}, nil)
+	if status != 200 {
+		t.Fatal(body)
+	}
+	service.Close()
+	stop()
+	base, token, h, _ = startInputServer(t, dir, password)
+	reopened := runtime.NewService(nil, time.Minute, time.Second, 100)
+	defer reopened.Close()
+	h.SetEMS(emsapi.New(reopened, time.Minute))
+	var handover overviewHandoverResponse
+	status, body = call(t, http.MethodGet, base+"/overview/handover?layer="+root, token, nil, &handover)
+	if status != 200 || handover.Handover == nil || handover.Handover.Note != "persist across store restart" || handover.Handover.Actor == "" || handover.Handover.UpdatedAt.IsZero() {
+		t.Fatalf("restart lost handover: %s", body)
+	}
+	var eventsBefore struct {
+		Events []alarmEvent `json:"events"`
+	}
+	status, body = call(t, http.MethodGet, base+"/alarm-events?occurrence_id="+first.ID, token, nil, &eventsBefore)
+	if status != 200 || len(eventsBefore.Events) != 2 {
+		t.Fatalf("missing durable transitions: %s", body)
+	}
+	// Wiring the same runtime twice must not duplicate occurrences or replay ack.
+	h.SetEMS(h.ems)
+	var eventsAfter struct {
+		Events []alarmEvent `json:"events"`
+	}
+	status, body = call(t, http.MethodGet, base+"/alarm-events?occurrence_id="+first.ID, token, nil, &eventsAfter)
+	if status != 200 || len(eventsAfter.Events) != len(eventsBefore.Events) {
+		t.Fatalf("replay emitted actions: %s", body)
+	}
+	var listed struct {
+		Alarms []alarm.Alarm `json:"alarms"`
+	}
+	status, body = call(t, http.MethodGet, base+"/ems/alarms", token, nil, &listed)
+	if status != 200 || len(listed.Alarms) != 1 || listed.Alarms[0].ID != first.ID || listed.Alarms[0].Count != 3 || listed.Alarms[0].State != alarm.Acknowledged || !listed.Alarms[0].Active {
+		t.Fatalf("restart lost occurrence identity, count or handling: %d %s", status, body)
+	}
+	reopened.Alarms.Clear(now.Add(3*time.Millisecond), first.Key)
+	second, _ := reopened.Alarms.Raise(now.Add(4*time.Millisecond), first.Key, alarm.Warning, first.Title, "high", root, "")
+	if second.ID == first.ID || second.Key != first.Key || second.Count != 1 {
+		t.Fatalf("retrigger identity: %+v", second)
+	}
+	third := runtime.NewService(nil, time.Minute, time.Second, 100)
+	defer third.Close()
+	h.SetEMS(emsapi.New(third, time.Minute))
+	status, body = call(t, http.MethodGet, base+"/ems/alarms", token, nil, &listed)
+	if status != 200 || len(listed.Alarms) != 2 {
+		t.Fatalf("restart lost recovery history: %d %s", status, body)
+	}
+	continued, _ := third.Alarms.Raise(now.Add(5*time.Millisecond), first.Key, alarm.Warning, first.Title, "high", root, "")
+	if continued.ID != second.ID || continued.Count != 2 {
+		t.Fatalf("restart created duplicate: %+v", continued)
+	}
+}
+
+func TestAlarmCheckpointsBoundReplayAndKeepFailedCompactionRecoverable(t *testing.T) {
+	dir, password := t.TempDir(), data.NewID()
+	base, token, h, stop := startInputServer(t, dir, password)
+	service := runtime.NewService(nil, time.Minute, time.Second, 100)
+	defer service.Close()
+	h.SetEMS(emsapi.New(service, time.Minute))
+	root := snapshotRoot(t, base, token)
+	now := time.Now()
+	first, _ := service.Alarms.Raise(now, "bounded", alarm.Warning, "bounded", "same", root, "")
+	// Force atomic replacement preparation to fail. The original journal must
+	// remain readable on the next complete storage/runtime restart.
+	if err := os.Mkdir(filepath.Join(dir, alarmEventsFile+".tmp"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 1024; i++ {
+		service.Alarms.Raise(now.Add(time.Duration(i)*time.Millisecond), first.Key, alarm.Warning, first.Title, "same", root, "")
+	}
+	status, body := call(t, http.MethodGet, base+"/ems/alarms", token, nil, nil)
+	if status != 503 {
+		t.Fatalf("compaction failure not surfaced: %d %s", status, body)
+	}
+	service.Close()
+	stop()
+	if err := os.Remove(filepath.Join(dir, alarmEventsFile+".tmp")); err != nil {
+		t.Fatal(err)
+	}
+	// An interrupted replacement must never become the authoritative journal.
+	if err := os.WriteFile(filepath.Join(dir, alarmEventsFile+".tmp"), []byte("interrupted replacement"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	base, token, h, _ = startInputServer(t, dir, password)
+	reopened := runtime.NewService(nil, time.Minute, time.Second, 100)
+	defer reopened.Close()
+	h.SetEMS(emsapi.New(reopened, time.Minute))
+	var list struct {
+		Alarms []alarm.Alarm `json:"alarms"`
+	}
+	status, body = call(t, http.MethodGet, base+"/ems/alarms", token, nil, &list)
+	if status != 200 || len(list.Alarms) != 1 || list.Alarms[0].ID != first.ID || list.Alarms[0].Count != 1025 {
+		t.Fatalf("failed compaction destroyed count: %s", body)
+	}
+	// First fresh observation also records restart uncertainty becoming known.
+	for i := 1025; i <= 2050; i++ {
+		reopened.Alarms.Raise(now.Add(time.Duration(i)*time.Millisecond), first.Key, alarm.Warning, first.Title, "same", root, "")
+	}
+	info, err := os.Stat(filepath.Join(dir, alarmEventsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() > 20000 {
+		t.Fatalf("continuous identical samples grew unbounded replay: %d bytes", info.Size())
+	}
+	var history struct {
+		Events []alarmEvent `json:"events"`
+	}
+	status, body = call(t, http.MethodGet, base+"/alarm-events?occurrence_id="+first.ID, token, nil, &history)
+	if status != 200 || len(history.Events) != 2 || history.Events[0].Transition != "raised" || history.Events[1].Transition != "changed" {
+		t.Fatalf("checkpoints leaked as lifecycle transitions: %s", body)
+	}
+	var stats AlarmStats
+	status, body = call(t, http.MethodGet, base+"/alarm-stats", token, nil, &stats)
+	if status != 200 || stats.Today.Raised != 1 {
+		t.Fatalf("checkpoints counted as retriggers: %s", body)
+	}
+}
+
+func TestAlarmRestartWithUnreadableEvidenceIsUnavailable(t *testing.T) {
+	dir := t.TempDir()
+	base, token, h, _ := startInputServer(t, dir, data.NewID())
+	if err := os.WriteFile(filepath.Join(dir, alarmEventsFile), []byte("broken\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	service := runtime.NewService(nil, time.Minute, time.Second, 100)
+	defer service.Close()
+	h.SetEMS(emsapi.New(service, time.Minute))
+	status, body := call(t, http.MethodGet, base+"/ems/alarms", token, nil, nil)
+	if status != 503 {
+		t.Fatalf("unreadable evidence became an empty successful alarm list: %d %s", status, body)
+	}
+}
+
 func TestAlarmWatcherUnknownDoesNotResolveOccurrence(t *testing.T) {
 	base, token, h, _ := startInputServer(t, t.TempDir(), data.NewID())
 	service := runtime.NewService(nil, time.Minute, time.Second, 100)

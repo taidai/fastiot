@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/simpleiot/simpleiot/data"
 
 	"fastiot/internal/contract"
+	"fastiot/internal/ems/bridge"
 	"fastiot/internal/ems/command"
 	"fastiot/internal/ems/device"
 	"fastiot/internal/ems/profile"
@@ -23,6 +25,8 @@ const unitModelPoint = "easyemsUnitModel"
 type unitModelConfig struct {
 	Name           string            `json:"name"`
 	ProfileID      string            `json:"profile_id"`
+	ProfileVersion string            `json:"profile_version,omitempty"`
+	MappingVersion string            `json:"mapping_version,omitempty"`
 	BusinessNodeID string            `json:"business_node_id,omitempty"`
 	PointMap       map[string]string `json:"point_map"`
 	Verified       bool              `json:"verified"`
@@ -40,21 +44,47 @@ type unitModelConfig struct {
 	Replacement          *profileReplacement `json:"replacement,omitempty"`
 }
 
+func modelMappingVersion(model unitModelConfig, registry *profile.Registry, points []unitModelPointView) string {
+	version, _ := registry.Fingerprint(model.ProfileID)
+	mapped := map[string]unitModelPointView{}
+	for name, id := range model.PointMap {
+		point, _ := findPoint(points, id)
+		mapped[name] = point
+	}
+	return accessHash(struct {
+		Version, Business string
+		Mapping           map[string]string
+		Points            map[string]unitModelPointView
+	}{version, model.BusinessNodeID, model.PointMap, mapped})
+}
+
+func currentProfileModel(model unitModelConfig, registry *profile.Registry, points []unitModelPointView) unitModelConfig {
+	version, found := registry.Fingerprint(model.ProfileID)
+	if !found || (model.ProfileVersion != "" && model.ProfileVersion != version) ||
+		(model.MappingVersion != "" && model.MappingVersion != modelMappingVersion(model, registry, points)) {
+		model.Verified = false
+		model.VerificationRequired = true
+	}
+	return model
+}
+
 func verificationPending(model unitModelConfig) bool {
 	return model.VerificationRequired && !model.Verified
 }
 
 type unitModelPointView struct {
-	ID         string  `json:"id"`
-	Name       string  `json:"name"`
-	ServerID   int     `json:"server_id"`
-	Address    int     `json:"address"`
-	IOType     string  `json:"io_type"`
-	DataFormat string  `json:"data_format,omitempty"`
-	ReadOnly   bool    `json:"read_only"`
-	Unit       string  `json:"unit,omitempty"`
-	Scale      float64 `json:"scale"`
-	Offset     float64 `json:"offset"`
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	ServerID    int     `json:"server_id"`
+	Address     int     `json:"address"`
+	IOType      string  `json:"io_type"`
+	DataFormat  string  `json:"data_format,omitempty"`
+	ReadOnly    bool    `json:"read_only"`
+	Unit        string  `json:"unit,omitempty"`
+	Scale       float64 `json:"scale"`
+	Offset      float64 `json:"offset"`
+	Disabled    bool    `json:"disabled"`
+	ConfigStamp string  `json:"config_stamp,omitempty"`
 }
 
 type unitModelView struct {
@@ -99,6 +129,10 @@ type unitModelCommand struct {
 }
 
 func (h *Handler) unitModel(w http.ResponseWriter, r *http.Request, identity Identity, channelID string, server int) {
+	if r.Method == http.MethodPut {
+		h.accessMu.Lock()
+		defer h.accessMu.Unlock()
+	}
 	channel, ok := h.routeNode(w, channelID)
 	if !ok {
 		return
@@ -121,17 +155,54 @@ func (h *Handler) unitModel(w http.ResponseWriter, r *http.Request, identity Ide
 		if !decodeJSON(w, r, &input) {
 			return
 		}
+		if hasModel && model.BusinessNodeID != "" && input.BusinessNodeID != model.BusinessNodeID {
+			writeError(w, http.StatusConflict, "business_binding_conflict")
+			return
+		}
+		if input.BusinessNodeID != "" {
+			if !h.allows(identity, input.BusinessNodeID) {
+				writeError(w, http.StatusForbidden, "out_of_scope")
+				return
+			}
+			node, exists := h.routeNode(w, input.BusinessNodeID)
+			if !exists {
+				return
+			}
+			if node.Type != data.NodeTypeDevice || node.Parent == "root" {
+				writeError(w, http.StatusBadRequest, "business_device_required")
+				return
+			}
+			version, _ := h.ems.Profiles.Fingerprint(input.ProfileID)
+			if !hasModel || model.ProfileID != input.ProfileID || model.ProfileVersion != version {
+				writeError(w, http.StatusConflict, "profile_preview_required")
+				return
+			}
+		}
+		if hasModel && model.MappingVersion != "" && (model.BusinessNodeID != "" || input.MappingVersion != "") && input.MappingVersion != model.MappingVersion {
+			writeError(w, http.StatusConflict, "mapping_version_conflict")
+			return
+		}
 		if err := h.saveUnitModel(channel, server, input, points); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		writeJSON(w, unitModelResponse(channel.ID, server, input, true, points, h.ems.Profiles))
+		stored, err := client.GetNodes(h.nc, "all", channel.ID, "", false)
+		if err != nil || len(stored) == 0 {
+			writeError(w, http.StatusServiceUnavailable, "model_reload_failed")
+			return
+		}
+		model, _ = unitModelFor(stored[0], server)
+		writeJSON(w, unitModelResponse(channel.ID, server, model, true, points, h.ems.Profiles))
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed")
 	}
 }
 
 func (h *Handler) unitPoints(channelID string) []unitModelPointView {
+	buses, err := client.GetNodes(h.nc, "all", channelID, "", false)
+	if err != nil || len(buses) == 0 {
+		return nil
+	}
 	nodes, err := client.GetNodes(h.nc, channelID, "all", "", false)
 	if err != nil {
 		return nil
@@ -146,12 +217,14 @@ func (h *Handler) unitPoints(channelID string) []unitModelPointView {
 		points = append(points, unitModelPointView{
 			ID: node.ID, Name: textPoint(node.Points, data.PointTypeDescription),
 			ServerID: server, Address: address,
-			IOType:     textPoint(node.Points, data.PointTypeModbusIOType),
-			DataFormat: textPoint(node.Points, data.PointTypeDataFormat),
-			ReadOnly:   readOnlyNode(node),
-			Unit:       textPoint(node.Points, data.PointTypeUnits),
-			Scale:      numberPoint(node.Points, data.PointTypeScale),
-			Offset:     numberPoint(node.Points, data.PointTypeOffset),
+			IOType:      textPoint(node.Points, data.PointTypeModbusIOType),
+			DataFormat:  textPoint(node.Points, data.PointTypeDataFormat),
+			ReadOnly:    readOnlyNode(node),
+			Unit:        textPoint(node.Points, data.PointTypeUnits),
+			Scale:       numberPoint(node.Points, data.PointTypeScale),
+			Offset:      numberPoint(node.Points, data.PointTypeOffset),
+			Disabled:    numberPoint(node.Points, data.PointTypeDisabled) != 0,
+			ConfigStamp: bridge.AcquisitionStamp(buses[0], node),
 		})
 	}
 	return points
@@ -183,6 +256,7 @@ func unitModelResponse(channelID string, server int, model unitModelConfig, hasM
 		Commands:      []unitModelCommand{},
 	}
 	if hasModel {
+		model = currentProfileModel(model, registry, points)
 		view.Model = &model
 	}
 	if hasModel {
@@ -293,6 +367,22 @@ func (h *Handler) saveUnitModel(channel data.NodeEdge, server int, input unitMod
 		cleaned[name] = id
 	}
 	input.PointMap = cleaned
+	version, _ := h.ems.Profiles.Fingerprint(input.ProfileID)
+	mappingVersion := modelMappingVersion(input, h.ems.Profiles, points)
+	if previous, exists := unitModelFor(channel, server); exists {
+		changed := previous.ProfileID != input.ProfileID || !reflect.DeepEqual(previous.PointMap, input.PointMap) ||
+			(previous.ProfileVersion != "" && previous.ProfileVersion != version) ||
+			(previous.MappingVersion != "" && previous.MappingVersion != mappingVersion)
+		if changed {
+			input.Verified = false
+			input.Verifier, input.VerifiedAt, input.Verification = "", "", ""
+			input.VerificationRequired = true
+		} else if previous.VerificationRequired && !input.Verified {
+			input.VerificationRequired = true
+		}
+	}
+	input.ProfileVersion = version
+	input.MappingVersion = mappingVersion
 	if input.Name == "" {
 		input.Name = "站号 " + strconv.Itoa(server)
 	}
@@ -328,6 +418,9 @@ func (h *Handler) deviceVerificationPending(deviceID string) bool {
 		return false
 	}
 	model, ok := unitModelFor(channelNodes[0], server)
+	if ok && h.ems != nil && h.ems.Profiles != nil {
+		model = currentProfileModel(model, h.ems.Profiles, h.unitPoints(channelID))
+	}
 	return ok && verificationPending(model)
 }
 
@@ -349,6 +442,8 @@ func (h *Handler) commandProfile(deviceID string) (device.Profile, bool) {
 	}
 	channel := channelNodes[0]
 	model, ok := unitModelFor(channel, server)
+	points := h.unitPoints(channelID)
+	model = currentProfileModel(model, h.ems.Profiles, points)
 	if !ok || verificationPending(model) {
 		// A replacement's commands stay unavailable until an operator
 		// re-verifies the mapping, so no control path can use them silently.
@@ -358,7 +453,6 @@ func (h *Handler) commandProfile(deviceID string) (device.Profile, bool) {
 	if !ok {
 		return device.Profile{}, false
 	}
-	points := h.unitPoints(channelID)
 	byID := map[string]unitModelPointView{}
 	for _, point := range points {
 		byID[point.ID] = point

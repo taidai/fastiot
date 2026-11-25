@@ -17,11 +17,17 @@ import (
 
 const alarmEventsFile = "alarm-events.jsonl"
 
+// Limit redundant observation checkpoints, not real lifecycle transitions.
+const alarmCheckpointCompactAfter = 1024
+
 type alarmEvent struct {
 	Time              time.Time            `json:"time"`
 	Key               string               `json:"key"`
 	OccurrenceID      string               `json:"occurrence_id,omitempty"`
 	Revision          uint64               `json:"revision,omitempty"`
+	Count             int                  `json:"count,omitempty"`
+	GroupID           string               `json:"group_id,omitempty"`
+	MaintenanceUntil  time.Time            `json:"maintenance_until,omitzero"`
 	Transition        string               `json:"transition"`
 	Severity          string               `json:"severity"`
 	Title             string               `json:"title"`
@@ -66,12 +72,51 @@ type AlarmStats struct {
 	LegacyIncomplete bool            `json:"legacy_incomplete,omitempty"`
 }
 
+func (h *Handler) restoreAlarmOccurrences(engine *alarm.Engine) {
+	events, err := h.readAlarmEvents()
+	if err != nil {
+		h.alarmEventsMu.Lock()
+		h.alarmEventsError = err
+		h.alarmEventsMu.Unlock()
+		return
+	}
+	latest := map[string]alarmEvent{}
+	checkpointIDs := map[string]bool{}
+	checkpointCount := 0
+	for _, event := range events {
+		if event.Transition == "checkpoint" {
+			checkpointCount++
+			checkpointIDs[event.OccurrenceID] = true
+		}
+		if event.OccurrenceID != "" && event.Revision > latest[event.OccurrenceID].Revision {
+			latest[event.OccurrenceID] = event
+		}
+	}
+	h.alarmCheckpointWrites = checkpointCount - len(checkpointIDs)
+	records := make([]alarm.Alarm, 0, len(latest))
+	for _, e := range latest {
+		records = append(records, alarm.Alarm{
+			ID: e.OccurrenceID, Key: e.Key, Revision: e.Revision, Count: e.Count, GroupID: e.GroupID,
+			Severity: alarm.Severity(e.Severity), Title: e.Title, Detail: e.Detail,
+			DeviceID: e.DeviceID, PointID: e.PointID, RootCause: e.RootCause,
+			State: alarm.State(e.State), Active: e.State == string(alarm.Active) || e.State == string(alarm.Acknowledged),
+			InputState: e.InputState, InputReason: e.InputReason, Input: e.Input,
+			CreatedAt: e.CreatedAt, UpdatedAt: e.Time, LastRaisedAt: e.LastRaisedAt,
+			AckedAt: e.AckedAt, AckedBy: e.AckedBy, AckNote: e.AckNote, ResolvedAt: e.ResolvedAt, ClosedAt: e.ClosedAt,
+			MaintenanceUntil: e.MaintenanceUntil, MaintainedBy: e.MaintainedBy, MaintenanceReason: e.MaintenanceReason,
+		})
+	}
+	sort.Slice(records, func(i, j int) bool { return records[i].CreatedAt.Before(records[j].CreatedAt) })
+	engine.Restore(records)
+}
+
 func (h *Handler) recordAlarmChange(value alarm.Alarm, transition string) {
 	if h.dataDir == "" {
 		return
 	}
 	event := alarmEvent{
 		Time: value.UpdatedAt, Key: value.Key, OccurrenceID: value.ID, Revision: value.Revision, Transition: transition,
+		Count: value.Count, GroupID: value.GroupID, MaintenanceUntil: value.MaintenanceUntil,
 		Severity: string(value.Severity), Title: value.Title, Detail: value.Detail,
 		DeviceID: value.DeviceID, PointID: value.PointID, RootCause: value.RootCause, State: string(value.State), InputState: value.InputState, InputReason: value.InputReason, Input: value.Input,
 		CreatedAt: value.CreatedAt, LastRaisedAt: value.LastRaisedAt, AckedAt: value.AckedAt, ResolvedAt: value.ResolvedAt, ClosedAt: value.ClosedAt,
@@ -106,6 +151,59 @@ func (h *Handler) recordAlarmChange(value alarm.Alarm, transition string) {
 	} else if closeErr != nil {
 		h.alarmEventsError = closeErr
 	}
+	if transition == "checkpoint" && h.alarmEventsError == nil {
+		h.alarmCheckpointWrites++
+		if h.alarmCheckpointWrites >= alarmCheckpointCompactAfter {
+			h.alarmEventsError = h.compactAlarmCheckpoints()
+			if h.alarmEventsError == nil {
+				h.alarmCheckpointWrites = 0
+			}
+		}
+	}
+}
+
+// Called under alarmEventsMu. Replacement is prepared and synced separately;
+// a failed write/close/rename leaves the old, already-synced journal intact.
+func (h *Handler) compactAlarmCheckpoints() error {
+	events, err := h.readAlarmEventsUnlocked()
+	if err != nil {
+		return err
+	}
+	latest := map[string]int{}
+	for i, event := range events {
+		if event.Transition != "checkpoint" {
+			continue
+		}
+		previous, exists := latest[event.OccurrenceID]
+		if !exists || event.Revision > events[previous].Revision {
+			latest[event.OccurrenceID] = i
+		}
+	}
+	path := filepath.Join(h.dataDir, alarmEventsFile)
+	temporary := path + ".tmp"
+	file, err := os.OpenFile(temporary, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(temporary)
+	encoder := json.NewEncoder(file)
+	for i, event := range events {
+		if event.Transition == "checkpoint" && latest[event.OccurrenceID] != i {
+			continue
+		}
+		if err = encoder.Encode(event); err != nil {
+			file.Close()
+			return err
+		}
+	}
+	if err = file.Sync(); err != nil {
+		file.Close()
+		return err
+	}
+	if err = file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporary, path)
 }
 
 func (h *Handler) alarmEvidenceError() error {
@@ -145,7 +243,7 @@ func (h *Handler) alarmOccurrenceEvents(w http.ResponseWriter, r *http.Request, 
 	}
 	events := []alarmEvent{}
 	for _, event := range all {
-		if event.OccurrenceID != id {
+		if event.Transition == "checkpoint" || event.OccurrenceID != id {
 			continue
 		}
 		if !visible(event) {
@@ -192,7 +290,7 @@ func (h *Handler) alarmStatsData(identity Identity, days int) (AlarmStats, error
 		return AlarmStats{}, err
 	}
 	for _, event := range events {
-		if !visible(event) {
+		if event.Transition == "checkpoint" || !visible(event) {
 			continue
 		}
 		at := event.Time.In(location)
@@ -278,6 +376,10 @@ func (h *Handler) readAlarmEvents() ([]alarmEvent, error) {
 	if h.alarmEventsError != nil {
 		return nil, h.alarmEventsError
 	}
+	return h.readAlarmEventsUnlocked()
+}
+
+func (h *Handler) readAlarmEventsUnlocked() ([]alarmEvent, error) {
 	if h.dataDir == "" {
 		return nil, nil
 	}

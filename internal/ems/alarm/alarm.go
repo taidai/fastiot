@@ -90,13 +90,16 @@ type Maintenance struct {
 }
 
 type Engine struct {
-	OnChange    func(Alarm, string)
-	mu          sync.Mutex
-	alarms      map[string]*Alarm
-	current     map[string]string
-	maintenance map[string]Maintenance
-	roots       map[string]string
-	order       []string
+	OnChange func(Alarm, string)
+	// OnCheckpoint persists continuous observation counts, without notifying a
+	// lifecycle subscriber or raising another occurrence.
+	OnCheckpoint func(Alarm)
+	mu           sync.Mutex
+	alarms       map[string]*Alarm
+	current      map[string]string
+	maintenance  map[string]Maintenance
+	roots        map[string]string
+	order        []string
 }
 
 // New returns an empty alarm engine.
@@ -106,6 +109,38 @@ func New() *Engine {
 		current:     make(map[string]string),
 		maintenance: make(map[string]Maintenance),
 		roots:       make(map[string]string),
+	}
+}
+
+// Restore loads durable occurrences without executing or emitting transitions.
+// Repeated replay and out-of-order delivery cannot downgrade a revision.
+func (e *Engine) Restore(records []Alarm) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, record := range records {
+		if record.ID == "" || record.Key == "" {
+			continue
+		}
+		previous := e.alarms[record.ID]
+		if previous != nil && previous.Revision >= record.Revision {
+			continue
+		}
+		copy := cloneAlarm(record)
+		if copy.Active {
+			copy.InputState, copy.InputReason = "unknown", "awaiting_observation_after_restart"
+			copy.Input = nil
+		}
+		if previous == nil {
+			e.order = append(e.order, copy.ID)
+		}
+		e.alarms[copy.ID] = &copy
+		current := e.alarms[e.current[copy.Key]]
+		if current == nil || current.ID == copy.ID || !copy.CreatedAt.Before(current.CreatedAt) {
+			e.current[copy.Key] = copy.ID
+		}
+		if copy.Active && copy.RootCause != "" && copy.GroupID == "" {
+			e.roots[copy.RootCause] = copy.ID
+		}
 	}
 }
 
@@ -136,9 +171,12 @@ func (e *Engine) raise(now time.Time, key string, severity Severity, title, deta
 	var notify Alarm
 	var transition string
 	notifyChange := false
+	checkpoint := false
 	defer func() {
 		if notifyChange && e.OnChange != nil {
 			e.OnChange(cloneAlarm(notify), transition)
+		} else if checkpoint && e.OnCheckpoint != nil {
+			e.OnCheckpoint(cloneAlarm(notify))
 		}
 	}()
 	e.mu.Lock()
@@ -180,6 +218,7 @@ func (e *Engine) raise(now time.Time, key string, severity Severity, title, deta
 		existing.LastRaisedAt = observedAt
 		existing.UpdatedAt = now
 		existing.Count++
+		notify, checkpoint = *existing, true
 	}
 	if changed {
 		existing.Severity = severity

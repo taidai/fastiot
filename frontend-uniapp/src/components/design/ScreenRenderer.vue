@@ -1,7 +1,7 @@
 <template>
   <view class="screen-renderer" :data-screen-version="document.version" :data-screen-layer="layerId">
     <view v-if="document.inherited_from" class="provenance">继承自 {{ nodeName(document.inherited_from) }} · v{{ document.version }}</view>
-    <view v-for="slot in ['top', 'main', 'side']" :key="slot" class="screen-slot" :class="`slot-${slot}`" :data-slot="slot" :style="{ '--screen-columns': document.columns }">
+    <view v-for="slot in ['top', 'main', 'side']" :key="slot" class="screen-slot" :class="[`slot-${slot}`, { side: slot === 'side' }]" :data-slot="slot" :style="{ '--screen-columns': document.columns }">
       <view v-for="block in slotBlocks(slot)" :key="block.type" class="screen-block" :data-block="block.type" :style="{ gridColumn: `span ${Math.min(block.span, document.columns)}` }">
         <view v-if="!applicable(block.type)" class="panel glass empty">{{ definition(block.type)?.label }} · 本层不适用，请重新配置</view>
         <view v-else-if="block.type === 'status'" class="status glass"><span>{{ runtimeError || onlineText }}</span><span>观测于 {{ latestObservation }} · 查询于 {{ shortTime(lastSync) }}</span></view>
@@ -28,10 +28,10 @@
           <view class="card-title">最近数据</view><view class="table-wrap"><table><thead><tr><th>点位</th><th v-for="column in block.binding.columns" :key="column">{{ recentColumnLabels[column] }}</th></tr></thead><tbody><tr v-for="id in block.binding.point_ids.slice(0, block.binding.rows)" :key="id"><td><button class="object-link" @click="history(availablePoints.has(id) ? id : '')">{{ resolvePoint(id).label }}</button></td><td v-for="column in block.binding.columns" :key="column">{{ recentColumn(id, column) }}</td></tr><tr v-if="!block.binding.point_ids.length"><td :colspan="block.binding.columns.length + 1" class="empty">未绑定点位 · —</td></tr></tbody></table></view>
         </section>
         <section v-else-if="block.type === 'alarm'" class="panel glass">
-          <slot name="alarm" :layer-id="layerId"><view class="card-title">本层告警 <text>{{ layerAlarms.length }}</text></view><view v-for="alarm in layerAlarms.slice(0, 3)" :key="alarm.id" class="alarm-mini"><b>{{ alarm.title }}</b><view class="meta">{{ alarm.severity }} · {{ shortTime(alarm.updated_at) }}</view></view><view v-if="!layerAlarms.length" class="empty">没有待处理告警</view></slot>
+          <slot name="alarm" :layer-id="layerId"><view class="card-title">本层告警 <text>{{ layerAlarms.length }}</text></view><view v-for="alarm in layerAlarms.slice(0, 3)" :key="alarm.id" class="alarm-mini"><b>{{ alarm.title }}</b><view class="meta">{{ alarm.severity }} · {{ shortTime(alarm.updated_at) }} · {{ alarm.state === 'acknowledged' ? '已接手，仍活动' : '待接手' }}</view></view><view v-if="!layerAlarms.length" class="empty">没有待处理告警</view></slot>
         </section>
         <section v-else-if="block.type === 'today'" class="panel glass"><slot name="today" :layer-id="layerId"><view class="card-title">今日执行</view><view class="empty">暂无可用的执行记录 · 实际效果以设备回读为准</view></slot></section>
-        <section v-else-if="block.type === 'summary'" class="panel glass"><slot name="summary" :layer-id="layerId"><view class="card-title">运行摘要</view><view class="empty">暂无可用的统计数据</view></slot></section>
+        <section v-else-if="block.type === 'summary'" class="panel glass"><slot name="summary" :layer-id="layerId" :result="dailyStats"><view class="card-title">运行摘要</view><view v-if="dailyError" class="error" role="alert">{{ dailyError }}</view><OverviewDailyStats :layer-id="layerId" :result="dailyStats" /></slot></section>
         <section v-else-if="block.type === 'oplog'" class="panel glass"><view class="card-title">操作记录</view><view v-if="operationError" class="error">{{ operationError }}</view><view v-for="record in operations" :key="record.request_id" class="run"><span>{{ shortTime(record.updated_at || record.started_at) }} · {{ record.command_id }}</span><span>{{ commandStateText(record.state) }}</span></view><view v-if="!operationError && !operations.length" class="empty">暂无操作记录</view></section>
         <section v-else-if="block.type === 'trend'" class="panel glass"><view class="card-title">趋势 · {{ trendMetric.label }}</view><OverviewTrend :records="trendRecords" :start="trendStart" :end="trendEnd" :unit="trendMetric.unit" :label="trendMetric.label" @select="history(trendMetric.id)" /><view v-if="trendError" class="error">{{ trendError }}</view><view v-else-if="!trendMetric.id" class="empty">未绑定或不在本层范围 · —</view></section>
       </view>
@@ -41,7 +41,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { projectContext } from '../../stores/projects'
+import { ApiError } from '../../api/client'
+import { loadDailyStats } from '../../pages/overview/daily-stats-api'
+import { dailyMetricDetail, dailyMetricText } from '../../pages/overview/daily-stats'
+import type { DailyStats } from '../../pages/overview/daily-stats'
+import OverviewDailyStats from '../../pages/overview/OverviewDailyStats.vue'
 import type { EmsAlarm, Snapshot, StateValue, HistoryRecord } from '../../types/api'
 import { nameOf } from '../../types/api'
 import type { LedgerDevice, QualityStats } from '../../pages/overview/overview'
@@ -92,8 +98,38 @@ const metricIcons = [
  'M6 16v-5a6 6 0 0 1 12 0v5l2 3H4zM10 21h4',
  'M4 18v-4M9 18V9M14 18V5M19 18V2',
 ]
+const dailyStats = ref<DailyStats | null>(null)
+const dailyError = ref('')
+let dailySerial = 0
+let dailyTimer: ReturnType<typeof setInterval> | undefined
+async function refreshDaily(clear = false) {
+ const serial = ++dailySerial
+ const layer = props.layerId
+ const generation = projectContext.generation
+ if (clear) dailyStats.value = null
+ dailyError.value = ''
+ if (!layer) return
+ try {
+  const result = await loadDailyStats(layer)
+  if (serial === dailySerial && generation === projectContext.generation && layer === props.layerId && result.layer_id === layer) dailyStats.value = result
+ } catch (error) {
+  if (serial === dailySerial && generation === projectContext.generation && layer === props.layerId) { dailyStats.value = null; dailyError.value = error instanceof ApiError && error.status === 403 ? '无权限' : '统计读取失败' }
+ }
+}
+watch(() => [props.layerId, projectContext.generation], () => { void refreshDaily(true) }, { immediate: true, flush: 'sync' })
+onMounted(() => { dailyTimer = setInterval(() => { void refreshDaily() }, 30000) })
+onBeforeUnmount(() => { dailySerial++; clearInterval(dailyTimer) })
+const dailyBindings = { today_energy: 'energy', run_duration: 'runtime', communication_success_rate: 'communication', data_freshness: 'freshness' } as const
+function automaticMetric(key = '') {
+ const field = dailyBindings[key as keyof typeof dailyBindings]
+ if (field) {
+  const value = dailyStats.value?.[field]
+  return { id: '', label: automaticMetricLabel(key), value: dailyMetricText(value), unit: value?.unit || '', quality: dailyError.value || dailyMetricDetail(value), time: shortTime(value?.observed_at || dailyStats.value?.as_of) }
+ }
+ return { id: '', label: automaticMetricLabel(key), value: props.runtimeError ? '—' : key === 'online_devices' ? onlineText.value : key === 'active_alarms' ? String(layerAlarms.value.length) : '—', unit: '', quality: key === 'online_devices' || key === 'active_alarms' ? (props.runtimeError ? '查询不可用' : '当前查询') : '暂无统计', time: '—' }
+}
 const metrics = computed(() => ((props.document.blocks.find(block => block.type === 'kpi')?.binding.metrics || []) as ScreenMetric[]).map(metric => {
- const actual = metric.point_id ? resolvePoint(metric.point_id) : { id:'', label:automaticMetricLabel(metric.metric), value: props.runtimeError ? '—' : metric.metric === 'online_devices' ? onlineText.value : metric.metric === 'active_alarms' ? String(layerAlarms.value.length) : '—', unit:'', quality: metric.metric === 'online_devices' || metric.metric === 'active_alarms' ? (props.runtimeError ? '查询不可用' : '当前查询') : '暂无统计', time:'—' }
+ const actual = metric.point_id ? resolvePoint(metric.point_id) : automaticMetric(metric.metric)
  return { ...actual, label: metric.label || actual.label, target:metric.target || '' }
 }))
 const pointMetrics = computed(() => devices.value.flatMap(device => devicePointIds(nodes.value, [device]).slice(0, 1)).map(resolvePoint))
@@ -141,6 +177,7 @@ watch(() => [props.layerId, trendMetric.value.id] as const, async ([, id]) => {
 .provenance, .slot-top { grid-column:1 / -1; }
 .provenance { font-size:12px; color:var(--muted); }
 .screen-slot { display:grid; grid-template-columns:repeat(var(--screen-columns),minmax(0,1fr)); gap:14px; align-content:start; min-width:0; }
+.screen-block[data-block="summary"] :deep(.daily-stats) { grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px 0; }
 .screen-block { min-width:0; }
 .status { display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; padding:8px 14px; font-size:11px; color:var(--muted); }
 .metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(95px,1fr)); gap:10px; }

@@ -104,7 +104,9 @@ func TestOccurrenceKeepsLifecycleTimesAndRevision(t *testing.T) {
 func TestContinuousOccurrenceTracksTriggerAndSeverity(t *testing.T) {
 	engine := New()
 	var events []Alarm
+	var checkpoints []Alarm
 	engine.OnChange = func(value Alarm, _ string) { events = append(events, value) }
+	engine.OnCheckpoint = func(value Alarm) { checkpoints = append(checkpoints, value) }
 	first, _ := engine.Raise(t0, "temperature:d1", Warning, "温度高", "46", "d1", "p1")
 	repeated, _ := engine.Raise(t0.Add(time.Second), first.Key, Warning, "温度高", "46", "d1", "p1")
 	if repeated.ID != first.ID || !repeated.CreatedAt.Equal(t0) || !repeated.LastRaisedAt.Equal(t0.Add(time.Second)) || repeated.Count != 2 {
@@ -112,6 +114,13 @@ func TestContinuousOccurrenceTracksTriggerAndSeverity(t *testing.T) {
 	}
 	if len(events) != 1 {
 		t.Fatal("unchanged condition repeated an occurrence event")
+	}
+	if len(checkpoints) != 1 || checkpoints[0].ID != first.ID || checkpoints[0].Count != 2 {
+		t.Fatal("continuous count checkpoint missing")
+	}
+	duplicate, _ := engine.Raise(t0.Add(time.Second), first.Key, Warning, "温度高", "46", "d1", "p1")
+	if duplicate.Count != 2 || len(events) != 1 || len(checkpoints) != 1 {
+		t.Fatal("duplicate observation incremented or notified")
 	}
 	changed, _ := engine.Raise(t0.Add(2*time.Second), first.Key, Critical, "温度高", "60", "d1", "p1")
 	if changed.ID != first.ID || !changed.CreatedAt.Equal(t0) || len(events) != 2 || events[1].Severity != Critical {

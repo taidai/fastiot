@@ -2,6 +2,8 @@ package appapi
 
 import (
 	"encoding/json"
+	"fastiot/internal/ems/history"
+	"fastiot/internal/ems/signal"
 	"github.com/simpleiot/simpleiot/client"
 	"github.com/simpleiot/simpleiot/data"
 	"net/http"
@@ -26,6 +28,21 @@ func TestScreenBrowserBackend(t *testing.T) {
 		if err := client.SendNodePoint(h.nc, ids["channel"], data.NewPointString(unitModelPoint, []string{"1", "2"}[i], string(raw)), true); err != nil {
 			t.Fatal(err)
 		}
+	}
+	f := &pointConfigFixture{base: base, token: token}
+	energy := f.createPoint(t, ids["channel"], ModbusIOInput{Description: "Screen energy evidence", ServerID: 1, Address: 8, IOType: data.PointValueModbusHoldingRegister, DataFormat: "uint16", Scale: 1, ReadOnly: true, Units: "kWh"})
+	config := map[string]any{"version": 0, "time_zone": "UTC", "energy": map[string]any{"point_id": energy, "unit": "kWh", "max_gap_seconds": 600, "reset_policy": "discard_interval"}}
+	status, body := call(t, http.MethodPut, base+"/nodes/"+area+"/daily-stats-config", token, config, nil)
+	if status != http.StatusOK {
+		t.Fatalf("daily config: %d %s", status, body)
+	}
+	start := time.Now().UTC().Truncate(24 * time.Hour)
+	if time.Since(start) < 30*time.Minute {
+		t.Fatal("browser evidence requires 30 elapsed UTC minutes")
+	}
+	for i, value := range []float64{100, 110, 2, 5} {
+		at := start.Add(time.Duration(i) * 10 * time.Minute)
+		h.ems.Service.History.Record([]history.Sample{{DeviceID: ids["channel"] + "/1", PointID: energy, SourceTime: at, ReceivedTime: at, TimeSource: "device", Value: signal.Num(value), Quality: signal.Good, Unit: "kWh"}})
 	}
 	outsidePoint := createNodeAPI(t, base, token, "variable", area, "Parent-only point", 0)
 	done := make(chan struct{}, 1)

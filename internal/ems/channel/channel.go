@@ -283,7 +283,7 @@ func (c *Channel) RunOnce(ctx context.Context, now func() time.Time) ([]Result, 
 		device := c.index[write.deviceID]
 		point, _ := device.point(write.pointID)
 		result := WriteResult{DeviceID: write.deviceID, PointID: write.pointID, RequestID: write.requestID, Value: write.value}
-		if err := c.write(device.ServerID, point, write.value); err != nil {
+		if err := c.write(device.ID, device.ServerID, point, write.value, now); err != nil {
 			result.Error = err.Error()
 			var refusal Refusal
 			result.Rejected = errors.As(err, &refusal)
@@ -305,7 +305,7 @@ func (c *Channel) RunOnce(ctx context.Context, now func() time.Time) ([]Result, 
 				break
 			}
 			started := time.Now()
-			bits, words, err := c.read(device.ServerID, block)
+			bits, words, err := c.read(device.ID, device.ServerID, block, now)
 			observedAt := now()
 			c.recordLatency(device.ID, time.Since(started))
 			if err != nil {
@@ -352,35 +352,43 @@ func (c *Channel) drain() []pendingWrite {
 	return writes
 }
 
-func (c *Channel) read(server byte, block block) ([]bool, []uint16, error) {
+func (c *Channel) read(deviceID string, server byte, block block, now func() time.Time) ([]bool, []uint16, error) {
+	started := time.Now()
+	var bits []bool
+	var words []uint16
+	var err error
 	switch block.function {
 	case Coil:
-		bits, err := c.Bus.ReadCoils(server, block.address, block.count)
-		return bits, nil, err
+		bits, err = c.Bus.ReadCoils(server, block.address, block.count)
 	case DiscreteInput:
-		bits, err := c.Bus.ReadDiscreteInputs(server, block.address, block.count)
-		return bits, nil, err
+		bits, err = c.Bus.ReadDiscreteInputs(server, block.address, block.count)
 	case HoldingRegister:
-		words, err := c.Bus.ReadHoldingRegisters(server, block.address, block.count)
-		return nil, words, err
+		words, err = c.Bus.ReadHoldingRegisters(server, block.address, block.count)
 	case InputRegister:
-		words, err := c.Bus.ReadInputRegisters(server, block.address, block.count)
-		return nil, words, err
+		words, err = c.Bus.ReadInputRegisters(server, block.address, block.count)
 	default:
 		return nil, nil, fmt.Errorf("unknown function %q", block.function)
 	}
+	c.recordAttempt(deviceID, now(), time.Since(started), err)
+	return bits, words, err
 }
 
-func (c *Channel) write(server byte, point Point, value signal.Value) error {
+func (c *Channel) write(deviceID string, server byte, point Point, value signal.Value, now func() time.Time) error {
 	coil, words, err := encode(point, value)
 	if err != nil {
 		return err
 	}
 	if point.boolean() {
-		return c.Bus.WriteCoil(server, point.Address, coil)
+		started := time.Now()
+		err := c.Bus.WriteCoil(server, point.Address, coil)
+		c.recordAttempt(deviceID, now(), time.Since(started), err)
+		return err
 	}
 	for index, word := range words {
-		if err := c.Bus.WriteHoldingRegister(server, point.Address+uint16(index), word); err != nil {
+		started := time.Now()
+		err := c.Bus.WriteHoldingRegister(server, point.Address+uint16(index), word)
+		c.recordAttempt(deviceID, now(), time.Since(started), err)
+		if err != nil {
 			return err
 		}
 	}
@@ -398,8 +406,25 @@ func (c *Channel) recordLatency(deviceID string, elapsed time.Duration) {
 	if ms > state.stats.LatencyMaxMS {
 		state.stats.LatencyMaxMS = ms
 	}
-	bucket := state.bucket(time.Now())
+}
+
+// recordAttempt counts actual transport calls, not decoded points or health
+// transitions. A failed connection is one attempt; a local encode rejection or
+// cancellation before I/O is none. Decode failures remain in health/quality only.
+func (c *Channel) recordAttempt(deviceID string, at time.Time, elapsed time.Duration, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	bucket := c.state(deviceID).bucket(at)
 	bucket.requests++
+	if err != nil {
+		bucket.failures++
+		if bucket.errors == nil {
+			bucket.errors = map[string]int{}
+		}
+		bucket.errors[classifyError(err)]++
+		return
+	}
+	ms := float64(elapsed.Microseconds()) / 1000
 	bucket.latencySum += ms
 	if ms > bucket.latencyMax {
 		bucket.latencyMax = ms
@@ -424,13 +449,6 @@ func (c *Channel) recordFailure(deviceID string, err error, _ time.Time) {
 	state.stats.Failures++
 	state.stats.ConsecutiveFailures++
 	state.stats.LastError = err.Error()
-	bucket := state.bucket(time.Now())
-	bucket.requests++
-	bucket.failures++
-	if bucket.errors == nil {
-		bucket.errors = map[string]int{}
-	}
-	bucket.errors[classifyError(err)]++
 }
 
 // classifyError groups transport errors for the quality panel.
@@ -486,7 +504,7 @@ func (c *Channel) Window(deviceID string, now time.Time, minutes int) WindowStat
 	latencyCount := 0
 	for index := range state.buckets {
 		bucket := state.buckets[index]
-		if bucket.minute == 0 || bucket.minute < oldest {
+		if bucket.minute == 0 || bucket.minute < oldest || bucket.minute > now.Unix()/60 {
 			continue
 		}
 		result.Polls += bucket.requests

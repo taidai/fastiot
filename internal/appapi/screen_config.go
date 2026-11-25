@@ -159,7 +159,7 @@ func (h *Handler) validateScreenBinding(identity Identity, node data.NodeEdge, b
 		ids := []string{}
 		for _, metric := range metrics {
 			if metric.PointID != "" {
-				if metric.Metric != "" || !h.screenReferenceAllowed(identity, node.ID, metric.PointID) {
+				if metric.Metric != "" || !h.screenBindingReferenceAllowed(identity, node.ID, metric.PointID) {
 					return nil, fmt.Errorf("invalid_binding")
 				}
 				ids = append(ids, metric.PointID)
@@ -190,7 +190,7 @@ func (h *Handler) validateScreenBinding(identity Identity, node data.NodeEdge, b
 		if err := remarshalScreenBinding(binding, &input); err != nil {
 			return nil, fmt.Errorf("invalid_binding")
 		}
-		if input.PointID != "" && !h.screenReferenceAllowed(identity, node.ID, input.PointID) {
+		if input.PointID != "" && !h.screenBindingReferenceAllowed(identity, node.ID, input.PointID) {
 			return nil, fmt.Errorf("invalid_binding")
 		}
 		return []string{input.PointID}, nil
@@ -238,14 +238,24 @@ func validateStringEnum(input any, allowed map[string]bool) error {
 
 func (h *Handler) validateScreenReferences(identity Identity, layer string, ids []string) error {
 	for _, id := range ids {
-		if id == "" || !h.screenReferenceAllowed(identity, layer, id) {
+		if id == "" || !h.screenBindingReferenceAllowed(identity, layer, id) {
 			return fmt.Errorf("invalid_binding")
 		}
 	}
 	return nil
 }
 
+// Daily engineering declarations also support directly scoped acquisition points.
+// Customer screen bindings additionally require a bound business device.
 func (h *Handler) screenReferenceAllowed(identity Identity, layer, id string) bool {
+	if id != "" && h.allows(identity, id) && (id == layer || h.users.IsUnder(id, layer)) {
+		nodes, err := client.GetNodes(h.nc, "all", id, "", false)
+		return err == nil && len(nodes) > 0
+	}
+	return h.screenBindingReferenceAllowed(identity, layer, id)
+}
+
+func (h *Handler) screenBindingReferenceAllowed(identity Identity, layer, id string) bool {
 	if !h.allows(identity, id) {
 		return false
 	}

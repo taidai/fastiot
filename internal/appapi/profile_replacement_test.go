@@ -16,7 +16,7 @@ func replacementPoints(prof profile.Profile) []unitModelPointView {
 			continue // the new profile needs a point the site never had
 		}
 		point := unitModelPointView{
-			ID: "p-" + spec.Name, Name: spec.Name, ServerID: 1,
+			ID: "p-" + spec.Name, Name: spec.Name, ServerID: 1, Address: int(spec.Address),
 			IOType: profile.IOTypeFor(spec.Function), DataFormat: spec.Format,
 			Scale: spec.Scale, Offset: spec.Offset, Unit: spec.Unit, ReadOnly: spec.ReadOnly,
 		}

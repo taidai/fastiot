@@ -25,6 +25,7 @@ import (
 	"fastiot/internal/decision"
 	"fastiot/internal/deepseek"
 	domainaccess "fastiot/internal/domain/access"
+	"fastiot/internal/ems/alarm"
 	"fastiot/internal/ems/command"
 	"fastiot/internal/ems/safety"
 	"fastiot/internal/emsapi"
@@ -59,12 +60,13 @@ type Handler struct {
 	forecastMu   sync.Mutex
 	forecastLast map[string]time.Time
 
-	acceptanceMu     sync.Mutex
-	latestAcceptance *acceptanceReport
-	audit            *audit.Store
-	dataDir          string
-	alarmEventsMu    sync.Mutex
-	alarmEventsError error
+	acceptanceMu          sync.Mutex
+	latestAcceptance      *acceptanceReport
+	audit                 *audit.Store
+	dataDir               string
+	alarmEventsMu         sync.Mutex
+	alarmEventsError      error
+	alarmCheckpointWrites int
 
 	sessionMu      sync.Mutex
 	sessions       map[string]sessionState
@@ -104,7 +106,9 @@ func (h *Handler) SetEMS(handler *emsapi.Handler) {
 	if handler != nil && handler.Service != nil {
 		handler.Service.Commands().SetProfiles(h.commandProfile)
 		handler.Service.Commands().Guard = h.commandGuard
+		h.restoreAlarmOccurrences(handler.Service.Alarms)
 		handler.Service.Alarms.OnChange = h.recordAlarmChange
+		handler.Service.Alarms.OnCheckpoint = func(value alarm.Alarm) { h.recordAlarmChange(value, "checkpoint") }
 		handler.AlarmEvidenceError = h.alarmEvidenceError
 	}
 }
@@ -487,6 +491,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.savePlan96Handler(w, identity, req)
+	case path == "overview/daily-stats" && r.Method == http.MethodGet:
+		h.dailyStats(w, r, identity)
+	case len(parts) == 3 && parts[0] == "nodes" && parts[2] == "daily-stats-config" && (r.Method == http.MethodGet || r.Method == http.MethodPut):
+		h.dailyStatsConfig(w, r, identity, parts[1])
 	case path == "history" && r.Method == http.MethodGet:
 		h.history(w, r, identity, false)
 	case path == "history/export" && r.Method == http.MethodGet:

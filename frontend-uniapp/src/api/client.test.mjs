@@ -111,6 +111,31 @@ test('returning to a project does not revive old responses or swallow revision c
   await assert.rejects(binary, { code: 'project_context_changed' })
 })
 
+test('all workbench badges count unacknowledged conditions, not acknowledged or recovered occurrences', async () => {
+  const app = await application()
+  app.api.session.alarms = [
+    { id: 'pending', active: true, state: 'active' },
+    { id: 'owned', active: true, state: 'acknowledged' },
+    { id: 'past', active: false, state: 'resolved' },
+  ]
+  assert.deepEqual(app.api.pendingAlarms.value.map(alarm => alarm.id), ['pending'])
+})
+
+test('unavailable alarm query clears stale pending count instead of showing a current badge', async () => {
+  const app = await application()
+  await app.api.ensureProjectContext()
+  app.api.session.alarms = [{ id: 'old', active: true, state: 'active' }]
+  const refresh = app.api.refreshAll()
+  await new Promise(resolve => setImmediate(resolve))
+  for (const req of app.requests.splice(0)) {
+    if (req.url === '/api/ems/alarms') req.success({ statusCode: 503, data: { error: 'alarm_evidence_unconfirmed' } })
+    else req.success({ statusCode: 200, data: req.url === '/api/snapshot' ? { roots: [], nodes: [] } : { values: [], channels: [], devices: [] } })
+  }
+  await refresh
+  assert.deepEqual(app.api.session.alarms, [])
+  assert.match(app.api.session.runtimeError, /alarm_evidence_unconfirmed/)
+})
+
 test('refresh validates persisted layer against the authorized snapshot', async () => {
   for (const savedLayer of ['b-layer', 'a-layer']) {
     const app = await application(false, new Map([['fastems-token', 'live-session'], ['fastiot-project-context:fixture-user', { project: 'project-b', layer: savedLayer }]]))
