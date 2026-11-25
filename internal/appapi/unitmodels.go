@@ -2,6 +2,7 @@ package appapi
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -591,6 +592,14 @@ func (h *Handler) operationScope(identity Identity, model unitModelConfig) bool 
 	return true
 }
 
+func writeCommandError(w http.ResponseWriter, err error) {
+	status := http.StatusConflict
+	if errors.Is(err, command.ErrJournal) {
+		status = http.StatusServiceUnavailable
+	}
+	writeError(w, status, err.Error())
+}
+
 func (h *Handler) unitCommands(w http.ResponseWriter, r *http.Request, identity Identity, channelID string, server int, requestID string) {
 	channel, ok := h.routeNode(w, channelID)
 	if !ok {
@@ -647,7 +656,7 @@ func (h *Handler) unitCommands(w http.ResponseWriter, r *http.Request, identity 
 		}
 		request := command.Request{ID: input.RequestID, DeviceID: deviceID, CommandID: input.CommandID, Actor: identity.UserID, Parameters: input.Parameters}
 		if existing, found, err := h.ems.Service.Commands().Existing(request); err != nil {
-			writeError(w, http.StatusConflict, err.Error())
+			writeCommandError(w, err)
 			return
 		} else if found {
 			writeJSON(w, commandOutcome(existing))
@@ -677,7 +686,7 @@ func (h *Handler) unitCommands(w http.ResponseWriter, r *http.Request, identity 
 		}
 		outcome, err := h.ems.Service.Commands().Submit(time.Now(), request)
 		if err != nil {
-			writeError(w, http.StatusConflict, err.Error())
+			writeCommandError(w, err)
 			return
 		}
 		_ = model

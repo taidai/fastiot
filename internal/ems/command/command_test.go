@@ -2,6 +2,7 @@ package command
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -135,6 +136,8 @@ func TestReadbackDeadlineUsesObservationAndArrivalNotTick(t *testing.T) {
 		{"late_observation", 6 * time.Second, 6 * time.Second, signal.Good, Unknown},
 		{"late_arrival", 4 * time.Second, 6 * time.Second, signal.Good, Unknown},
 		{"old_cache", -time.Second, 4 * time.Second, signal.Good, Unknown},
+		{"clock_backwards_on_arrival", 4 * time.Second, 3 * time.Second, signal.Good, Unknown},
+		{"missing_arrival", 4 * time.Second, 0, signal.Good, Unknown},
 		{"invalid", 4 * time.Second, 4 * time.Second, signal.Invalid, Unknown},
 		{"stale", 4 * time.Second, 4 * time.Second, signal.Stale, Unknown},
 		{"future", 8 * time.Second, 8 * time.Second, signal.Good, Unknown},
@@ -203,6 +206,84 @@ func TestDeclaredBooleanRegisterParameterRejectsNonBinaryValue(t *testing.T) {
 	})
 	if _, err := m.Submit(t0, Request{ID: "invalid-bool", DeviceID: "pcs1", CommandID: "set", Parameters: map[string]float64{"value": 2}}); err == nil || writer.calls != 0 {
 		t.Fatalf("boolean declaration ignored: err=%v writes=%d", err, writer.calls)
+	}
+}
+
+func TestJournalFailureAfterDispatchKeepsUnknownWithoutRetry(t *testing.T) {
+	writer := &fakeWriter{}
+	samples := map[string]signal.Sample{}
+	m := manager(writer, &samples)
+	saves := 0
+	m.Persist = func(Outcome) error {
+		saves++
+		if saves > 1 {
+			return errors.New("disk unavailable")
+		}
+		return nil
+	}
+	_, err := m.Submit(t0, request("journal-failed"))
+	if err == nil {
+		t.Fatal("post-dispatch persistence failure was hidden")
+	}
+	got, found := m.Get("journal-failed")
+	if !found || got.State != Unknown {
+		t.Fatalf("unpersisted outcome: %+v", got)
+	}
+	again, err := m.Submit(t0.Add(time.Second), request("journal-failed"))
+	if err != nil || again.State != Unknown || writer.calls != 1 {
+		t.Fatalf("ambiguous write retried: %+v %v writes=%d", again, err, writer.calls)
+	}
+}
+
+func TestRetryParameterNamesCannotCollideWithSerializedValues(t *testing.T) {
+	writer := &fakeWriter{}
+	samples := map[string]signal.Sample{}
+	m := manager(writer, &samples)
+	m.SetProfiles(func(string) (device.Profile, bool) {
+		return device.Profile{ID: "two-parameters", Points: []device.Point{{ID: "a", Kind: signal.Number}, {ID: "b", Kind: signal.Number}}, Commands: []device.Command{{ID: "set", Parameters: []device.Parameter{{Name: "a", Point: "a", Kind: signal.Number}, {Name: "b", Point: "b", Kind: signal.Number}}}}}, true
+	})
+	req := Request{ID: "encoded", DeviceID: "pcs1", CommandID: "set", Parameters: map[string]float64{"a": 1, "b": 2}}
+	if _, err := m.Submit(t0, req); err != nil {
+		t.Fatal(err)
+	}
+	req.Parameters = map[string]float64{"a=1;b": 2}
+	if _, err := m.Submit(t0, req); err == nil {
+		t.Fatal("different parameters collided with existing request fingerprint")
+	}
+	if writer.calls != 1 {
+		t.Fatalf("writes=%d", writer.calls)
+	}
+}
+
+func TestLegacyRequestIdentityRemainsReadableButRejectsAmbiguousKeys(t *testing.T) {
+	writer := &fakeWriter{}
+	samples := map[string]signal.Sample{}
+	m := manager(writer, &samples)
+	m.Preload([]Outcome{{RequestID: "legacy", DeviceID: "pcs1", CommandID: "set", Actor: "operator", State: Confirmed, Fingerprint: "command:set;a=1;b=2"}})
+	req := Request{ID: "legacy", DeviceID: "pcs1", CommandID: "set", Actor: "operator", Parameters: map[string]float64{"a": 1, "b": 2}}
+	if got, err := m.Submit(t0, req); err != nil || got.State != Confirmed {
+		t.Fatalf("legacy retry lost result: %+v %v", got, err)
+	}
+	req.Parameters = map[string]float64{"a=1;b": 2}
+	if _, err := m.Submit(t0, req); err == nil {
+		t.Fatal("ambiguous legacy keys accepted")
+	}
+	if writer.calls != 0 {
+		t.Fatal("legacy retry executed physical action")
+	}
+}
+
+func TestRequestIdentityEncodingFailureDoesNotDispatch(t *testing.T) {
+	writer := &fakeWriter{}
+	samples := map[string]signal.Sample{}
+	m := manager(writer, &samples)
+	req := request("invalid-identity")
+	req.Parameters = map[string]float64{"invalid": math.NaN()}
+	if _, err := m.Submit(t0, req); err == nil {
+		t.Fatal("encoding failure accepted")
+	}
+	if writer.calls != 0 {
+		t.Fatal("invalid identity dispatched")
 	}
 }
 

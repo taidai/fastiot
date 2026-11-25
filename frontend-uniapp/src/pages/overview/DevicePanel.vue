@@ -1,5 +1,5 @@
 <template>
-  <section class="panel glass device-panel">
+  <section ref="panelElement" class="panel glass device-panel">
     <view class="card-title">设备状态<text>{{ device.name }}</text></view>
     <view class="tabs device-tabs" role="tablist" aria-label="设备数据">
       <button v-if="allowedTabs.includes('realtime')" :class="{ on: tab === 'live' }" role="tab" :aria-selected="tab === 'live'" @click="tab = 'live'">实时数据</button>
@@ -28,7 +28,7 @@
     </view>
 
     <view class="device-actions">
-      <button class="link open-operations" @click="drawerOpen = true">打开操作抽屉</button>
+      <button class="link open-operations" :disabled="loading" @click="openOperations">打开操作抽屉</button>
       <text>仅执行已声明命令；回读确认后才算完成。</text>
     </view>
     <view class="card-title operation-title">操作记录</view>
@@ -43,7 +43,7 @@
     </view>
   </section>
 
-  <OperationDrawer v-if="drawerOpen" :key="deviceKey(device)" :device="device" :model="model" :nodes="nodes" :rows="pointRows" @close="drawerOpen = false" @changed="loadRecords" />
+  <OperationDrawer v-if="drawerOpen" :key="deviceKey(device)" :target="panelElement?.closest('.page') || 'body'" :device="device" :model="model" :nodes="nodes" :rows="pointRows" @close="drawerOpen = false" @changed="loadRecords" />
 </template>
 
 <script setup lang="ts">
@@ -59,6 +59,7 @@ const tab = ref<"live" | "params">("live")
 watch(() => [deviceKey(props.device), props.allowedTabs.join('|')], () => {
   if (!props.allowedTabs.includes(tab.value === 'live' ? 'realtime' : 'parameters')) tab.value = props.allowedTabs.includes('realtime') ? 'live' : 'params'
 }, { immediate: true, flush: 'sync' })
+const panelElement = ref<HTMLElement | null>(null)
 const drawerOpen = ref(false)
 const model = ref<UnitModel | null>(null)
 const loading = ref(false), modelError = ref(""), recordError = ref("")
@@ -95,6 +96,11 @@ async function loadDevice() {
   try { const result = await loadUnitModel(props.device); if (serial === loadSerial) model.value = result }
   catch (error) { if (serial === loadSerial) modelError.value = `设备 Profile 读取失败：${errorText(error)}` }
   finally { if (serial === loadSerial) { loading.value = false; void loadRecords() } }
+}
+async function openOperations() {
+  const target = deviceKey(props.device)
+  await loadDevice()
+  if (target === deviceKey(props.device) && model.value) drawerOpen.value = true
 }
 watch(() => deviceKey(props.device), () => { drawerOpen.value = false; void loadDevice() }, { immediate: true })
 onBeforeUnmount(() => { loadSerial += 1; recordSerial += 1 })

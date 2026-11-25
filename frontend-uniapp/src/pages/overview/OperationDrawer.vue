@@ -1,4 +1,5 @@
 <template>
+  <Teleport :to="target">
   <view class="operation-drawer glass" role="dialog" aria-modal="true" :aria-label="`操作 · ${device.name}`">
     <view class="drawer-head"><h2>操作 · {{ device.name }}</h2><button class="drawer-close" aria-label="关闭操作抽屉" @click="$emit('close')">关闭</button></view>
     <view class="current-values"><view v-for="row in rows.slice(0, 3)" :key="row.id" class="row"><span>{{ row.label }}</span><b>{{ row.value }} {{ row.unit }}</b></view></view>
@@ -28,17 +29,18 @@
     <view v-if="requestID" class="request-identity">请求：{{ requestID }} <button class="query-command" :disabled="busy" @click="query">查询结果（不重发）</button></view>
     <p class="note">仅已下发不等于执行成功。超时或断线不自动重发物理动作；保留请求身份供刷新后查询。</p>
   </view>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { Teleport, computed, onBeforeUnmount, ref } from 'vue'
 import { ApiError } from '../../api/client'
 import type { Node as ApiNode } from '../../types/api'
 import type { LedgerDevice } from './overview'
 import { commandStateText, deviceKey, isTerminalCommandState } from './overview'
 import { loadUnitCommand, setManualMode, submitUnitCommand } from './operations'
 import type { UnitCommand, UnitModel } from './operations'
-const props = defineProps<{device: LedgerDevice; model: UnitModel | null; nodes: ApiNode[]; rows: {id: string; label: string; value: string; unit: string}[]}>()
+const props = defineProps<{target: string | Element; device: LedgerDevice; model: UnitModel | null; nodes: ApiNode[]; rows: {id: string; label: string; value: string; unit: string}[]}>()
 const emit = defineEmits<{(event: 'close'): void; (event: 'changed'): void}>()
 const busy = ref(false), message = ref('')
 const inputs = ref<Record<string,string>>({})

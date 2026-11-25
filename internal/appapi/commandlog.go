@@ -70,12 +70,13 @@ func WireCommandHistory(dataDir string, manager *command.Manager) {
 		initErr = scanCommandLog(path, func(record commandLogRecord) {
 			if _, exists := records[record.RequestID]; !exists {
 				order = append(order, record.RequestID)
+				if len(order) > commandLogKeep {
+					delete(records, order[0])
+					order = order[1:]
+				}
 			}
 			records[record.RequestID] = record
 		})
-	}
-	if len(order) > commandLogKeep {
-		order = order[len(order)-commandLogKeep:]
 	}
 	outcomes := make([]command.Outcome, 0, len(order))
 	for _, id := range order {

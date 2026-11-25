@@ -3,6 +3,7 @@
 package command
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -18,6 +19,8 @@ import (
 
 // State is the lifecycle of one command request.
 type State string
+
+var ErrJournal = errors.New("command journal unavailable")
 
 const (
 	Accepted   State = "accepted"
@@ -170,13 +173,27 @@ func (m *Manager) existing(request Request) (Outcome, bool, error) {
 		var err error
 		existing, found, err = m.Lookup(request.ID)
 		if err != nil {
-			return Outcome{}, false, fmt.Errorf("command journal unavailable: %w", err)
+			return Outcome{}, false, fmt.Errorf("%w: %v", ErrJournal, err)
 		}
 	}
 	if !found {
 		return Outcome{}, false, nil
 	}
-	if existing.DeviceID != request.DeviceID || existing.Actor != request.Actor || existing.Source != request.Source || existing.Fingerprint != fingerprintOf(request) {
+	fingerprint, err := fingerprintOf(request)
+	if err != nil {
+		return Outcome{}, false, err
+	}
+	if !strings.HasPrefix(existing.Fingerprint, "v2:") {
+		// Old outcomes stay immutable. Ambiguous legacy parameter encodings
+		// fail closed instead of claiming that two different requests match.
+		for name := range request.Parameters {
+			if strings.ContainsAny(name, ";=") {
+				return Outcome{}, false, errors.New("ambiguous legacy request parameters")
+			}
+		}
+		fingerprint = legacyFingerprintOf(request)
+	}
+	if existing.DeviceID != request.DeviceID || existing.Actor != request.Actor || existing.Source != request.Source || existing.CommandID != request.CommandID || existing.Fingerprint != fingerprint {
 		return Outcome{}, false, fmt.Errorf("request id %s already used with different actor, target or parameters", request.ID)
 	}
 	return existing, true, nil
@@ -189,7 +206,10 @@ func (m *Manager) submitLocked(now time.Time, request Request) (Outcome, error) 
 	if request.CommandID != "" && request.Point != "" {
 		return Outcome{}, errors.New("a request is either a named command or a point write")
 	}
-	fingerprint := fingerprintOf(request)
+	fingerprint, err := fingerprintOf(request)
+	if err != nil {
+		return Outcome{}, err
+	}
 	if existing, found, err := m.existing(request); found || err != nil {
 		return existing, err
 	}
@@ -287,7 +307,9 @@ func (m *Manager) submitLocked(now time.Time, request Request) (Outcome, error) 
 					outcome.State = Rejected
 				}
 				outcome.Reason = verdict.Reason
-				m.store(outcome)
+				if err := m.store(outcome); err != nil {
+					return m.orders[request.ID], err
+				}
 				return outcome, nil
 			}
 			if verdict.Decision != safety.DecisionClamped {
@@ -311,20 +333,24 @@ func (m *Manager) submitLocked(now time.Time, request Request) (Outcome, error) 
 	}
 	// Reserve the identity durably before the adapter can enqueue physical I/O.
 	if err := m.store(outcome); err != nil {
-		return Outcome{}, fmt.Errorf("command journal unavailable: %w", err)
+		return Outcome{}, fmt.Errorf("%w: %v", ErrJournal, err)
 	}
 	if err := m.Writer.Write(request.DeviceID, request.ID, writes); err != nil {
 		outcome.State = Failed
 		outcome.Reason = "write failed: " + err.Error()
 		outcome.UpdatedAt = now
-		m.store(outcome)
+		if err := m.store(outcome); err != nil {
+			return m.orders[request.ID], err
+		}
 		return outcome, nil
 	}
 	if request.NoReadback {
 		outcome.State = Submitted
 		outcome.Reason = "write accepted; no mapped device readback"
 	}
-	m.store(outcome)
+	if err := m.store(outcome); err != nil {
+		return m.orders[request.ID], err
+	}
 	return outcome, nil
 }
 
@@ -342,7 +368,10 @@ func (m *Manager) Track(now time.Time, request Request) (Outcome, error) {
 	if !request.Value.Valid() {
 		return Outcome{}, errors.New("point write value is not finite")
 	}
-	fingerprint := fingerprintOf(request)
+	fingerprint, err := fingerprintOf(request)
+	if err != nil {
+		return Outcome{}, err
+	}
 	if existing, found, err := m.existing(request); found || err != nil {
 		return existing, err
 	}
@@ -371,7 +400,9 @@ func (m *Manager) SetState(now time.Time, requestID string, state State, reason 
 	outcome.State = state
 	outcome.Reason = reason
 	outcome.UpdatedAt = now
-	m.store(outcome)
+	if err := m.store(outcome); err != nil {
+		return m.orders[requestID], true
+	}
 	return outcome, true
 }
 
@@ -392,7 +423,22 @@ func (m *Manager) FailWrite(now time.Time, requestID, reason string) {
 }
 
 // fingerprintOf renders the normalized semantics used for duplicate detection.
-func fingerprintOf(request Request) string {
+func fingerprintOf(request Request) (string, error) {
+	// encoding/json sorts map keys and escapes names, unlike delimiter joining.
+	encoded, err := json.Marshal(struct {
+		Command                  string
+		Parameters               map[string]float64 `json:",omitempty"`
+		Point                    string
+		Value                    signal.Value
+		NoReadback, SafeFallback bool
+	}{request.CommandID, request.Parameters, request.Point, request.Value, request.NoReadback, request.SafeFallback})
+	if err != nil {
+		return "", fmt.Errorf("invalid command identity: %w", err)
+	}
+	return "v2:" + string(encoded), nil
+}
+
+func legacyFingerprintOf(request Request) string {
 	if request.Point != "" {
 		return "point:" + request.Point + "=" + request.Value.String()
 	}
@@ -451,7 +497,11 @@ const maxOrders = 2000
 func (m *Manager) store(outcome Outcome) error {
 	if m.Persist != nil {
 		if err := m.Persist(outcome); err != nil {
-			return err
+			if previous, exists := m.orders[outcome.RequestID]; exists {
+				previous.State, previous.Reason, previous.UpdatedAt = Unknown, "command_journal_unavailable", outcome.UpdatedAt
+				m.orders[outcome.RequestID] = previous
+			}
+			return fmt.Errorf("%w: %v", ErrJournal, err)
 		}
 	}
 	if _, exists := m.orders[outcome.RequestID]; !exists {
@@ -570,7 +620,9 @@ func (m *Manager) Tick(now time.Time) {
 			continue
 		} else if !now.Before(deadline) {
 			outcome.State = Unknown
-			if outcome.Reason != "clock_basis_inconsistent" { outcome.Reason = "no readback before timeout: " + reason }
+			if outcome.Reason != "clock_basis_inconsistent" {
+				outcome.Reason = "no readback before timeout: " + reason
+			}
 			outcome.UpdatedAt = now
 			m.store(outcome)
 			if outcome.CommandID == "" && outcome.SafeFallback && outcome.FallbackOf == "" && len(outcome.Writes) == 1 {

@@ -5,13 +5,13 @@ import (
 	"encoding/binary"
 	"fastiot/internal/audit"
 	"fastiot/internal/ems/command"
+	"fastiot/internal/ems/runtime"
+	"fastiot/internal/ems/signal"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
-	"fastiot/internal/ems/runtime"
-	"fastiot/internal/ems/signal"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -22,18 +22,20 @@ import (
 	"fastiot/internal/ems/channel"
 	"fastiot/internal/ems/modbusrt"
 	"fastiot/internal/emsapi"
+	"fastiot/internal/industry"
 )
 
 // This private Modbus station records requests at the wire boundary, not the
 // dispatcher. Only station 1/2, holding register 10 exist. No physical addresses.
 type operationSimulator struct {
-	mu       sync.Mutex
-	values   map[byte]uint16
-	writes   [][3]uint16
-	listener net.Listener
-	conns    []net.Conn
-	writeMode string
+	mu          sync.Mutex
+	values      map[byte]uint16
+	writes      [][3]uint16
+	listener    net.Listener
+	conns       []net.Conn
+	writeMode   string
 	readFailure bool
+	readOffset  uint16
 }
 
 func newOperationSimulator(t *testing.T) *operationSimulator {
@@ -91,11 +93,20 @@ func (s *operationSimulator) serve(c net.Conn) {
 			case 6:
 				v := binary.BigEndian.Uint16(p[3:5])
 				s.writes = append(s.writes, [3]uint16{uint16(h[6]), 10, v})
-				if s.writeMode != "wrong" && s.writeMode != "reject" { s.values[h[6]] = v }
+				if s.writeMode != "wrong" && s.writeMode != "reject" {
+					s.values[h[6]] = v + s.readOffset
+				}
 				response = p
-				if s.writeMode == "missing" || s.writeMode == "disconnect" { s.readFailure = true }
-				if s.writeMode == "reject" { response = []byte{0x86,4} }
-				if s.writeMode == "disconnect" { s.mu.Unlock(); return }
+				if s.writeMode == "missing" || s.writeMode == "disconnect" {
+					s.readFailure = true
+				}
+				if s.writeMode == "reject" {
+					response = []byte{0x86, 4}
+				}
+				if s.writeMode == "disconnect" {
+					s.mu.Unlock()
+					return
+				}
 			}
 		}
 		s.mu.Unlock()
@@ -114,11 +125,15 @@ func (s *operationSimulator) written() [][3]uint16 {
 const operationProfile = `{"id":"operation-sim","vendor":"Isolated simulator","model":"Declared operation","protocol":"modbus","point_specs":[{"name":"Target","function":"holdingRegister","address":10,"format":"uint16","scale":1,"read_only":false}],"command_specs":[{"id":"set","name":"设置目标","timeout_ms":1000,"parameters":[{"name":"target","label":"目标","point":"Target","kind":"number","has_range":true,"min":0,"max":100,"default":10}]}]}`
 
 func operationFixture(t *testing.T) (*pointConfigFixture, string, *operationSimulator) {
+	return operationFixtureWithProfile(t, operationProfile)
+}
+
+func operationFixtureWithProfile(t *testing.T, definition string) (*pointConfigFixture, string, *operationSimulator) {
 	t.Helper()
 	f := newPointConfigFixture(t)
 	f.handler.SetAudit(audit.New(filepath.Join(f.dir, "operations-audit.jsonl")))
 	f.handler.SetEMS(emsapi.New(f.runtime, time.Second))
-	loadSingleDeviceProfile(t, f.handler, operationProfile)
+	loadSingleDeviceProfile(t, f.handler, definition)
 	sim := newOperationSimulator(t)
 	f.bridge = bridge.New(f.runtime, bridge.NewNodeSource(f.handler.nc), func(protocol, address string, timeout time.Duration) (channel.Bus, error) {
 		if protocol != "tcp" || address != "127.0.0.1:18108" {
@@ -261,48 +276,176 @@ func TestDeviceOperationManualModeAndSafety(t *testing.T) {
 	}
 }
 
+func TestDeviceOperationDeclaredToleranceAndBooleanType(t *testing.T) {
+	for _, offset := range []uint16{1, 3} {
+		t.Run(fmt.Sprintf("tolerance-%d", offset), func(t *testing.T) {
+			definition := strings.Replace(operationProfile, `"scale":1`, `"scale":0.1`, 1)
+			definition = strings.Replace(definition, `"timeout_ms":1000`, `"timeout_ms":1000,"readback_tolerance":0.25`, 1)
+			f, bus, sim := operationFixtureWithProfile(t, definition)
+			sim.mu.Lock()
+			sim.readOffset = offset
+			sim.mu.Unlock()
+			url := f.base + "/modbus/" + bus + "/units/1/commands"
+			status, body := call(t, http.MethodPost, url, f.token, map[string]any{"request_id": "tolerance", "command_id": "set", "parameters": map[string]float64{"target": 20}}, nil)
+			if status != 200 {
+				t.Fatalf("tolerance submit: %d %s", status, body)
+			}
+			want := "confirmed"
+			if offset == 3 {
+				want = "unknown"
+			}
+			waitPumpCommand(t, f.base, f.token, bus, "tolerance", want, 4*time.Second)
+			if writes := sim.written(); len(writes) != 1 || writes[0] != [3]uint16{1, 10, 200} {
+				t.Fatalf("wrong Profile-scaled write: %v", writes)
+			}
+		})
+	}
+	t.Run("boolean-register", func(t *testing.T) {
+		definition := strings.Replace(operationProfile, `"kind":"number"`, `"kind":"bool"`, 1)
+		definition = strings.Replace(definition, `"default":10`, `"default":0`, 1)
+		f, bus, sim := operationFixtureWithProfile(t, definition)
+		status, body := call(t, http.MethodPost, f.base+"/modbus/"+bus+"/units/1/commands", f.token, map[string]any{"request_id": "invalid-boolean", "command_id": "set", "parameters": map[string]float64{"target": 2}}, nil)
+		if status != 409 || len(sim.written()) != 0 {
+			t.Fatalf("declared boolean type bypassed: %d %s writes=%v", status, body, sim.written())
+		}
+	})
+}
+
+func TestDeviceOperationIndustryDependencyGate(t *testing.T) {
+	f, bus, sim := operationFixture(t)
+	registry, err := industry.Open(f.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.handler.SetPackages(registry)
+	if _, err = registry.Uninstall(industry.EMSPackageID); err != nil {
+		t.Fatal(err)
+	}
+	url := f.base + "/modbus/" + bus + "/units/1/commands"
+	status, body := call(t, http.MethodPost, url, f.token, map[string]any{"request_id": "base-iot", "command_id": "set"}, nil)
+	if status != 200 {
+		t.Fatalf("ordinary IoT command improperly required EMS: %d %s", status, body)
+	}
+	waitPumpCommand(t, f.base, f.token, bus, "base-iot", "confirmed", 3*time.Second)
+	// Existing EMS engineering content with an unavailable package is a retained
+	// project dependency, not permission to use the ordinary command route.
+	if _, err := CreateDomainNode(f.handler.nc, snapshotRoot(t, f.base, f.token), NodeTypeEnergyUnit, map[string]string{"description": "retained EMS dependency"}); err != nil {
+		t.Fatal(err)
+	}
+	status, body = call(t, http.MethodPost, url, f.token, map[string]any{"request_id": "blocked-ems", "command_id": "set"}, nil)
+	if status != 409 || !strings.Contains(body, "project_industry_dependency_unavailable") {
+		t.Fatalf("industry gate bypass: %d %s", status, body)
+	}
+	if len(sim.written()) != 1 {
+		t.Fatal("industry-blocked command wrote simulator")
+	}
+}
+
 func TestDeviceOperationUncertainReadbackNeverRetries(t *testing.T) {
- for _,mode:=range []string{"missing","wrong","disconnect","reject"} { t.Run(mode,func(t *testing.T){
-  f,bus,sim:=operationFixture(t)
-  sim.mu.Lock();sim.writeMode=mode;sim.mu.Unlock()
-  url:=f.base+"/modbus/"+bus+"/units/1/commands"
-  target:=25.0; if mode=="missing" {target=10} // old matching feedback is not new evidence
-  input:=map[string]any{"request_id":"fault","command_id":"set","parameters":map[string]float64{"target":target}}
-  status,body:=call(t,http.MethodPost,url,f.token,input,nil); if status!=200 {t.Fatalf("submit: %d %s",status,body)}
-  want:="unknown";if mode=="reject"{want="failed"}
-  waitPumpCommand(t,f.base,f.token,bus,"fault",want,4*time.Second)
-  for i:=0;i<3;i++ {status,body=call(t,http.MethodPost,url,f.token,input,nil);if status!=200 || !strings.Contains(body,want){t.Fatalf("retry lost canonical result: %d %s",status,body)}}
-  if writes:=sim.written();len(writes)!=1 || writes[0]!=[3]uint16{1,10,uint16(target)} {t.Fatalf("fault retried physical action: %v",writes)}
-  // Restarting just the command owner restores the same unknown/failure and
-  // cannot replay an accepted journal intent, even with the device unavailable.
-  restored:=runtime.NewService(nil,time.Minute,time.Second,100);t.Cleanup(restored.Close)
-  ems:=emsapi.New(restored,time.Minute);ems.Profiles=f.handler.ems.Profiles;f.handler.SetEMS(ems);WireCommandHistory(f.dir,restored.Commands())
-  status,body=call(t,http.MethodPost,url,f.token,input,nil);if status!=200 || !strings.Contains(body,want){t.Fatalf("restored fault changed outcome: %d %s",status,body)}
-  if len(sim.written())!=1 {t.Fatal("restart replayed physical action")}
- }) }
+	for _, mode := range []string{"missing", "wrong", "disconnect", "reject"} {
+		t.Run(mode, func(t *testing.T) {
+			f, bus, sim := operationFixture(t)
+			sim.mu.Lock()
+			sim.writeMode = mode
+			sim.mu.Unlock()
+			url := f.base + "/modbus/" + bus + "/units/1/commands"
+			target := 25.0
+			if mode == "missing" {
+				target = 10
+			} // old matching feedback is not new evidence
+			input := map[string]any{"request_id": "fault", "command_id": "set", "parameters": map[string]float64{"target": target}}
+			status, body := call(t, http.MethodPost, url, f.token, input, nil)
+			if status != 200 {
+				t.Fatalf("submit: %d %s", status, body)
+			}
+			want := "unknown"
+			if mode == "reject" {
+				want = "failed"
+			}
+			waitPumpCommand(t, f.base, f.token, bus, "fault", want, 4*time.Second)
+			for i := 0; i < 3; i++ {
+				status, body = call(t, http.MethodPost, url, f.token, input, nil)
+				if status != 200 || !strings.Contains(body, want) {
+					t.Fatalf("retry lost canonical result: %d %s", status, body)
+				}
+			}
+			if writes := sim.written(); len(writes) != 1 || writes[0] != [3]uint16{1, 10, uint16(target)} {
+				t.Fatalf("fault retried physical action: %v", writes)
+			}
+			// Restarting just the command owner restores the same unknown/failure and
+			// cannot replay an accepted journal intent, even with the device unavailable.
+			restored := runtime.NewService(nil, time.Minute, time.Second, 100)
+			t.Cleanup(restored.Close)
+			ems := emsapi.New(restored, time.Minute)
+			ems.Profiles = f.handler.ems.Profiles
+			f.handler.SetEMS(ems)
+			WireCommandHistory(f.dir, restored.Commands())
+			status, body = call(t, http.MethodPost, url, f.token, input, nil)
+			if status != 200 || !strings.Contains(body, want) {
+				t.Fatalf("restored fault changed outcome: %d %s", status, body)
+			}
+			if len(sim.written()) != 1 {
+				t.Fatal("restart replayed physical action")
+			}
+		})
+	}
 }
 
 func TestDeviceOperationConcurrentRetryAndDurableFailure(t *testing.T) {
- f,bus,sim:=operationFixture(t)
- url:=f.base+"/modbus/"+bus+"/units/1/commands"
- input:=map[string]any{"request_id":"concurrent","command_id":"set","parameters":map[string]float64{"target":23}}
- var wg sync.WaitGroup
- for i:=0;i<8;i++ {wg.Add(1);go func(){defer wg.Done(); status,body:=call(t,http.MethodPost,url,f.token,input,nil);if status!=200 {t.Errorf("concurrent submit: %d %s",status,body)}}()}
- wg.Wait();waitPumpCommand(t,f.base,f.token,bus,"concurrent","confirmed",3*time.Second)
- for i:=0;i<501;i++ {id:=fmt.Sprintf("fixture-history-%d",i); _,err:=f.runtime.Commands().Track(time.Now(),command.Request{ID:id,DeviceID:"fixture",Point:"no-physical-point",Value:signal.Num(0),Actor:"fixture"});if err!=nil {t.Fatal(err)}; f.runtime.Commands().SetState(time.Now(),id,command.Confirmed,"")}
- restarted:=runtime.NewService(nil,time.Minute,time.Second,100);t.Cleanup(restarted.Close)
- restoredHandler:=emsapi.New(restarted,time.Minute);restoredHandler.Profiles=f.handler.ems.Profiles
- f.handler.SetEMS(restoredHandler);WireCommandHistory(f.dir,restarted.Commands())
- status,body:=call(t,http.MethodPost,url,f.token,input,nil)
- if status!=200 || !strings.Contains(body,"confirmed") {t.Fatalf("cold persisted retry: %d %s",status,body)}
- call(t,http.MethodGet,url+"/concurrent",f.token,nil,nil)
- log:=filepath.Join(f.dir,commandLogFile)
- if err:=os.Rename(log,log+".saved");err!=nil {t.Fatal(err)}
- if err:=os.Mkdir(log,0700);err!=nil {t.Fatal(err)}
- input["request_id"]="storage-unavailable"
- status,body=call(t,http.MethodPost,url,f.token,input,nil)
- if status<400 {t.Fatalf("unpersisted command accepted: %d %s",status,body)}
- if writes:=sim.written();len(writes)!=1 || writes[0]!=[3]uint16{1,10,23} {t.Fatalf("concurrency/restart/storage failure duplicated physical write: %v",writes)}
+	f, bus, sim := operationFixture(t)
+	url := f.base + "/modbus/" + bus + "/units/1/commands"
+	input := map[string]any{"request_id": "concurrent", "command_id": "set", "parameters": map[string]float64{"target": 23}}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			status, body := call(t, http.MethodPost, url, f.token, input, nil)
+			if status != 200 {
+				t.Errorf("concurrent submit: %d %s", status, body)
+			}
+		}()
+	}
+	wg.Wait()
+	waitPumpCommand(t, f.base, f.token, bus, "concurrent", "confirmed", 3*time.Second)
+	for i := 0; i < 2001; i++ {
+		id := fmt.Sprintf("fixture-history-%d", i)
+		_, err := f.runtime.Commands().Track(time.Now(), command.Request{ID: id, DeviceID: "fixture", Point: "no-physical-point", Value: signal.Num(0), Actor: "fixture"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.runtime.Commands().SetState(time.Now(), id, command.Confirmed, "")
+	}
+	status, body := call(t, http.MethodPost, url, f.token, input, nil)
+	if status != 200 || len(sim.written()) != 1 {
+		t.Fatalf("cache eviction reexecuted action: %d %s writes=%v", status, body, sim.written())
+	}
+	restarted := runtime.NewService(nil, time.Minute, time.Second, 100)
+	t.Cleanup(restarted.Close)
+	restoredHandler := emsapi.New(restarted, time.Minute)
+	restoredHandler.Profiles = f.handler.ems.Profiles
+	f.handler.SetEMS(restoredHandler)
+	WireCommandHistory(f.dir, restarted.Commands())
+	status, body = call(t, http.MethodPost, url, f.token, input, nil)
+	if status != 200 || !strings.Contains(body, "confirmed") {
+		t.Fatalf("cold persisted retry: %d %s", status, body)
+	}
+	call(t, http.MethodGet, url+"/concurrent", f.token, nil, nil)
+	log := filepath.Join(f.dir, commandLogFile)
+	if err := os.Rename(log, log+".saved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(log, 0700); err != nil {
+		t.Fatal(err)
+	}
+	input["request_id"] = "storage-unavailable"
+	status, body = call(t, http.MethodPost, url, f.token, input, nil)
+	if status < 400 {
+		t.Fatalf("unpersisted command accepted: %d %s", status, body)
+	}
+	if writes := sim.written(); len(writes) != 1 || writes[0] != [3]uint16{1, 10, 23} {
+		t.Fatalf("concurrency/restart/storage failure duplicated physical write: %v", writes)
+	}
 }
 
 func TestDeviceOperationRequestScope(t *testing.T) {
@@ -327,8 +470,6 @@ func TestDeviceOperationRequestScope(t *testing.T) {
 	}
 	call(t, http.MethodGet, url+"/scope", f.token, nil, &evidence)
 	if evidence.Deadline.IsZero() || len(evidence.Observed) != 1 || evidence.Observed[0].Value != "20" || evidence.Observed[0].At.After(evidence.Deadline) {
-		original, _ := f.runtime.Commands().Get("scope")
-		t.Logf("[DEBUG-ticket07-time] deadline=%v observed=%+v started=%v", original.Deadline, original.Observed, original.StartedAt)
 		t.Errorf("canonical readback evidence missing: %+v", evidence)
 	}
 	for _, tc := range []struct {
