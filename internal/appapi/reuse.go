@@ -502,6 +502,7 @@ func rewriteReferences(node data.NodeEdge, idMap map[string]string) (data.Points
 			}
 			document.Bindings.Points = rewriteTargets(document.Bindings.Points)
 			document.Bindings.Actions = rewriteTargets(document.Bindings.Actions)
+			unresolved = append(unresolved, document.ClearNotificationRecipients()...)
 			encoded, _ := json.Marshal(document)
 			points = append(points, data.NewPointString(p.Type, "0", string(encoded)))
 		}

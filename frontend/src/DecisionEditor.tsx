@@ -234,7 +234,7 @@ function initialDocument(rule: Node, nodes: Node[]): Document {
 function requestDocument(document: Document, nodes: Node[]): Document {
   const bindings = bindingsFor(nodes, document.bindings)
   const points = new Set(document.table.rows.flatMap(row => row.conditions.filter(condition => condition.kind !== "time").map(condition => condition.point_id)))
-  const actions = new Set(document.table.rows.flatMap(row => row.actions.map(action => action.action_id)))
+  const actions = new Set(document.table.rows.flatMap(row => row.actions.filter(action => action.kind !== 'notify').map(action => action.action_id)))
   return { ...document, bindings: {
     points: Object.fromEntries(Object.entries(bindings.points).filter(([id]) => points.has(id))),
     actions: Object.fromEntries(Object.entries(bindings.actions).filter(([id]) => actions.has(id))),
@@ -447,7 +447,12 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
   }
 
   const referencedInputs = [...new Set(rows.flatMap((row) => row.conditions.filter((condition) => condition.kind !== "time").map((condition) => condition.point_id)))]
-  const referencedActions = [...new Set(rows.flatMap((row) => row.actions.map((action) => action.action_id)))]
+  function actionDescription(action: Action) {
+    return action.kind === 'notify' ? `站内通知「${action.notification?.title || '—'}」→ ${action.notification?.recipient_ids.length || 0} 个指定账号（创建不代表已读）` : `${displayName(action.action_id)} 设为 ${action.value}`
+  }
+  const allocatorAction = (action: Action) => action.kind !== 'notify' && allocatorOutputs.some(node => node.id === document.bindings.actions[action.action_id]?.node_id || businessId(node) === action.action_id)
+  const hasAllocatorActions = rows.some(row => row.actions.some(allocatorAction))
+  const referencedActions = [...new Set(rows.flatMap((row) => row.actions.filter(action => action.kind !== 'notify').map((action) => action.action_id)))]
   const lastCheck = useMemo(() => parseLastCheck(rule), [rule])
   const scenarios = document.scenarios || []
 
@@ -497,7 +502,7 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
   function scenarioVerdictText(scenario: Scenario, result: ScenarioResult) {
     if (result.passed) return `通过 · 实际${rowLabel(result.row_id)}`
     if (result.reason === "row_mismatch") return `失败 · 期望${rowLabel(scenario.expect_row)}，实际${rowLabel(result.row_id)}`
-    if (result.reason === "action_mismatch") return `失败 · 输出与期望不一致（实际 ${result.actions?.map((action) => `${displayName(action.action_id)}=${action.value}`).join("、") || "无输出"}）`
+    if (result.reason === "action_mismatch") return `失败 · 输出与期望不一致（实际 ${result.actions?.map((action) => actionDescription(action)).join("、") || "无输出"}）`
     return `失败 · ${result.detail || "无法模拟"}`
   }
 
@@ -592,7 +597,7 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
               {row.conditions.length === 0 ? <span className="rule-chip default">默认行</span> : row.conditions.map((condition, index) => <span className="rule-chip" key={index}>{condition.kind === "time" ? `时间 ${timeConditionText(condition)}` : `${conditionJoinText(row, index)}${displayName(condition.point_id)} ${operatorLabel(condition.operator)} ${conditionValueText(condition)}`}</span>)}
             </div></td>
             <td><div className="rule-chips">
-              {row.actions.length === 0 ? <span className="rule-chip muted">不执行动作</span> : row.actions.map((action, index) => <span className="rule-chip" key={index}>{displayName(action.action_id)} = {action.value}</span>)}
+              {row.actions.length === 0 ? <span className="rule-chip muted">不执行动作</span> : row.actions.map((action, index) => <span className="rule-chip" key={index}>{actionDescription(action)}</span>)}
             </div></td>
             <td><input aria-label="持续确认秒" type="number" min="0" step="0.1" disabled={readOnly} value={Math.round((row.hold_ms || 0) / 100) / 10} onChange={(event) => updateRow(rowIndex, { ...row, hold_ms: Math.max(0, Math.round((Number(event.target.value) || 0) * 1000)) })} /></td>
             <td><input aria-label="冷却秒" type="number" min="0" step="0.1" disabled={readOnly} value={Math.round((row.cooldown_ms || 0) / 100) / 10} onChange={(event) => updateRow(rowIndex, { ...row, cooldown_ms: Math.max(0, Math.round((Number(event.target.value) || 0) * 1000)) })} /></td>
@@ -671,7 +676,7 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
       </div>
       {replayResult && <div className="strategy-result" role="status">
         <span>{replayResult.row_id ? `命中第 ${rows.findIndex((row) => row.row_id === replayResult.row_id) + 1} 行` : "没有命中规则"}</span>
-        <span>{replayResult.actions?.length ? replayResult.actions.map((action) => `${displayName(action.action_id)} 设为 ${action.value}`).join("；") : "不执行任何操作"}</span>
+        <span>{replayResult.actions?.length ? replayResult.actions.map(actionDescription).join("；") : "不执行任何操作"}</span>
       </div>}
 
       <div className="version-compare"><strong>依赖图</strong><span>输入点位、规则行与输出点位的引用关系。</span></div>
@@ -768,17 +773,17 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
             })}
           </div>
           <div className="logic-block output-block">
-            <div className="logic-title"><span>按顺序执行</span><button className="text-button" disabled={!targetOutputs.length} title={!targetOutputs.length ? "没有可写输出点位，先到设备页添加" : undefined} onClick={() => {
-              if (!targetOutputs[0]) return
-              updateRow(rowIndex, { ...row, actions: [...row.actions, { action_id: businessId(targetOutputs[0]), value: 1 }] })
+            <div className="logic-title"><span>按顺序执行</span><button className="text-button" disabled={!outputs.length} title={!outputs.length ? "没有可写输出点位，先到设备页添加" : undefined} onClick={() => {
+              if (!outputs[0]) return
+              updateRow(rowIndex, { ...row, actions: [...row.actions, { action_id: businessId(outputs[0]), value: 1 }] })
             }}>+ 输出</button></div>
             {row.actions.length === 0 && <div className="no-action">{targetOutputs.length === 0 ? "暂无可写点位或分配器；请先添加可写输出。" : "不执行任何操作"}</div>}
-            {row.actions.map((action, actionIndex) => <div className="logic-line" key={actionIndex}>
+            {row.actions.map((action, actionIndex) => action.kind === 'notify' ? <div className="logic-line" key={actionIndex}><span>{actionDescription(action)}。通知配置在原型规则编辑器中调整；此处保留原文，不转换为数值写入。</span></div> : allocatorAction(action) ? <div className="logic-line" key={actionIndex}><span>既有分配器动作仅保留展示：适配尚未支持，不可发布。{actionDescription(action)}</span></div> : <div className="logic-line" key={actionIndex}>
               <select aria-label="输出点位" value={action.action_id} onChange={(event) => updateAction(rowIndex, actionIndex, { action_id: event.target.value })}>
-                {targetOutputs.map((node) => <option key={node.id} value={businessId(node)}>{nameOf(node)}{node.type === "group" ? "（分配器）" : ""}{(point(node, "easyemsManual")?.value || 0) !== 0 ? "（人工接管）" : ""}</option>)}
+                {targetOutputs.map((node) => <option key={node.id} disabled={node.type === 'group'} value={businessId(node)}>{nameOf(node)}{node.type === "group" ? "（分配器暂不支持发布）" : ""}{(point(node, "easyemsManual")?.value || 0) !== 0 ? "（人工接管）" : ""}</option>)}
               </select>
               <span className="set-label">设为</span>
-              <NumberInput label="输出值" value={action.value} onChange={(value) => updateAction(rowIndex, actionIndex, { value })} />
+              <NumberInput label="输出值" value={action.value ?? 0} onChange={(value) => updateAction(rowIndex, actionIndex, { value })} />
               {!readOnly && (() => {
                 const target = available.find((node) => businessId(node) === action.action_id)
                 return target ? <button className={`safety-link ${point(target, "easyemsSafety")?.text ? "configured" : "unconfigured"}`} title={point(target, "easyemsSafety")?.text ? "已配置安全约束" : "未配置安全约束"} onClick={() => setSafetyNode(target)}>安全</button> : null
@@ -819,7 +824,7 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
           {available.map((node) => <option key={node.id} value={node.id}>{nameOf(node)}</option>)}
         </select></label>)}
         {referencedActions.map((id) => <label key={`output-${id}`}>{displayName(id)} · 输出目标<select value={document.bindings.actions[id]?.node_id || ""} onChange={(event) => rebind("actions", id, event.target.value)}>
-          {targetOutputs.map((node) => <option key={node.id} value={node.id}>{nameOf(node)}{node.type === "group" ? "（分配器）" : ""}</option>)}
+          {targetOutputs.map((node) => <option key={node.id} disabled={node.type === 'group'} value={node.id}>{nameOf(node)}{node.type === "group" ? "（分配器暂不支持发布）" : ""}</option>)}
         </select></label>)}
       </div>
     </details>}
@@ -878,7 +883,7 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
       </div>
       {result && <div className="simulation-result" role="status" ref={resultRef}>
         {result.row_id ? <>命中第 {rows.findIndex((row) => row.row_id === result.row_id) + 1} 行 <button type="button" className="inline-link" onClick={() => locate(result.row_id)}>定位该行</button></> : "没有命中规则"}
-        <span>{result.actions?.length ? result.actions.map((action) => `${displayName(action.action_id)} 设为 ${action.value}`).join("；") : "不执行任何操作"}</span>
+        <span>{result.actions?.length ? result.actions.map(actionDescription).join("；") : "不执行任何操作"}</span>
         {result.time_checks?.length ? <span>{result.time_checks.map(timeCheckText).join("；")}</span> : null}
       </div>}
 
@@ -906,7 +911,7 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
                     ...Object.entries(scenario.inputs || {}).map(([id, value]) => `${displayName(id)}=${scenario.text_inputs?.[id] ?? value}`),
                     ...(scenario.at ? [`时刻 ${scenario.at.replace("T", " ")}`] : []),
                   ].join("、") || "无输入"}</span>
-                  <span>期望：{rowLabel(scenario.expect_row)}{scenario.expect_actions?.length ? `；${scenario.expect_actions.map((action) => `${displayName(action.action_id)}=${action.value}`).join("、")}` : ""}</span>
+                  <span>期望：{rowLabel(scenario.expect_row)}{scenario.expect_actions?.length ? `；${scenario.expect_actions.map((action) => actionDescription(action)).join("、")}` : ""}</span>
                 </div>
                 {result && <span className={result.passed ? "scenario-pass" : "scenario-fail"} role="status">{scenarioVerdictText(scenario, result)}</span>}
                 <span className="scenario-actions">
@@ -937,7 +942,7 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
       <div className="action-buttons">
         <button className="text-button" onClick={() => simulationRef.current?.scrollIntoView({ block: "center" })}>模拟</button>
         <button className="secondary-button" disabled={readOnly || busy !== ""} onClick={() => run("save")}>{busy === "save" ? "保存中…" : "保存草稿"}</button>
-        <button className="primary-button" disabled={readOnly || busy !== "" || rows.length === 0 || dirty || enabled} onClick={() => setConfirmAction("publish")}>{busy === "publish" ? "发布中…" : "发布当前规则"}</button>
+        <button className="primary-button" disabled={readOnly || busy !== "" || rows.length === 0 || dirty || enabled || hasAllocatorActions} onClick={() => setConfirmAction("publish")}>{busy === "publish" ? "发布中…" : "发布当前规则"}</button>
       </div>
     </div>
 

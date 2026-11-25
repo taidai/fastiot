@@ -5,6 +5,16 @@ import * as strategy from './strategy.ts'
 const node = (id, parent, type = 'group', points = []) => ({ id, parent, type, points })
 const rule = (id, parent, scope) => node(id, parent, 'decisionTable', [{ type: 'applied', text: JSON.stringify({ scope, table: { rows: [] } }) }])
 
+test('notification plans preserve explicit accounts without numeric writes or output bindings', () => {
+ const action={action_id:'notice',kind:'notify',notification:{recipient_ids:['chosen-account'],title:'Notice',body:'Literal text'}}
+ const doc=strategy.parseDocument(JSON.stringify({scope:'self',table:{rows:[{row_id:'r',actions:[action]}]},bindings:{points:{},actions:{notice:{node_id:'unused-palette-output'}}}}))
+ const payload=JSON.parse(JSON.stringify(strategy.createSimulationPayload(strategy.referencedDocument(doc),{}, {},'')))
+ assert.deepEqual(payload.document.table.rows[0].actions[0],action)
+ assert.deepEqual(payload.document.bindings.actions,{})
+ assert.match(strategy.actionText(action,id=>id),/站内通知/)
+ assert.doesNotMatch(strategy.actionText(action,id=>id),/= 0|undefined/)
+})
+
 test('mixed per-condition joins survive parse and request binding projection', () => {
  const document = strategy.parseDocument(JSON.stringify({ scope: 'self', revision: 'mixed-v1', table: { rows: [{ row_id: 'r', conditions: [{ point_id: 'a', operator: 'eq', value: 1 }, { point_id: 'b', operator: 'eq', value: 1, join: 'OR' }, { point_id: 'c', operator: 'eq', value: 1, join: 'AND' }], actions: [] }] }, bindings: { points: { a: { node_id: 'a' }, b: { node_id: 'b' }, c: { node_id: 'c' } }, actions: {} } }))
  const payload = strategy.createSimulationPayload(strategy.referencedDocument(document), { a: 1, b: 0, c: 0 }, {}, '')

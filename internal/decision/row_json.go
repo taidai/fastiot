@@ -14,6 +14,7 @@ func (r *Row) UnmarshalJSON(encoded []byte) error {
 	wire := struct {
 		*plain
 		Conditions []json.RawMessage `json:"conditions"`
+		Actions    []json.RawMessage `json:"actions"`
 	}{plain: &decoded}
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
@@ -47,30 +48,43 @@ func (r *Row) UnmarshalJSON(encoded []byte) error {
 		decoded.Conditions = append(decoded.Conditions, condition)
 		decoded.Joins = append(decoded.Joins, join)
 	}
+	actions, err := decodeRuleActions(wire.Actions)
+	if err != nil {
+		return err
+	}
+	decoded.Actions = actions
 	*r = Row(decoded)
 	return nil
 }
 
 func (r Row) MarshalJSON() ([]byte, error) {
 	type plain Row
-	if !r.hasJoins() {
+	if !r.hasJoins() && !hasRuleNotification(r.Actions) {
 		return json.Marshal(plain(r))
 	}
 	type joined struct {
 		Condition
 		Join string `json:"join,omitempty"`
 	}
-	conditions := make([]joined, len(r.Conditions))
+	var conditions []joined
+	if r.Conditions != nil {
+		conditions = make([]joined, len(r.Conditions))
+	}
 	for i, condition := range r.Conditions {
 		conditions[i].Condition = condition
 		if i < len(r.Joins) {
 			conditions[i].Join = r.Joins[i]
 		}
 	}
+	actions, err := marshalRuleActions(r.Actions)
+	if err != nil {
+		return nil, err
+	}
 	return json.Marshal(struct {
 		*plain
-		Conditions []joined `json:"conditions"`
-	}{(*plain)(&r), conditions})
+		Conditions []joined          `json:"conditions"`
+		Actions    []json.RawMessage `json:"actions"`
+	}{(*plain)(&r), conditions, actions})
 }
 
 func (r Row) hasJoins() bool {

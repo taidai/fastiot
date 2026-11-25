@@ -10,6 +10,12 @@ import (
 	"github.com/simpleiot/simpleiot/data"
 )
 
+// RuleParentTypes lets the SIOT manager discover rules mounted on business
+// objects as well as its built-in group hierarchy.
+func RuleParentTypes() []string {
+	return []string{domainaccess.NodeSiteRoot, domainaccess.NodeSite, domainaccess.NodePlant, domainaccess.NodeArea, domainaccess.NodeUnit, domainaccess.NodeEnergyUnit, domainaccess.NodeDevice}
+}
+
 // ruleTargetAllowed uses the same member and device mapping declarations as the
 // ledger and screen bindings. A business relationship never expands actor anchors.
 func (h *Handler) ruleTargetAllowed(identity Identity, parent, scope string, target decision.Target, output bool) bool {
@@ -103,6 +109,9 @@ func (h *Handler) ruleReferencesAllowed(identity Identity, parent string, docume
 	}
 	for _, row := range document.Table.Rows {
 		for _, action := range row.Actions {
+			if action.Notification != nil && h.ValidateNotificationRecipients(parent, action.Notification.RecipientIDs) != nil {
+				return false
+			}
 			if action.Readback != nil && action.Readback.Target.NodeID != "" && !check(action.Readback.Target, false) {
 				return false
 			}

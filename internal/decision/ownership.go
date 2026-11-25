@@ -30,6 +30,9 @@ func outputTargets(document Document) []outputTarget {
 	var targets []outputTarget
 	for _, row := range document.Table.Rows {
 		for _, action := range row.Actions {
+			if action.Notification != nil {
+				continue
+			}
 			target := document.Bindings.Actions[action.ActionID]
 			if target.NodeID == "" {
 				continue

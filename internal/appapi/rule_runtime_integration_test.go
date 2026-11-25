@@ -103,7 +103,7 @@ func TestRuleSimulationZeroWritesAndCanonicalSequence(t *testing.T) {
 	doc.Revision = created.Revision
 	manager := client.NewManager(f.handler.nc, func(nc *nats.Conn, config decision.DecisionTable) client.Client {
 		return f.handler.NewRuleClient(nc, config)
-	}, nil)
+	}, RuleParentTypes())
 	managerDone := make(chan error, 1)
 	go func() { managerDone <- manager.Run() }()
 	t.Cleanup(func() { manager.Stop(nil); <-managerDone })

@@ -130,21 +130,37 @@
                     <view class="editor-title"><strong>动作序列</strong><span>前一步回读确认后才延时执行下一步；超时为结果未知；带斜率输出不在列表</span></view>
                     <view v-for="(action, actionIndex) in row.actions" :key="actionIndex" class="action-editor">
                       <span class="sequence-index">{{ actionIndex + 1 }}</span>
+                      <template v-if="action.kind === 'notify' && action.notification">
+                        <strong>站内通知（不外发）</strong>
+                        <label>标题<input aria-label="通知标题" :value="action.notification.title" @input="action.notification.title = inputValue($event); changed()"></label>
+                        <label>正文<input aria-label="通知正文" :value="action.notification.body || ''" @input="action.notification.body = inputValue($event); changed()"></label>
+                        <button class="ghost" :disabled="recipientLoading" @click="loadRecipients()">刷新可选账号</button>
+                        <checkbox-group class="notification-recipients" aria-label="通知收件账号" @change="setRecipients(action, $event)">
+                          <label v-for="recipient in recipients" :key="recipient.id"><checkbox :value="recipient.id" :checked="action.notification.recipient_ids.includes(recipient.id)" />{{ recipient.display_name }}</label>
+                        </checkbox-group>
+                        <span class="note">已明确选择 {{ action.notification.recipient_ids.length }} 个账号；创建成功不代表已读。保存、发布和执行会复核当前范围。</span>
+                        <label v-for="id in action.notification.recipient_ids.filter(id => !recipients.some(recipient => recipient.id === id))" :key="id">已存账号 {{ id }}（待目录核实）<button class="ghost" @click="action.notification.recipient_ids = action.notification.recipient_ids.filter(value => value !== id); changed()">移除</button></label>
+                        <button v-if="recipientAfter" class="ghost" :disabled="recipientLoading" @click="loadRecipients(true)">加载更多账号</button>
+                        <span v-if="recipientError" role="alert">{{ recipientError }}</span>
+                      </template>
+                      <template v-else>
                       <select aria-label="输出点位" :value="action.action_id" @change="action.action_id = inputValue($event); changed()">
                         <option v-if="action.action_id && !outputIds.includes(action.action_id)" :value="action.action_id">{{ displayName(action.action_id) }}</option>
-                        <option v-for="node in outputs" :key="node.id" :value="businessId(node)">{{ nameOf(node) }}{{ node.type === 'group' ? '（分配器）' : '' }}</option>
+                        <option v-for="node in outputs" :key="node.id" :disabled="node.type === 'group'" :value="businessId(node)">{{ nameOf(node) }}{{ node.type === 'group' ? '（分配器暂不支持发布）' : '' }}</option>
                       </select>
                       <select v-if="commandRequired[actionNodeID(action)]" aria-label="声明设备命令" :value="document.bindings.actions[action.action_id]?.command_id || ''" @change="setCommand(action, $event)">
                         <option value="">选择型号声明命令</option><option v-for="command in commandsFor(action)" :key="command.id" :value="command.id">{{ command.name }}</option>
                       </select>
-                      <label>设为 <input aria-label="输出值" type="number" step="any" :value="action.value" @input="action.value = inputNumber($event); changed()"></label>
-                      <label>延时（秒）<input aria-label="动作延时" type="number" min="0" step="0.1" :value="(action.delay_ms || 0) / 1000" @input="setActionTiming(row, action, 'delay_ms', $event)"></label>
-                      <label>回读超时（秒）<input aria-label="回读超时" type="number" min="0.1" max="120" step="0.1" :value="(action.readback?.timeout_ms || 5000) / 1000" @input="setReadbackTiming(row, action, 'timeout_ms', $event)"></label>
-                      <label>容差 <input aria-label="回读容差" type="number" min="0" step="any" :value="action.readback?.tolerance || 0" @input="setReadbackTiming(row, action, 'tolerance', $event)"></label>
+                      <label>设为 <input aria-label="输出值" :disabled="unsupportedAction(action)" type="number" step="any" :value="action.value" @input="action.value = inputNumber($event); changed()"></label>
+                      <label>回读超时（秒）<input aria-label="回读超时" :disabled="unsupportedAction(action)" type="number" min="0.1" max="120" step="0.1" :value="(action.readback?.timeout_ms || 5000) / 1000" @input="setReadbackTiming(row, action, 'timeout_ms', $event)"></label>
+                      <label>容差 <input aria-label="回读容差" :disabled="unsupportedAction(action)" type="number" min="0" step="any" :value="action.readback?.tolerance || 0" @input="setReadbackTiming(row, action, 'tolerance', $event)"></label>
+                      <span v-if="unsupportedAction(action)" role="alert">现有动作适配尚不支持，参数只读且不可发布；可替换为已支持动作。</span>
+                      </template>
+                      <label>延时（秒）<input aria-label="动作延时" :disabled="unsupportedAction(action)" type="number" min="0" step="0.1" :value="(action.delay_ms || 0) / 1000" @input="setActionTiming(row, action, 'delay_ms', $event)"></label>
                       <button class="ghost" aria-label="删除动作" @click="row.actions.splice(actionIndex, 1); changed()">×</button>
                     </view>
                     <view v-if="!row.actions.length" class="src">不执行动作</view>
-                    <view class="actions"><button class="ghost" :disabled="!outputs.length" @click="addAction(row)">＋ 动作</button></view>
+                    <view class="actions"><button class="ghost" :disabled="!outputs.some(node => node.type !== 'group')" @click="addAction(row)">＋ 动作</button><button class="ghost" @click="addNotification(row)">＋ 站内通知</button></view>
                   </view>
                 </fieldset>
               </td></tr>
@@ -175,7 +191,7 @@
         <p class="note">模拟使用上方假设的持续秒数，不读取或改写后台计时；动作只生成计划，不写设备。</p>
         <view v-if="result" class="sim-result" role="status">
           <strong>{{ result.state === 'waiting-hold' ? `第 ${rowPosition(result.row_id || '')} 行等待持续确认` : result.row_id ? `命中第 ${rowPosition(result.row_id)} 行` : '没有命中规则' }}</strong>
-          <span v-if="result.actions?.length">{{ result.actions.map(action => `${displayName(action.action_id)} = ${action.value}${action.blocked ? `（已拦截：${action.reason || '—'}）` : ''}`).join('；') }}</span>
+          <span v-if="result.actions?.length">{{ result.actions.map(action => actionText(action, displayName) + (action.blocked ? `（已拦截：${action.reason || '—'}）` : '')).join('；') }}</span>
           <span v-else>不执行任何动作</span>
           <span v-for="(check, index) in result.time_checks || []" :key="index">时间条件 {{ timeConditionText(check) }}：{{ check.satisfied ? '满足' : '不满足' }}</span>
           <span v-for="reason in result.blocked || []" :key="reason">跳过：{{ reason }}</span>
@@ -187,7 +203,7 @@
         <view class="actions">
           <button class="ghost" :disabled="readOnly || busy !== '' || (!enabled && !published)" @click="setEnabled(!enabled)">{{ enabled ? '停用自动' : '启用自动' }}</button>
           <button class="ghost" :disabled="readOnly || busy !== '' || !dirty" @click="saveDraft">{{ busy === 'save' ? '保存中…' : '保存草稿' }}</button>
-          <button class="primary" :disabled="readOnly || busy !== '' || !rows.length || dirty || enabled" @click="confirmPublish = true">发布当前规则</button>
+          <button class="primary" :disabled="readOnly || busy !== '' || !rows.length || dirty || enabled || unsupportedActions" @click="confirmPublish = true">发布当前规则</button>
         </view>
       </view>
       <view v-if="confirmPublish" class="publish-confirm" role="alert">
@@ -208,6 +224,9 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue"
+import { session } from "../../stores/session"
+import { projectContext } from "../../stores/projects"
+import { notificationRecipients } from "../../api/notifications"
 import { request } from "../../api/client"
 import StateMachinePanel from "./StateMachinePanel.vue"
 import AggregationPanel from "./AggregationPanel.vue"
@@ -239,6 +258,9 @@ const props = withDefaults(defineProps<{ snapshot: Snapshot | null; rules: Node[
 const emit = defineEmits<{ (event: "refresh"): void; (event: "navigate", value: "ui"): void; (event: "tool", value: string): void }>()
 
 type CommandChoice = { id: string; name: string; available: boolean; point_id?: string; value?: number; parameters?: { name: string; point_id?: string }[] }
+const recipients = ref<{id:string;display_name:string}[]>([])
+const recipientAfter = ref(''), recipientError = ref(''), recipientLoading = ref(false)
+let recipientGeneration = 0
 const commandChoices = ref<Record<string, CommandChoice[]>>({})
 const commandRequired = ref<Record<string, boolean>>({})
 const selectedId = ref("")
@@ -294,6 +316,38 @@ watch([selectedId, strategyParent], () => loadRule(), { immediate: true })
 watch(definitionRestricted, () => loadRule())
 watch(() => selectedRule.value && selectedRule.value.parent !== strategyParent.value ? point(selectedRule.value, 'applied')?.text : '', () => { if (!dirty.value) loadRule() })
 watch(() => `${selectedId.value}|${outputs.value.map(node => node.id).join('|')}`, loadCommands, { immediate: true })
+
+watch(() => [ruleParent.value, selectedId.value, readOnly.value, session.token, projectContext.generation], () => {
+  recipientGeneration++; recipients.value=[];recipientAfter.value='';recipientError.value='';recipientLoading.value=false
+})
+async function loadRecipients(more = false) {
+  if (readOnly.value || recipientLoading.value) return
+  const generation=++recipientGeneration
+  recipientLoading.value=true;recipientError.value=''
+  if (!more) {recipients.value=[];recipientAfter.value=''}
+  try {
+    const page=await notificationRecipients(ruleParent.value, more ? recipientAfter.value : '')
+    if (generation!==recipientGeneration) return
+    recipients.value=[...recipients.value,...page.items];recipientAfter.value=page.next_after || ''
+  } catch(cause) { if(generation===recipientGeneration) recipientError.value=cause instanceof Error ? cause.message : '账号目录不可用' }
+  finally { if(generation===recipientGeneration) recipientLoading.value=false }
+}
+function setRecipients(action: Action, event: { detail: { value: string[] } }) {
+  if (action.notification) {
+    const unseen=action.notification.recipient_ids.filter(id=>!recipients.value.some(recipient=>recipient.id===id))
+    action.notification.recipient_ids=[...new Set([...unseen,...event.detail.value])];changed()
+  }
+}
+function addNotification(row: Row) {
+  row.actions.push({action_id:`notice-${Date.now()}-${row.actions.length}`,kind:'notify',notification:{recipient_ids:[],title:'',body:''}})
+  changed();void loadRecipients()
+}
+function unsupportedAction(action: Action) {
+  if (action.kind==='notify') return false
+  const node=nodes.value.find(node=>node.id===actionNodeID(action) || businessId(node)===action.action_id)
+  return !!node && (isRamped(node) || !['variable','modbusIo'].includes(node.type))
+}
+const unsupportedActions=computed(()=>rows.value.some(row=>row.actions.some(unsupportedAction)))
 
 async function loadCommands() {
   const ruleID = selectedId.value
@@ -422,7 +476,7 @@ function addTimeCondition(row: Row) {
   changed()
 }
 function addAction(row: Row) {
-  const first = outputs.value[0]
+  const first = outputs.value.find(node => node.type !== 'group')
   if (!first) return
   row.actions.push({ action_id: businessId(first), value: 0, delay_ms: 0, readback: { timeout_ms: 5000, tolerance: 0 } })
   ensureSequence(row)
@@ -430,7 +484,7 @@ function addAction(row: Row) {
 }
 function ensureSequence(row: Row) {
   if (!row.actions.some(action => action.delay_ms || action.readback)) return
-  for (const action of row.actions) action.readback ||= { timeout_ms: 5000, tolerance: 0 }
+  for (const action of row.actions) if (action.kind !== 'notify') action.readback ||= { timeout_ms: 5000, tolerance: 0 }
 }
 function setActionTiming(row: Row, action: Action, field: "delay_ms", event: Event) {
   action[field] = Math.max(0, Math.round(inputNumber(event) * 1000))

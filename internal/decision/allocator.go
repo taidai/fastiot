@@ -177,6 +177,9 @@ func ValidateAllocationOwnership(nc *nats.Conn, ruleID, nodeID string) error {
 		}
 		for _, row := range document.Table.Rows {
 			for _, action := range row.Actions {
+				if action.Notification != nil {
+					continue
+				}
 				target := document.Bindings.Actions[action.ActionID]
 				if target.NodeID == nodeID {
 					return fmt.Errorf("allocator is already owned by %s", table.ID)
