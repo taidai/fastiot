@@ -2,6 +2,7 @@ package decision
 
 import (
 	"fmt"
+	"reflect"
 	"time"
 )
 
@@ -52,6 +53,11 @@ func (d Document) validateScenarios() error {
 			}
 		}
 		for _, action := range scenario.ExpectActions {
+			if action.Notification != nil {
+				if err := action.Notification.Validate(); err != nil {
+					return err
+				}
+			}
 			if action.ActionID == "" || !finite(action.Value) {
 				return fmt.Errorf("scenario %s: invalid expected action", scenario.ID)
 			}
@@ -115,7 +121,7 @@ func scenarioVerdict(scenario Scenario, simulation SimulationResult) (bool, stri
 	}
 	for i, expected := range scenario.ExpectActions {
 		actual := simulation.Actions[i]
-		if actual.ActionID != expected.ActionID || actual.Value != expected.Value {
+		if actual.ActionID != expected.ActionID || actual.Value != expected.Value || !reflect.DeepEqual(actual.Notification, expected.Notification) {
 			return false, "action_mismatch"
 		}
 	}

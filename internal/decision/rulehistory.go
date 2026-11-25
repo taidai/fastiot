@@ -113,6 +113,9 @@ func conditionText(c Condition) string {
 }
 
 func actionText(a Action) string {
+	if a.Notification != nil {
+		return fmt.Sprintf("%s 站内通知 %q → [%s] %q；延时 %dms", a.ActionID, a.Notification.Title, strings.Join(a.Notification.RecipientIDs, ","), a.Notification.Body, a.DelayMS)
+	}
 	return fmt.Sprintf("%s = %g", a.ActionID, a.Value)
 }
 

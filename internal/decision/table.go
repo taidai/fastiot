@@ -44,8 +44,11 @@ type Condition struct {
 }
 
 type Action struct {
-	ActionID string  `json:"action_id"`
-	Value    float64 `json:"value"`
+	// Rule-only metadata is encoded by Row/Scenario, not the shared action wire
+	// contract used by StateMachine guards/actions.
+	Notification *RuleNotification `json:"-"`
+	ActionID     string            `json:"action_id"`
+	Value        float64           `json:"value"`
 	// DelayMS waits after the previous action has been confirmed.
 	DelayMS  int       `json:"delay_ms,omitempty"`
 	Readback *Readback `json:"readback,omitempty"`
@@ -64,7 +67,7 @@ type Readback struct {
 // carry readback, as ADR 0010 requires.
 func (r Row) sequenced() bool {
 	for _, action := range r.Actions {
-		if action.DelayMS != 0 || action.Readback != nil {
+		if action.DelayMS != 0 || action.Readback != nil || action.Notification != nil {
 			return true
 		}
 	}
@@ -94,6 +97,9 @@ func (d Document) Validate() error {
 			}
 		}
 		for _, action := range row.Actions {
+			if action.Notification != nil {
+				continue
+			}
 			target, ok := d.Bindings.Actions[action.ActionID]
 			if !ok || target.NodeID == "" {
 				return fmt.Errorf("row %s: action %s is not bound", row.ID, action.ActionID)
@@ -189,6 +195,14 @@ func (t Table) Validate() error {
 			}
 			if int64(action.DelayMS) > maxMilliseconds {
 				return fmt.Errorf("row %s: action delay overflows runtime duration", row.ID)
+			}
+			if action.Notification != nil {
+				if action.Value != 0 || action.Readback != nil {
+					return fmt.Errorf("row %s: notification has no numeric write or device readback", row.ID)
+				}
+				if err := action.Notification.Validate(); err != nil {
+					return fmt.Errorf("row %s: %w", row.ID, err)
+				}
 			}
 			if action.Readback != nil {
 				if action.Readback.TimeoutMS <= 0 || action.Readback.TimeoutMS > 120000 {

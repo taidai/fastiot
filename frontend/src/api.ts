@@ -49,7 +49,7 @@ export type Condition = {
   end?: string
   weekday_mask?: number
 }
-export type Action = { action_id: string; value: number }
+export type Action = { action_id: string; value?: number; kind?: 'notify'; notification?: { recipient_ids: string[]; title: string; body?: string } }
 export type Row = { row_id: string; match?: "all" | "any"; conditions: Condition[]; actions: Action[]; hold_ms?: number; cooldown_ms?: number }
 export type Target = { node_id: string; point_type?: string; key?: string }
 export type Scenario = {
@@ -66,7 +66,7 @@ export type ScenarioResult = {
   name?: string
   passed: boolean
   row_id?: string
-  actions?: { action_id: string; value: number; blocked?: boolean; reason?: string }[]
+  actions?: (Action & { blocked?: boolean; reason?: string })[]
   reason?: string
   detail?: string
 }

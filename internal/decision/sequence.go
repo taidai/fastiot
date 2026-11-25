@@ -63,6 +63,9 @@ func newActionSequence(row Row) *actionSequence {
 	s := &actionSequence{rowID: row.ID, actions: row.Actions}
 	for _, action := range row.Actions {
 		s.checks = append(s.checks, CheckAction{Output: action.ActionID, Requested: action.Value, Applied: action.Value, Status: "pending"})
+		if action.Notification != nil {
+			s.checks[len(s.checks)-1].Kind = "notify"
+		}
 	}
 	return s
 }
@@ -187,6 +190,27 @@ func (c *Client) stepSequence(active *activeTable, now time.Time) bool {
 		}
 		if now.Before(s.notBefore) {
 			return false
+		}
+		if action.Notification != nil {
+			if c.commands == nil || c.commands.Notify == nil {
+				s.fail("failed", "notification runtime unavailable")
+				return true
+			}
+			id := fmt.Sprintf("%s-%d", s.executionID, s.next)
+			created, err := c.commands.Notify(RuleCommand{RuleID: c.config.ID, Revision: c.documentRevision(), ExecutionID: s.executionID, RequestID: id, RowID: s.rowID, Step: s.next, Action: action})
+			if err != nil {
+				s.fail("failed", err.Error())
+				return true
+			}
+			if created.Status != "created" || created.ID == "" {
+				s.fail("unknown", "notification creation not confirmed")
+				return true
+			}
+			s.confirm()
+			check.Status = "created"
+			check.NotificationID = created.ID
+			check.Confirmation = "durable_record"
+			return true
 		}
 		limiter := targetLimiter{
 			nc: c.nc, parent: c.config.Parent, actions: active.bindings.Actions, validate: c.validateTarget,

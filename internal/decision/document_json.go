@@ -21,6 +21,7 @@ func (d *Document) UnmarshalJSON(encoded []byte) error {
 		Tolerance json.RawMessage `json:"tolerance"`
 	}
 	type rawAction struct {
+		Kind     string          `json:"kind"`
 		Value    json.RawMessage `json:"value"`
 		Delay    json.RawMessage `json:"delay_ms"`
 		Readback *rawReadback    `json:"readback"`
@@ -58,7 +59,7 @@ func (d *Document) UnmarshalJSON(encoded []byte) error {
 		return err
 	}
 	checkAction := func(action rawAction) error {
-		if err := ruleScalar(action.Value, true); err != nil {
+		if err := ruleScalar(action.Value, action.Kind != "notify"); err != nil {
 			return fmt.Errorf("action value: %w", err)
 		}
 		if err := ruleScalar(action.Delay, false); err != nil {

@@ -7,6 +7,7 @@ import (
 
 	"fastiot/internal/ems/command"
 	"fastiot/internal/ems/signal"
+	"fastiot/internal/notification"
 	"github.com/nats-io/nats.go"
 	"github.com/simpleiot/simpleiot/client"
 	"github.com/simpleiot/simpleiot/data"
@@ -31,6 +32,7 @@ type RuleCommand struct {
 // Legacy standalone clients keep their old transport; the application always
 // constructs its clients with this boundary and never falls back from it.
 type RuleCommands struct {
+	Notify           func(RuleCommand) (notification.Created, error)
 	Validate         func(string, Document) error
 	Submit           func(RuleCommand) (command.Outcome, error)
 	Get              func(string) (command.Outcome, bool)

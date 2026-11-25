@@ -150,16 +150,18 @@ type CheckInput struct {
 }
 
 type CheckAction struct {
-	CommandID    string        `json:"command_id,omitempty"`
-	Confirmation string        `json:"confirmation,omitempty"`
-	Target       Target        `json:"target,omitempty"`
-	Output       string        `json:"output"`
-	Requested    float64       `json:"requested"`
-	Applied      float64       `json:"applied"`
-	Blocked      bool          `json:"blocked"`
-	Reason       string        `json:"reason"`
-	Status       string        `json:"status,omitempty"`
-	Shares       []alloc.Share `json:"shares,omitempty"`
+	Kind           string        `json:"kind,omitempty"`
+	NotificationID string        `json:"notification_id,omitempty"`
+	CommandID      string        `json:"command_id,omitempty"`
+	Confirmation   string        `json:"confirmation,omitempty"`
+	Target         Target        `json:"target,omitempty"`
+	Output         string        `json:"output"`
+	Requested      float64       `json:"requested"`
+	Applied        float64       `json:"applied"`
+	Blocked        bool          `json:"blocked"`
+	Reason         string        `json:"reason"`
+	Status         string        `json:"status,omitempty"`
+	Shares         []alloc.Share `json:"shares,omitempty"`
 }
 
 type CheckReport struct {
@@ -219,11 +221,12 @@ func marshalCheck(report CheckReport) (string, error) {
 
 // SimulationAction is the API shape the editor already consumes.
 type SimulationAction struct {
-	ActionID string  `json:"action_id"`
-	Value    float64 `json:"value"`
-	DelayMS  int     `json:"delay_ms,omitempty"`
-	Blocked  bool    `json:"blocked,omitempty"`
-	Reason   string  `json:"reason,omitempty"`
+	Notification *RuleNotification `json:"-"`
+	ActionID     string            `json:"action_id"`
+	Value        float64           `json:"value"`
+	DelayMS      int               `json:"delay_ms,omitempty"`
+	Blocked      bool              `json:"blocked,omitempty"`
+	Reason       string            `json:"reason,omitempty"`
 }
 
 // TimeCheck reports one time condition's result at the simulated moment.
@@ -330,7 +333,7 @@ func (d Document) Simulate(inputs map[string]float64, texts map[string]string, n
 		result.State = string(rule.StateFired)
 		if row.sequenced() {
 			for _, action := range row.Actions {
-				result.Actions = append(result.Actions, SimulationAction{ActionID: action.ActionID, Value: action.Value, DelayMS: action.DelayMS})
+				result.Actions = append(result.Actions, SimulationAction{ActionID: action.ActionID, Value: action.Value, DelayMS: action.DelayMS, Notification: action.Notification})
 			}
 		} else {
 			for _, action := range outcome.Actions {

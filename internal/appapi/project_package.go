@@ -733,6 +733,7 @@ func rewritePackagePoint(node data.NodeEdge, p data.Point, idMap map[string]stri
 		}
 		document.Bindings.Points = rewriteTargets(document.Bindings.Points)
 		document.Bindings.Actions = rewriteTargets(document.Bindings.Actions)
+		unresolved = append(unresolved, document.ClearNotificationRecipients()...)
 		encoded, _ := json.Marshal(document)
 		rewritten := data.NewPointString(p.Type, p.Key, string(encoded))
 		return &rewritten, true, unresolved

@@ -308,6 +308,12 @@ func (c *Client) start() (*activeTable, error) {
 			requiredPoints[condition.PointID] = target
 		}
 		for _, action := range row.Actions {
+			if action.Notification != nil {
+				if c.commands == nil || c.commands.Notify == nil {
+					return fail(fmt.Errorf("notification runtime unavailable"))
+				}
+				continue
+			}
 			target, ok := bindings.Actions[action.ActionID]
 			if !ok || target.NodeID == "" {
 				return fail(fmt.Errorf("row %s: action %s is not bound", row.ID, action.ActionID))
@@ -770,6 +776,9 @@ func (c *Client) recordCheck(outcome rule.Outcome, now time.Time, active *active
 		report.ExecutionID = active.sequence.executionID
 	}
 	for i := range report.Actions {
+		if report.Actions[i].Kind == "notify" {
+			continue
+		}
 		report.Actions[i].Target = active.bindings.Actions[report.Actions[i].Output]
 		if run, ok := active.allocations[report.Actions[i].Output]; ok {
 			report.Actions[i].Shares = run.result.Shares

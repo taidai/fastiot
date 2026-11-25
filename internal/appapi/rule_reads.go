@@ -61,6 +61,20 @@ func (h *Handler) readableRuleTrace(identity Identity, nodeID string, report dec
 		}
 	}
 	for _, action := range report.Actions {
+		if action.Kind == "notify" {
+			declared := false
+			for _, row := range doc.Table.Rows {
+				if row.ID == report.Row {
+					for _, source := range row.Actions {
+						declared = declared || (source.ActionID == action.Output && source.Notification != nil)
+					}
+				}
+			}
+			if !declared || action.CommandID != "" || action.Target.NodeID != "" {
+				return false
+			}
+			continue
+		}
 		id := action.Target.NodeID
 		if id == "" {
 			id = doc.Bindings.Actions[action.Output].NodeID

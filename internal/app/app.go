@@ -196,7 +196,7 @@ func Start(ctx context.Context, cfg Config) (*App, error) {
 	clients := client.NewRunGroup("fastiot clients")
 	clients.Add(client.NewManager(nc, func(nc *nats.Conn, config decision.DecisionTable) client.Client {
 		return calculationHandler.Load().NewRuleClient(nc, config)
-	}, nil))
+	}, appapi.RuleParentTypes()))
 	// 多协议接入：注册 SimpleIoT 的 MQTT 客户端，让 MQTT 设备可接入节点树。
 	// Modbus 走自建 bridge，MQTT 复用上游 client。CAN 需硬件，留作可选。
 	clients.Add(client.NewManager(nc, client.NewMqttClient, nil))

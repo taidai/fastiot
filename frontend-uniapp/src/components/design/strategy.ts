@@ -27,7 +27,8 @@ export type Readback = {
   timeout_ms: number
   tolerance?: number
 }
-export type Action = { action_id: string; value: number; delay_ms?: number; readback?: Readback }
+export type RuleNotification = { recipient_ids: string[]; title: string; body?: string }
+export type Action = { action_id: string; value?: number; kind?: "notify"; notification?: RuleNotification; delay_ms?: number; readback?: Readback }
 export type Row = {
   row_id: string
   conditions: Condition[]
@@ -140,7 +141,7 @@ export function withBindings(document: DecisionDocument, nodes: Node[]): Decisio
 
 export function referencedDocument(document: DecisionDocument): DecisionDocument {
   const points = new Set(document.table.rows.flatMap(row => row.conditions.filter(c => c.kind !== "time").map(c => c.point_id)))
-  const actions = new Set(document.table.rows.flatMap(row => row.actions.map(a => a.action_id)))
+  const actions = new Set(document.table.rows.flatMap(row => row.actions.filter(a => a.kind !== 'notify').map(a => a.action_id)))
   return { ...document, bindings: {
     points: Object.fromEntries(Object.entries(document.bindings.points).filter(([id]) => points.has(id))),
     actions: Object.fromEntries(Object.entries(document.bindings.actions).filter(([id]) => actions.has(id))),
@@ -218,6 +219,10 @@ export function timeConditionText(condition: Pick<Condition, "start" | "end" | "
 export function actionText(action: Action, label: (id: string) => string) {
   const parts: string[] = []
   if (action.delay_ms) parts.push(`延时 ${action.delay_ms / 1000}s`)
+  if (action.kind === 'notify') {
+    parts.push(`站内通知「${action.notification?.title || '未填写标题'}」→ ${action.notification?.recipient_ids.length || 0} 个指定账号（成功仅指持久创建）`)
+    return parts.join(' → ')
+  }
   parts.push(`${label(action.action_id)} = ${action.value}`)
   if (action.readback) parts.push(`回读 ${action.readback.timeout_ms / 1000}s（容差 ${action.readback.tolerance || 0}）`)
   return parts.join(" → ")

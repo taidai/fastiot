@@ -13,6 +13,7 @@ import (
 	"fastiot/internal/ems/device"
 	"fastiot/internal/ems/safety"
 	"fastiot/internal/ems/signal"
+	"fastiot/internal/notification"
 	"github.com/nats-io/nats.go"
 	"github.com/simpleiot/simpleiot/client"
 	"github.com/simpleiot/simpleiot/data"
@@ -34,6 +35,9 @@ func (h *Handler) ruleWriteTargets(document decision.Document) ([]decision.Targe
 	targets := []decision.Target{}
 	for _, row := range document.Table.Rows {
 		for _, action := range row.Actions {
+			if action.Notification != nil {
+				continue
+			}
 			target := document.Bindings.Actions[action.ActionID]
 			if target.CommandID == "" {
 				targets = append(targets, target)
@@ -68,6 +72,9 @@ func (h *Handler) ruleWriteTargets(document decision.Document) ([]decision.Targe
 func (h *Handler) ruleExecutionSupport(identity Identity, parent string, document decision.Document) error {
 	for _, row := range document.Table.Rows {
 		for _, action := range row.Actions {
+			if action.Notification != nil {
+				continue
+			}
 			target := document.Bindings.Actions[action.ActionID]
 			nodes, err := client.GetNodes(h.nc, "all", target.NodeID, "", false)
 			if err != nil || len(nodes) == 0 {
@@ -239,6 +246,7 @@ func (h *Handler) NewRuleClient(nc *nats.Conn, config decision.DecisionTable) cl
 	}
 	return decision.NewDecisionTableClientWithCommands(nc, config, observations, decision.RuleCommands{
 		Validate:         func(id string, doc decision.Document) error { _, err := h.ruleRuntimeAuthority(id, doc); return err },
+		Notify:           h.submitRuleNotification,
 		Submit:           h.submitRuleCommand,
 		SoftwareFeedback: h.observeRuleSoftware,
 		StopSoftware:     h.stopRuleSoftware,
@@ -279,7 +287,46 @@ func (h *Handler) ruleRuntimeAuthority(id string, document decision.Document) (I
 	return identity, nil
 }
 
+// Notifications use the same enabled publication and durable reservation boundary,
+// but never a synthetic device command or direct point write.
+func (h *Handler) submitRuleNotification(input decision.RuleCommand) (notification.Created, error) {
+	h.virtualInputMu.Lock()
+	defer h.virtualInputMu.Unlock()
+	h.ownershipMu.Lock()
+	defer h.ownershipMu.Unlock()
+	nodes, err := client.GetNodes(h.nc, "all", input.RuleID, "", false)
+	if err != nil || len(nodes) != 1 {
+		return notification.Created{}, fmt.Errorf("rule unavailable")
+	}
+	document, err := documentSource(nodes[0], "applied")
+	if err != nil || document.Revision != input.Revision {
+		return notification.Created{}, fmt.Errorf("rule revision changed")
+	}
+	if _, err := h.ruleRuntimeAuthority(input.RuleID, document); err != nil {
+		return notification.Created{}, err
+	}
+	var reservation decision.ExecutionReservation
+	reserved, _ := nodes[0].Points.Text("lastExecution", "")
+	if json.Unmarshal([]byte(reserved), &reservation) != nil || reservation.ID != input.ExecutionID || reservation.Row != input.RowID || reservation.Revision != input.Revision {
+		return notification.Created{}, fmt.Errorf("rule execution was not reserved")
+	}
+	valid := false
+	for _, row := range document.Table.Rows {
+		if row.ID == input.RowID && input.Step >= 0 && input.Step < len(row.Actions) {
+			valid = reflect.DeepEqual(row.Actions[input.Step], input.Action)
+		}
+	}
+	if !valid || input.Action.Notification == nil || input.Target != (decision.Target{}) || input.ExecutionID == "" || input.RequestID != fmt.Sprintf("%s-%d", input.ExecutionID, input.Step) {
+		return notification.Created{}, fmt.Errorf("invalid rule notification identity")
+	}
+	notice := input.Action.Notification
+	return h.CreateRuleNotification(notification.Request{RuleID: input.RuleID, SourceRevision: input.Revision, ExecutionID: input.ExecutionID, ActionID: input.RequestID, ScopeNodeID: nodes[0].Parent, RecipientIDs: notice.RecipientIDs, Title: notice.Title, Body: notice.Body})
+}
+
 func (h *Handler) submitRuleCommand(input decision.RuleCommand) (command.Outcome, error) {
+	if input.Action.Notification != nil {
+		return command.Outcome{}, fmt.Errorf("notification is not a device command")
+	}
 	h.virtualInputMu.Lock()
 	defer h.virtualInputMu.Unlock()
 	h.ownershipMu.Lock()
