@@ -38,7 +38,6 @@ import (
 	"fastiot/internal/ems/modbusrt"
 	"fastiot/internal/ems/profile"
 	"fastiot/internal/ems/runtime"
-	"fastiot/internal/ems/signal"
 	"fastiot/internal/emsapi"
 	"fastiot/internal/industry"
 	"fastiot/internal/web"
@@ -196,19 +195,7 @@ func Start(ctx context.Context, cfg Config) (*App, error) {
 	}
 	clients := client.NewRunGroup("fastiot clients")
 	clients.Add(client.NewManager(nc, func(nc *nats.Conn, config decision.DecisionTable) client.Client {
-		// Allocator interlock inputs read the runtime's observations so an
-		// invalid or stale reading is refused, not re-stamped good from the
-		// value mirrored onto the node tree.
-		return decision.NewDecisionTableClientWithObservations(nc, config, func(now time.Time) map[string]signal.Sample {
-			samples := make(map[string]signal.Sample)
-			for _, value := range emsService.State.Snapshot(now, emsService.MaxAge) {
-				samples[value.PointID] = signal.Sample{
-					Input: value.PointID, Value: value.Value, Quality: value.Quality,
-					SourceTime: value.SourceTime, ReceivedTime: value.ReceivedTime,
-				}
-			}
-			return samples
-		})
+		return calculationHandler.Load().NewRuleClient(nc, config)
 	}, nil))
 	// 多协议接入：注册 SimpleIoT 的 MQTT 客户端，让 MQTT 设备可接入节点树。
 	// Modbus 走自建 bridge，MQTT 复用上游 client。CAN 需硬件，留作可选。

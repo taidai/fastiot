@@ -1110,6 +1110,11 @@ func (h *Handler) createRule(w http.ResponseWriter, r *http.Request, identity Id
 		writeError(w, http.StatusBadRequest, "invalid_rule")
 		return
 	}
+	if !h.checkedRuleDocument(w, identity, data.NodeEdge{Parent: input.Parent}, input.Document) {
+		return
+	}
+	input.Document.Revision = data.NewID()
+	input.Document.Simulation = nil
 	encoded, _ := json.Marshal(input.Document)
 	id := data.NewID()
 	err := client.SendNodeType(h.nc, decision.DecisionTable{
@@ -1119,7 +1124,7 @@ func (h *Handler) createRule(w http.ResponseWriter, r *http.Request, identity Id
 		writeError(w, http.StatusBadRequest, "create_failed")
 		return
 	}
-	writeJSON(w, map[string]string{"id": id})
+	writeJSON(w, map[string]string{"id": id, "revision": input.Document.Revision})
 }
 
 func (h *Handler) saveDraft(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
@@ -1139,10 +1144,16 @@ func (h *Handler) writeRuleDocument(w http.ResponseWriter, r *http.Request, iden
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if pointType == "applied" && !h.documentInScope(rule, document) {
-		writeError(w, http.StatusForbidden, "target_out_of_scope")
+	if !h.checkedRuleDocument(w, identity, rule, document) {
 		return
 	}
+	previous, err := documentSource(rule, "draft")
+	if err != nil || document.Revision != previous.Revision {
+		writeError(w, http.StatusConflict, "rule_revision_conflict")
+		return
+	}
+	document.Revision = data.NewID()
+	document.Simulation = nil
 	encoded, _ := json.Marshal(document)
 	point := data.NewPointString(pointType, "", string(encoded))
 	point.Origin = identity.UserID
@@ -1150,7 +1161,7 @@ func (h *Handler) writeRuleDocument(w http.ResponseWriter, r *http.Request, iden
 		writeError(w, http.StatusBadRequest, "save_failed")
 		return
 	}
-	writeJSON(w, map[string]any{"saved": true})
+	writeJSON(w, map[string]any{"saved": true, "revision": document.Revision})
 }
 
 func (h *Handler) enableRule(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
@@ -1165,16 +1176,34 @@ func (h *Handler) enableRule(w http.ResponseWriter, r *http.Request, identity Id
 		return
 	}
 	if input.Enabled {
+		if !canAction(identity, ActionCommand) {
+			writeError(w, http.StatusForbidden, "operation_not_allowed")
+			return
+		}
 		var document decision.Document
 		applied, _ := rule.Points.Text("applied", "")
 		if applied == "" || json.Unmarshal([]byte(applied), &document) != nil || document.Validate() != nil {
 			writeError(w, http.StatusBadRequest, "publish_required")
 			return
 		}
+		if !h.checkedRuleDocument(w, identity, rule, document) {
+			return
+		}
+		if err := h.ruleExecutionSupport(identity, rule.Parent, document); err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		h.ownershipMu.Lock()
 		defer h.ownershipMu.Unlock()
 		if err := decision.ValidateOutputOwnership(h.nc, id, document); err != nil {
 			writeError(w, http.StatusConflict, "output_owned")
+			return
+		}
+		grant, _ := json.Marshal(ruleAuthorization{Revision: document.Revision, Parent: rule.Parent, Anchors: identity.Anchors, GrantedBy: identity.UserID, GrantedAt: time.Now()})
+		point := data.NewPointString(ruleAuthorizationPoint, "", string(grant))
+		point.Origin = identity.UserID
+		if err := client.SendNodePoint(h.nc, id, point, true); err != nil {
+			writeError(w, http.StatusInternalServerError, "authorization_save_failed")
 			return
 		}
 	}
@@ -1209,7 +1238,8 @@ func (h *Handler) setTariff(w http.ResponseWriter, r *http.Request, identity Ide
 }
 
 func (h *Handler) testRule(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
-	if _, ok := h.rule(w, identity, id); !ok {
+	rule, ok := h.rule(w, identity, id)
+	if !ok {
 		return
 	}
 	var input struct {
@@ -1223,6 +1253,9 @@ func (h *Handler) testRule(w http.ResponseWriter, r *http.Request, identity Iden
 	}
 	if err := input.Document.Validate(); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !h.checkedRuleDocument(w, identity, rule, input.Document) {
 		return
 	}
 	for _, value := range input.Inputs {
@@ -1500,6 +1533,10 @@ func (h *Handler) rule(w http.ResponseWriter, identity Identity, id string) (dat
 	}
 	if node.Type != "decisionTable" {
 		writeError(w, http.StatusNotFound, "not_found")
+		return data.NodeEdge{}, false
+	}
+	if !h.allows(identity, node.ID) || !h.allows(identity, node.Parent) {
+		writeError(w, http.StatusForbidden, "rule_source_out_of_scope")
 		return data.NodeEdge{}, false
 	}
 	return node, true
