@@ -24,7 +24,7 @@ try {
  const response=path=>page.waitForResponse(r=>r.url().endsWith(path)&&r.request().method()!=='GET')
  const settle=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))
  const save=async seconds=>{
-  await page.getByLabel('持续确认秒').first().fill(String(seconds))
+  await page.locator('.rule-table').getByLabel('持续确认秒').first().fill(String(seconds))
   const pending=response(`/rules/${fixture.rule}/draft`)
   await page.getByRole('button',{name:'保存草稿',exact:true}).click()
   const r=await pending;await settle();return {status:r.status(),body:await r.json(),sent:r.request().postDataJSON()}
@@ -36,7 +36,7 @@ try {
   const r=await pending;await settle();assert.equal(r.status(),200);return r.request().postDataJSON()
  }
  await open()
- assert.equal(await page.getByLabel('持续确认秒').count(), 2, 'null fallback arrays render safely')
+ assert.equal(await page.locator('.rule-table').getByLabel('持续确认秒').count(), 2, 'null fallback arrays render safely')
  const first=await save(1);assert.equal(first.status,200)
  const second=await save(2);assert.equal(second.status,200)
  assert.equal(second.sent.revision,first.body.revision)
@@ -52,7 +52,7 @@ try {
  const restored=await restoreResponse;assert.equal(restored.status(),200)
  assert.equal(restored.request().postDataJSON().revision,second.body.revision)
  const restoredBody=await restored.json();await settle()
- assert.equal(await page.getByLabel('持续确认秒').count(),2,'restored null fallback arrays render safely')
+ assert.equal(await page.locator('.rule-table').getByLabel('持续确认秒').count(),2,'restored null fallback arrays render safely')
  stored=await readRule()
  assert.equal(JSON.parse(point(stored,'applied').text).revision,second.body.revision,'restore changes only draft')
  const restoredPublication=await publish()
@@ -66,7 +66,7 @@ try {
  remote.table.rows[0].hold_ms=4000
  const advanced=await api(`/rules/${fixture.rule}/draft`,'PUT',remote);assert.equal(advanced.status,200)
  const conflict=await save(5);assert.equal(conflict.status,409)
- assert.equal(await page.getByLabel('持续确认秒').first().inputValue(),'5')
+ assert.equal(await page.locator('.rule-table').getByLabel('持续确认秒').first().inputValue(),'5')
  assert.match(await page.locator('.rule-state').innerText(),/有未保存修改/)
  assert.equal(JSON.parse(point(await readRule(),'draft').text).table.rows[0].hold_ms,4000)
  console.log('PASS real concurrent409 preserves local dirty5 and remote saved4')
@@ -77,14 +77,14 @@ try {
  const persisted=new Promise(resolve=>{persistedResponse=resolve})
  const draftPath=`**/api/rules/${fixture.rule}/draft`
  await page.route(draftPath,async route=>{const real=await route.fetch();persistedResponse(real.status());await release;await route.fulfill({response:real})})
- await page.getByLabel('持续确认秒').first().fill('6')
+ await page.locator('.rule-table').getByLabel('持续确认秒').first().fill('6')
  const delivered=response(`/rules/${fixture.rule}/draft`)
  await page.getByRole('button',{name:'保存草稿',exact:true}).click()
  assert.equal(await persisted,200)
- await page.getByLabel('持续确认秒').first().fill('7')
+ await page.locator('.rule-table').getByLabel('持续确认秒').first().fill('7')
  releaseResponse();const late=await delivered;const lateBody=await late.json();await settle()
  await page.unroute(draftPath)
- assert.equal(await page.getByLabel('持续确认秒').first().inputValue(),'7')
+ assert.equal(await page.locator('.rule-table').getByLabel('持续确认秒').first().inputValue(),'7')
  assert.match(await page.locator('.rule-state').innerText(),/有未保存修改/)
  const afterLate=await save(7);assert.equal(afterLate.status,200);assert.equal(afterLate.sent.revision,lateBody.revision)
  console.log('PASS edit during held genuine save response remains dirty; subsequent save uses new revision')
