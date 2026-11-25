@@ -809,7 +809,10 @@ function parseCSV(text: string): string[][] {
   return rows
 }
 
-function batchAccess(body: JsonObject): DesignPreviewResult {
+function batchAccess(body: JsonObject, reviewed = false): DesignPreviewResult {
+  // Preview-only compatibility. Real acceptance uses the Go reviewed endpoint.
+  const previewVersion = JSON.stringify([body.csv, state.units, state.nodes])
+  if (reviewed && !body.dry_run && body.preview_version !== previewVersion) return fail(409, "batch_preview_changed")
   const rows = parseCSV(String(body.csv || "")).slice(1).map((cells, index) => {
     const [device = "", profileID = "", channelID = "", stationText = ""] = cells.map(cell => cell.trim())
     const station = Number(stationText)
@@ -829,7 +832,7 @@ function batchAccess(body: JsonObject): DesignPreviewResult {
       row.created_points = 0
     }
   }
-  return ok({ dry_run: !!body.dry_run, applied: body.dry_run ? 0 : rows.filter(row => row.status === "mapped").length, rows })
+  return ok({ dry_run: !!body.dry_run, applied: body.dry_run ? 0 : rows.filter(row => row.status === "mapped").length, rows, ...(reviewed ? { preview_version: previewVersion } : {}) })
 }
 
 function verification(unit: PreviewUnit, body: JsonObject): JsonObject {
@@ -935,6 +938,7 @@ export function resolveDesignPreview(path: string, method: string, body?: unknow
     return ok({ connected: true, latency_ms: 2, probed: Object.values(state.units).filter(unit => unit.channel_id === channelID).length, stations: Object.values(state.units).filter(unit => unit.channel_id === channelID).map(unit => ({ server_id: unit.server_id, responded: true, latency_ms: 2, probe: "holdingRegister:0", error: "" })) })
   }
   if (pathname === "/access/batch" && verb === "POST") return batchAccess(input)
+  if (pathname === "/access/batch/reviewed" && verb === "POST") return batchAccess(input, true)
 
   match = pathname.match(/^\/rules\/([^/]+)\/test$/)
   if (match && verb === "POST") return ruleByID(decodeURIComponent(match[1])) ? ok(evaluateRule(input)) : fail(404, "not_found")

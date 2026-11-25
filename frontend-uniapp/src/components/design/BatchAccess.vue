@@ -11,22 +11,30 @@
       <label>起始站号<input v-model.number="startStation" type="number" min="1" max="247" :disabled="readOnly || busy !== ''" @input="invalidate"></label>
       <button class="ghost" :disabled="readOnly || !checked.size || !channelID || !profileID || busy !== ''" @click="makeDraft">生成批量草稿</button>
     </view>
-    <label class="csv-label">CSV 草稿（设备,型号,通道,站号）<textarea v-model="csv" rows="6" :disabled="readOnly || busy !== ''" @input="invalidate"></textarea></label>
-    <view class="actions"><button class="ghost" :disabled="readOnly || !csv.trim() || busy !== ''" @click="preview">{{ busy === 'preview' ? '预检中…' : 'CSV 预检' }}</button><button class="primary" :disabled="readOnly || previewedCSV !== csv || !rows.some(row => row.valid) || busy !== ''" @click="apply">{{ busy === 'apply' ? '套用中…' : '批量套用可导入项' }}</button></view>
+    <label class="csv-label">CSV 草稿（设备,型号,通道,站号）<textarea v-model="csv" :maxlength="262145" rows="6" :disabled="readOnly || busy !== ''" @input="invalidate"></textarea></label>
+    <p class="notice">每批最多 256 台、CSV 256 KiB、每字段 256 字节；超限会拒绝，不会截断后导入。</p>
+    <p v-if="csvError" class="error" role="alert">{{ csvError }}</p>
+    <view class="actions"><button class="ghost" :disabled="readOnly || !!csvError || !csv.trim() || busy !== ''" @click="preview">{{ busy === 'preview' ? '预检中…' : 'CSV 预检' }}</button><button class="primary" :disabled="readOnly || previewedCSV !== csv || !previewVersion || !rows.some(row => row.valid) || busy !== ''" @click="apply">{{ busy === 'apply' ? '套用中…' : '批量套用可导入项' }}</button></view>
     <p v-if="error" class="error" role="alert">{{ error }}</p><p v-if="notice" class="notice" role="status">{{ notice }}</p>
     <div v-if="rows.length" class="table-wrap"><table><thead><tr><th>行</th><th>设备</th><th>通道 / 站号</th><th>点位</th><th>结果</th></tr></thead><tbody>
-      <tr v-for="row in rows" :key="row.line"><td>{{ row.line }}</td><td>{{ deviceName(row.device_id) || row.device }}</td><td>{{ channelName(row.channel_id) || row.channel }} / {{ row.station || '—' }}</td><td>{{ row.status === 'mapped' ? `${row.mapped} 已映射${row.missing.length ? `，缺 ${row.missing.length}` : ''}` : `${row.created_points} 个待创建` }}</td><td><span class="chip" :class="row.status === 'mapped' ? 'ok' : row.valid ? '' : 'warn'">{{ statusText(row) }}</span><small v-if="row.errors.length">{{ row.errors.join('；') }}</small></td></tr>
+      <tr v-for="row in rows" :key="row.line"><td>{{ row.line }}</td><td>{{ deviceName(row.device_id) || row.device }}</td><td>{{ channelName(row.channel_id) || row.channel }} / {{ row.station || '—' }}</td><td>{{ row.status === 'mapped' ? `${row.mapped} 已映射${row.missing.length ? `，缺 ${row.missing.length}` : ''}` : `${row.created_points} 个待创建` }}<details v-if="plans[row.line]" class="batch-diff"><summary>Profile 差异 / 创建计划</summary><p>当前缺失必需点：{{ plans[row.line].missing_required.join('、') || '无' }}；应用后仍需实际读值验证。</p><p v-for="point in plans[row.line].match.points" :key="point.name">{{ point.name }}：{{ point.reason || point.verdict }}</p><p v-for="point in plans[row.line].create_points" :key="point.description">新建 {{ point.description }} · 地址 {{ point.address }} · {{ point.data_format }} · 倍率 {{ point.scale }} · {{ point.units || '无单位' }} · {{ point.read_only ? '只读' : '可写（本次不写设备）' }}</p></details></td><td><span class="chip" :class="row.status === 'mapped' ? 'ok' : row.valid ? '' : 'warn'">{{ statusText(row) }}</span><small v-if="row.errors.length">{{ row.errors.join('；') }}</small></td></tr>
+    </tbody></table></div>
+    <view class="panel-head"><strong>已保存映射 · 逐台验证</strong><span>读取同一设备模型及验证记录；应用映射不代表 L1/L2 通过。</span><button class="ghost" :disabled="busy !== ''" @click="refreshSaved">刷新已保存结果</button></view>
+    <p v-if="savedError" class="error" role="alert">{{ savedError }}</p>
+    <div class="table-wrap saved-bindings"><table><thead><tr><th>设备 / 站号</th><th>保存结果与证据</th><th>只读验证</th></tr></thead><tbody>
+      <tr v-for="item in saved" :key="bindingPath(item.device)"><td>{{ item.device.business_node_name || item.device.name }}<small>{{ channelName(item.device.channel_id) }} / {{ item.device.server_id }}</small></td><td><span>映射已保存 · {{ item.device.point_count }} 个物理点</span><small v-for="level in levels" :key="level">{{ batchVerificationText(item.records, level) }}</small><small v-if="item.error" class="error" role="alert">{{ item.error }}</small></td><td><button v-for="level in levels" :key="level" class="ghost" :disabled="readOnly || busy !== ''" @click="verify(item, level)">{{ level === 'L1' ? 'L1 只读验证' : 'L2 必需点验证' }}</button></td></tr>
+      <tr v-if="!saved.length"><td colspan="3" class="empty">尚无已保存的设备映射；不会用草稿冒充保存结果。</td></tr>
     </tbody></table></div>
   </view>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue"
+import { computed, onMounted, ref, watch } from "vue"
 import { request } from "../../api/client"
 import { nameOf } from "../../types/api"
 import type { Snapshot } from "../../types/api"
-import { batchCSV } from "./access"
-import type { BatchAccessResponse, BatchBindingRow, EmsChannel, Profile } from "./access"
+import { batchCSV, batchVerificationText } from "./access"
+import type { BatchAccessResponse, BatchBindingRow, BatchVerificationRecord, LedgerDevice, EmsChannel, Profile } from "./access"
 import { boundBusinessIDs } from "./design"
 
 const props = withDefaults(defineProps<{ snapshot: Snapshot | null; channels: EmsChannel[]; profiles: Profile[]; selectedNodeIds?: string[]; readOnly?: boolean }>(), { selectedNodeIds: () => [], readOnly: false })
@@ -36,8 +44,15 @@ const channelID = ref("")
 const profileID = ref("")
 const startStation = ref(1)
 const csv = ref("")
+const csvError = computed(() => new TextEncoder().encode(csv.value).length > 256 * 1024 ? "CSV 超过 256 KiB，请拆分后重新粘贴；本次不会导入" : "")
 const rows = ref<BatchBindingRow[]>([])
 const previewedCSV = ref("")
+const previewVersion = ref("")
+const plans = ref<NonNullable<BatchAccessResponse["plans"]>>({})
+type SavedBinding = { device: LedgerDevice; records: BatchVerificationRecord[]; error: string }
+const saved = ref<SavedBinding[]>([])
+const savedError = ref("")
+const levels = ["L1", "L2"] as const
 const busy = ref("")
 const error = ref("")
 const notice = ref("")
@@ -57,7 +72,7 @@ function toggle(id: string) {
   checked.value = next
   invalidate()
 }
-function invalidate() { rows.value = []; previewedCSV.value = ""; notice.value = "" }
+function invalidate() { rows.value = []; plans.value = {}; previewedCSV.value = ""; previewVersion.value = ""; notice.value = "" }
 function makeDraft() {
   if (!Number.isInteger(startStation.value) || startStation.value < 1 || startStation.value > 247) { error.value = "起始站号必须是 1–247 的整数"; return }
   const selected = devices.value.filter(device => checked.value.has(device.id) && !device.bound)
@@ -69,24 +84,64 @@ function channelName(id?: string) { return id ? nameOf(props.snapshot?.nodes.fin
 function deviceName(id?: string) { return id ? devices.value.find(device => device.id === id)?.name || id : "" }
 function statusText(row: BatchBindingRow) { return row.status === "mapped" ? "映射已保存，待验证" : row.status === "ready" ? "可导入" : row.status === "blocked" ? "预检阻断" : "套用失败" }
 async function run(dryRun: boolean) {
+  if (csvError.value) { error.value = csvError.value; return }
   busy.value = dryRun ? "preview" : "apply"
   error.value = ""
   notice.value = ""
   try {
-    const result = await request<BatchAccessResponse>("/access/batch", "POST", { csv: csv.value, dry_run: dryRun })
+    const result = await request<BatchAccessResponse>("/access/batch/reviewed", "POST", { csv: csv.value, dry_run: dryRun, preview_version: dryRun ? undefined : previewVersion.value })
     rows.value = result.rows || []
-    if (dryRun) previewedCSV.value = csv.value
+    plans.value = result.plans || {}
+    if (dryRun) { previewedCSV.value = csv.value; previewVersion.value = result.preview_version || "" }
     else {
       previewedCSV.value = ""
-      notice.value = `已保存 ${result.applied} 台设备映射；未执行验证，请逐台完成 L1/L2`
+      previewVersion.value = ""
+      notice.value = `已保存 ${result.applied} 台设备映射；阻断 ${rows.value.filter(row => row.status === 'blocked').length} 台，失败 ${rows.value.filter(row => row.status === 'failed').length} 台；未执行验证，请逐台完成 L1/L2`
       for (const row of rows.value) if (row.status === "mapped" && row.device_id) checked.value.delete(row.device_id)
       checked.value = new Set(checked.value)
       emit("refresh")
+      await loadSaved()
     }
-  } catch (cause) { error.value = cause instanceof Error ? cause.message : "批量操作失败" } finally { busy.value = "" }
+  } catch (cause) {
+    previewVersion.value = ""
+    const code = cause instanceof Error ? cause.message : "批量操作失败"
+    const message = ({ batch_csv_too_large: "CSV 超过 256 KiB", batch_csv_too_many_rows: "每批最多 256 台，请拆分 CSV", batch_csv_field_too_large: "CSV 每个字段最多 256 字节", invalid_csv: "CSV 格式错误，每行须有四个字段", invalid_csv_header: "CSV 表头须包含设备、型号、通道、站号且不得重复" } as Record<string, string>)[code] || code
+    error.value = message === "batch_preview_changed" ? "Profile、映射、通道或可见范围已变化，请重新预检；本次未应用" : `${message}${dryRun ? '' : '；结果未确认，请刷新已保存结果后重新预检，勿当作整批成功'}`
+    if (!dryRun) await loadSaved()
+  } finally { busy.value = "" }
 }
 async function preview() { await run(true) }
 async function apply() { await run(false) }
+function bindingPath(device: LedgerDevice) { return `/modbus/${encodeURIComponent(device.channel_id)}/units/${device.server_id}` }
+async function loadSaved() {
+  savedError.value = ""
+  try {
+    const result = await request<{ devices: LedgerDevice[] }>("/device-ledger")
+    saved.value = await Promise.all((result.devices || []).filter(device => devices.value.some(item => item.id === device.business_node_id)).map(async device => {
+      try {
+        const history = await request<{ records: BatchVerificationRecord[] }>(`${bindingPath(device)}/verify`)
+        return { device, records: history.records || [], error: "" }
+      } catch (cause) { return { device, records: [], error: `验证记录读取失败：${cause instanceof Error ? cause.message : '未知错误'}` } }
+    }))
+  } catch (cause) {
+    saved.value = []
+    savedError.value = `保存结果读取失败：${cause instanceof Error ? cause.message : '未知错误'}`
+  }
+}
+async function refreshSaved() { busy.value = "reload"; try { await loadSaved() } finally { busy.value = "" } }
+async function verify(item: SavedBinding, level: "L1" | "L2") {
+  busy.value = `verify-${level}`
+  item.error = ""
+  try {
+    await request(`${bindingPath(item.device)}/verify`, "POST", { level })
+    const history = await request<{ records: BatchVerificationRecord[] }>(`${bindingPath(item.device)}/verify`)
+    item.records = history.records || []
+  } catch (cause) {
+    item.records = []
+    item.error = `${level} 结果未确认：${cause instanceof Error ? cause.message : '请求失败'}；请刷新记录，不代表验证通过`
+  } finally { busy.value = "" }
+}
+onMounted(refreshSaved)
 </script>
 
 <style scoped>

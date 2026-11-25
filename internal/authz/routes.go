@@ -221,6 +221,7 @@ var routeRequirements = []routeRequirement{
 	actionRoute(http.MethodDelete, "industry/packages/*", SiteSettings, "admin_required"),
 	authenticatedRoute(http.MethodGet, "templates"),
 	actionRoute(http.MethodPost, "access/batch", Configure, "admin_required"),
+	actionRoute(http.MethodPost, "access/batch/reviewed", Configure, "admin_required"),
 	actionRoute(http.MethodPost, "nodes/*/copy", Configure, "admin_required").pathTarget(1).bodyTargetError("parent", 400, "invalid_copy"),
 	authenticatedRoute(http.MethodGet, "modbus/*/units/*/verify").pathTarget(1),
 	authenticatedRoute(http.MethodPost, "modbus/*/units/*/verify").pathTarget(1),

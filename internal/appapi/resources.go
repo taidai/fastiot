@@ -457,29 +457,63 @@ func structuralCopyPoints(node data.NodeEdge) data.Points {
 	return points
 }
 
-func (h *Handler) batchAccess(w http.ResponseWriter, r *http.Request, identity Identity) {
-	var input struct {
-		CSV    string `json:"csv"`
-		DryRun bool   `json:"dry_run"`
+func (h *Handler) batchAccess(w http.ResponseWriter, r *http.Request, identity Identity, reviewed bool) {
+	if reviewed {
+		r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
 	}
-	if !decodeJSON(w, r, &input) || strings.TrimSpace(input.CSV) == "" {
+	var input struct {
+		CSV            string `json:"csv"`
+		DryRun         bool   `json:"dry_run"`
+		PreviewVersion string `json:"preview_version,omitempty"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if strings.TrimSpace(input.CSV) == "" {
 		writeError(w, http.StatusBadRequest, "empty_or_invalid_csv")
 		return
 	}
+	if reviewed {
+		if err := validateReviewedBatchCSV(input.CSV); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	// Preflight and version checks must cover the whole batch before the first write.
+	h.accessMu.Lock()
+	defer h.accessMu.Unlock()
 	inventory, err := h.batchInventory(identity)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "batch_inventory_unavailable")
 		return
+	}
+	if reviewed {
+		if err := h.markBatchBoundDevices(&inventory); err != nil {
+			writeError(w, http.StatusServiceUnavailable, "batch_inventory_unavailable")
+			return
+		}
 	}
 	rows, err := domainaccess.PreflightCSV(input.CSV, inventory)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	version := ""
+	var plans map[int]batchProfilePlan
+	if reviewed {
+		plans = h.reviewedBatchPlans(rows, inventory.Profiles)
+		version, err = h.batchPreviewVersion(input.CSV, identity, inventory)
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "batch_inventory_unavailable")
+			return
+		}
+		if !input.DryRun && input.PreviewVersion != version {
+			writeError(w, http.StatusConflict, "batch_preview_changed")
+			return
+		}
+	}
 	applied := 0
 	if !input.DryRun {
-		h.accessMu.Lock()
-		defer h.accessMu.Unlock()
 		for i := range rows {
 			if !rows[i].Valid {
 				continue
@@ -489,7 +523,7 @@ func (h *Handler) batchAccess(w http.ResponseWriter, r *http.Request, identity I
 			}
 		}
 	}
-	writeJSON(w, map[string]any{"dry_run": input.DryRun, "rows": rows, "applied": applied})
+	writeJSON(w, map[string]any{"dry_run": input.DryRun, "rows": rows, "applied": applied, "preview_version": version, "plans": plans})
 }
 
 func (h *Handler) batchInventory(identity Identity) (domainaccess.BatchInventory, error) {
