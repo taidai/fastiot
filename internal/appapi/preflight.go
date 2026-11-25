@@ -273,6 +273,21 @@ func (h *Handler) pointGate(nodes []data.NodeEdge, now time.Time) preflightGate 
 		}
 		total++
 		sample, ok := samples[node.ID]
+		if node.Type == calculationType || node.Type == virtualInputType {
+			// Derived inputs are not physical telemetry. Judge them by the same
+			// captured quality and observation evidence used by rule bindings.
+			sample, ok = preflightSample{}, false
+			if input := h.readBoundInput(decision.Target{NodeID: node.ID}, now); input != nil {
+				ok = true
+				if input.Quality == "good" {
+					sample.quality = signal.Good
+				}
+				sample.at = input.EvaluatedAt
+				if input.Time != nil {
+					sample.at = *input.Time
+				}
+			}
+		}
 		maxAge := h.ems.MaxAge
 		if age, found := criticalAge[node.ID]; found && age > 0 {
 			maxAge = age
