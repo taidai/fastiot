@@ -162,7 +162,8 @@ func (c *Client) Run() error {
 				c.setError(errorText(c.evaluate(active)))
 			}
 		case pts := <-c.newPoints:
-			if err := data.MergePoints(pts.ID, pts.Points, &c.config); err != nil {
+			updated := c.config
+			if err := data.MergePoints(pts.ID, pts.Points, &updated); err != nil {
 				log.Printf("decisionTable %s: %v", c.config.ID, err)
 				continue
 			}
@@ -177,6 +178,12 @@ func (c *Client) Run() error {
 					shouldRestart = true
 				}
 			}
+			// Finish the old execution with its old revision/scope before replacing
+			// configuration or clearing its last check.
+			if shouldRestart {
+				stopActive()
+			}
+			c.config = updated
 			if newVersion {
 				c.setLastMatch("")
 				c.lastCheckRow = ""
@@ -187,10 +194,13 @@ func (c *Client) Run() error {
 				restart()
 			}
 		case pts := <-c.newEdgePoints:
-			if err := data.MergeEdgePoints(pts.ID, pts.Parent, pts.Points, &c.config); err != nil {
+			updated := c.config
+			if err := data.MergeEdgePoints(pts.ID, pts.Parent, pts.Points, &updated); err != nil {
 				log.Printf("decisionTable %s: %v", c.config.ID, err)
 				continue
 			}
+			stopActive()
+			c.config = updated
 			restart()
 		case update := <-c.manualUpdates:
 			if active == nil || update.generation != active.generation {
@@ -798,20 +808,8 @@ func (c *Client) recordCheck(outcome rule.Outcome, now time.Time, active *active
 			}
 		}
 	}
-	text, err = marshalCheck(report)
-	if err != nil {
-		return err
-	}
-	if text == c.lastCheck {
-		return nil
-	}
-	point := data.NewPointString("lastCheck", "", text)
-	point.Origin = c.config.ID
-	if err := siotclient.SendNodePoint(c.nc, c.config.ID, point, true); err != nil {
-		return fmt.Errorf("record check: %w", err)
-	}
-	c.lastCheck = text
-	return nil
+	// Recovery is a projection of the prior execution, not new execution evidence.
+	return c.persistCheck(report, outcome.State != rule.StateAlreadyFired || active.sequence != nil)
 }
 
 // A primed engine does not re-run an interrupted sequence. Keep only its

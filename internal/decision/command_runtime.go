@@ -3,6 +3,7 @@ package decision
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	"fastiot/internal/ems/command"
@@ -74,6 +75,9 @@ func (c *Client) reserveExecution(row string, now time.Time) (string, error) {
 	if err = client.SendNodePoint(c.nc, c.config.ID, data.NewPointString("lastExecution", "", string(encoded)), true); err != nil {
 		return "", err
 	}
+	if err := c.recordExecutionFact(CheckReport{RuleID: c.config.ID, SourceRevision: c.documentRevision(), ExecutionID: id, At: now, Row: row, State: "reserved"}); err != nil {
+		return "", err
+	}
 	return id, nil
 }
 
@@ -96,17 +100,17 @@ func (c *Client) abandonSequence(active *activeTable) {
 	}
 	active.sequence.fail("unknown", "rule stopped before sequence completion; device commands retain canonical outcomes")
 	var report CheckReport
-	if json.Unmarshal([]byte(c.lastCheck), &report) == nil {
-		report.At, report.State = time.Now(), "unknown"
-		report.Actions = append([]CheckAction(nil), active.sequence.checks...)
-		for i := range report.Actions {
-			report.Actions[i].Target = active.bindings.Actions[report.Actions[i].Output]
-		}
-		if text, err := marshalCheck(report); err == nil {
-			point := data.NewPointString("lastCheck", "", text)
-			point.Origin = c.config.ID
-			_ = client.SendNodePoint(c.nc, c.config.ID, point, true)
-		}
+	_ = json.Unmarshal([]byte(c.lastCheck), &report)
+	if report.ExecutionID != active.sequence.executionID {
+		report = CheckReport{RuleID: c.config.ID, SourceRevision: c.documentRevision(), ExecutionID: active.sequence.executionID, Row: active.sequence.rowID}
+	}
+	report.At, report.State = time.Now(), "unknown"
+	report.Actions = append([]CheckAction(nil), active.sequence.checks...)
+	for i := range report.Actions {
+		report.Actions[i].Target = active.bindings.Actions[report.Actions[i].Output]
+	}
+	if err := c.persistCheck(report, true); err != nil {
+		log.Printf("decisionTable %s: persist abandoned execution: %v", c.config.ID, err)
 	}
 }
 

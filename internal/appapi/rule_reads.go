@@ -126,6 +126,12 @@ func (h *Handler) publicRuleNodes(identity Identity, nodes []data.NodeEdge) []da
 		if node.Type != "decisionTable" {
 			continue
 		}
+		out[i].EdgePoints = nil
+		for _, point := range node.EdgePoints {
+			if point.Type != decision.RuleExecutionFactPoint {
+				out[i].EdgePoints = append(out[i].EdgePoints, point)
+			}
+		}
 		access := ruleAccessView{}
 		documents := map[string]decision.Document{}
 		readable := map[string]bool{}
@@ -174,7 +180,7 @@ func (h *Handler) publicRuleNodes(identity Identity, nodes []data.NodeEdge) []da
 				continue
 			}
 			switch point.Type {
-			case ruleAuthorizationPoint, "ruleAccess":
+			case ruleAuthorizationPoint, "ruleAccess", decision.RuleExecutionFactPoint:
 				continue
 			case "draft", "applied", "history":
 				if point.Txt() != "" && !pointAllowed[point.Type+"/"+point.Key] {
