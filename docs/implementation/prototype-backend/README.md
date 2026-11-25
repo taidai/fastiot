@@ -20,14 +20,14 @@ The worktree starts at the current committed source plus only task-related pendi
 | 02 | [项目选择与三工作台上下文统一](02.md) | 01 | integrated — 8106978 |
 | 03 | [从模板建立并维护真实台账](03.md) | 02 | integrated — 3dceb63 |
 | 04 | [行业包依赖门禁](04.md) | 02 | integrated — 3ec9fdb |
-| 05 | [单设备 Profile 接入与只读验证](05.md) | 03 | verified staging — 01717ad; integration pending |
-| 06 | [批量接入与 CSV 逐台结果](06.md) | 05 | pending |
-| 07 | [操作抽屉与命令回读闭环](07.md) | 05 | pending |
+| 05 | [单设备 Profile 接入与只读验证](05.md) | 03 | integrated — b633be0; shared auth stability open |
+| 06 | [批量接入与 CSV 逐台结果](06.md) | 05 | queued — frontier open |
+| 07 | [操作抽屉与命令回读闭环](07.md) | 05 | queued — frontier open |
 | 08 | [L3 安全写回读验证](08.md) | 07 | pending |
 | 09 | [按层总览与可信实时数据](09.md) | 02 | integrated — b74d6e2 |
 | 10 | [历史查询、断线曲线与 CSV](10.md) | 02 | integrated — b399379 |
-| 11 | [告警生命周期与交接持久化](11.md) | 09, 10 | delivered — 942acda; integration pending |
-| 12 | [今日电量、运行时长与健康统计](12.md) | 09, 10 | delivered — 4886413; integration pending |
+| 11 | [告警生命周期与交接持久化](11.md) | 09, 10 | integrated — aac3628; shared auth stability open |
+| 12 | [今日电量、运行时长与健康统计](12.md) | 09, 10 | integrated — c273cbc; shared auth stability open |
 | 13 | [四段式规则与显式作用范围](13.md) | 07 | pending |
 | 14 | [状态机定义、模拟与受控执行](14.md) | 07 | pending |
 | 15 | [持续运行的聚合点](15.md) | 09, 10 | in progress — isolated worktree |
@@ -59,4 +59,6 @@ The worktree starts at the current committed source plus only task-related pendi
 - Next frontier: 11, 12, 15, 17; ticket 05 continues and will consume this stable baseline. Integrated count: 7/25.
 - The second verification window held integration at `b24728d`: 05 was independently staged and verified at `01717ad`; 11/12 delivered `942acda`/`4886413`. Ticket 17 checkpoint `a754d29` is not final and now explicitly awaits 11/12 for automatic bindings. Ticket 15 remains active.
 - Ticket 12 preserves observed whole-suite intermittent failures in `TestPumpHouseSampleCommandLifecycle` and `TestOfflineRestoreKeepsHistoryAlarmsAndAudit`; final isolated full rerun passed, but their instability is not claimed fixed. Runtime history remains process-memory bounded, so day metrics explicitly report partial/unavailable coverage after loss; only the statistical configuration is durable.
+- 05/11/12 merged at verified code `c273cbc` with evidence `2321817`: 129 frontend tests/types/build, first full Go repository run (37 test packages), three real-Go browsers, project races and scope smoke passed. First auth browser expiry timed out; one instrumented retest passed but did not explain the failure. See [conditional integration evidence](device-alarm-statistics-integration.md). Auth stability remains an explicit ticket25 final-acceptance blocker under independent diagnosis; integrated code count 10/25 is not a claim of fully green acceptance.
+- Frontier 06/07 is open; 17 resumes on the combined alarm/statistics baseline. Runtime output fields added by 15 must be stripped from package reuse; dailyStats definitions from12 must be reference-rewritten by20/21 rather than copied with old point identities.
 - Local baseline and per-ticket verification must be recorded before marking a ticket complete.
