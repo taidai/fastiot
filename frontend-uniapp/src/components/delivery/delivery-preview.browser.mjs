@@ -71,6 +71,7 @@ try {
   assert.equal(await page.locator(".deploy-table tbody tr").count(), 2)
   assert.match(await page.locator(".deploy-table").innerText(), /教学泵房（本站）[\s\S]*运行中/)
   await page.locator("uni-button").filter({ hasText: "账号与权限" }).click()
+  await page.locator(".account-table tbody tr").first().waitFor()
   assert.equal(await page.locator(".account-table tbody tr").count(), 3)
   assert.match(await page.locator(".stage").innerText(), /张工[\s\S]*李工[\s\S]*王管理员/)
   await page.getByText("以李工身份检查", { exact: true }).click()

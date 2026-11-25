@@ -30,9 +30,9 @@ The worktree starts at the current committed source plus only task-related pendi
 | 12 | [今日电量、运行时长与健康统计](12.md) | 09, 10 | integrated — c273cbc; shared auth stability open |
 | 13 | [四段式规则与显式作用范围](13.md) | 07 | pending |
 | 14 | [状态机定义、模拟与受控执行](14.md) | 07 | pending |
-| 15 | [持续运行的聚合点](15.md) | 09, 10 | delivered — 1cf9f73; integration pending |
+| 15 | [持续运行的聚合点](15.md) | 09, 10 | integrated — 8d927ab |
 | 16 | [今日执行统一查询](16.md) | 13, 14 | pending |
-| 17 | [配界面保存到客户总览](17.md) | 09, 11, 12 (active-alarm and statistics bindings) | delivered — 95d7397; integration pending |
+| 17 | [配界面保存到客户总览](17.md) | 09, 11, 12 (active-alarm and statistics bindings) | code integrated — 1868cc3; reopened preview regression |
 | 18 | [派生输入与已配置画面的联动验收](18.md) | 13, 14, 15, 17 | pending |
 | 19 | [账号、对象范围与只读权限演练](19.md) | 02 | integrated — de84402 |
 | 20 | [真实预检、不可变发布与包导出](20.md) | 06, 13, 14, 17 | pending |
@@ -63,4 +63,7 @@ The worktree starts at the current committed source plus only task-related pendi
 - Frontier 06/07 is open; 17 resumes on the combined alarm/statistics baseline. Runtime output fields added by 15 must be stripped from package reuse; dailyStats definitions from12 must be reference-rewritten by20/21 rather than copied with old point identities.
 - Auth diagnosis confirmed synchronous logout/context reset re-entry: real modules produced generation delta232 and stack overflow; a browser probe showed3→315. The original one-off DOM timeout cannot be retrospectively assigned this cause with certainty. Isolated fix is underway in `fix/prototype-auth-reentry`; no timeout/acceptance relaxation is authorized.
 - Tickets15/17 delivered `1cf9f73`/`95d7397`, queued for combined aggregate/history/screen verification. 15 retains explicit sampling/adapter limits and prior allocator-flake evidence;17 reuses11/12 rather than inventing alarm or statistic results.
+- 15/17 code merged (`8d927ab`/`1868cc3`), evidence `6c53b2e`: full Go37 packages, frontend130, real screen/access/alarm/daily passed. Original design-preview exposed missing prototype trend/today content;17 reopened. Independent delivery row-count failed once; workspace harness could not import its hardcoded React-side Playwright. These were retained in [batch evidence](aggregate-screen-integration.md), not erased.
+- Auth fix `0ffd389` merged at `6c2b598`: credential/context publication ordering and unauthenticated-read rejection, retaining Handover synchronous invalidation. Integrated frontend133/type/build passed. Complete auth/preview matrix waits for17 preview repair; original uninstrumented expiry-timeout causality remains unproven.
+- Parent reproduced workspace module-resolution failure, then used the uniapp-owned dependency and explicit preview query. Workspace and delivery isolated browser tests passed with zero live API requests. Delivery original retest also passed before editing; its test now waits for the asynchronously loaded table before the unchanged exact-three count, rather than asserting during loading. This readiness fix does not retrospectively prove the first failure's cause.
 - Local baseline and per-ticket verification must be recorded before marking a ticket complete.

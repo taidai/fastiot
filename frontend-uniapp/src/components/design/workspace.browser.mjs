@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
-import { chromium } from '../../../../frontend/node_modules/playwright-core/index.mjs'
-const base = process.env.PREVIEW_ORIGIN || 'http://127.0.0.1:5174/uniapp/'
+import { chromium } from 'playwright-core'
+const previewOrigin = new URL(process.env.PREVIEW_ORIGIN || 'http://127.0.0.1:5174/uniapp/')
+previewOrigin.hash = ''
+previewOrigin.searchParams.set('preview', '1')
+const base = previewOrigin.href
 const browser = await chromium.launch({ channel: 'msedge', headless: true })
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
