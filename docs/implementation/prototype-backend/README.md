@@ -16,7 +16,7 @@ The worktree starts at the current committed source plus only task-related pendi
 
 | Ticket | Deliverable | Blocked by | Status |
 |---|---|---|---|
-| 01 | [真实登录与预览隔离](01.md) | None (can start immediately) | pending |
+| 01 | [真实登录与预览隔离](01.md) | None (can start immediately) | in progress — isolated worktree |
 | 02 | [项目选择与三工作台上下文统一](02.md) | 01 | pending |
 | 03 | [从模板建立并维护真实台账](03.md) | 02 | pending |
 | 04 | [行业包依赖门禁](04.md) | 02 | pending |
@@ -44,5 +44,7 @@ The worktree starts at the current committed source plus only task-related pendi
 
 ## Execution log
 
+- Baseline checkpoint: `55b40dc`; 110 frontend tests and type-check passed. Go authz, decision, appapi and domain/access suites passed from an isolated Docker named volume (appapi 106.5s).
+- Ticket 01 runs on `refs/heads/ticket/prototype-backend-01`, explicitly based on the integration checkpoint. The automatic agent worktree initially chose a different base; that mismatch was detected before editing and replaced with the correctly based worktree.
 - Frontier starts at 01; 02 follows. Independent branches open after 02 passes integration.
 - Local baseline and per-ticket verification must be recorded before marking a ticket complete.
