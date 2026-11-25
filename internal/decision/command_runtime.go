@@ -32,6 +32,7 @@ type RuleCommand struct {
 // Legacy standalone clients keep their old transport; the application always
 // constructs its clients with this boundary and never falls back from it.
 type RuleCommands struct {
+	ReadInput        func(Target, time.Time) *InputObservation
 	Notify           func(RuleCommand) (notification.Created, error)
 	Validate         func(string, Document) error
 	Submit           func(RuleCommand) (command.Outcome, error)
@@ -44,6 +45,22 @@ func NewDecisionTableClientWithCommands(nc *nats.Conn, config DecisionTable, obs
 	c := NewDecisionTableClientWithObservations(nc, config, observations).(*Client)
 	c.commands = &commands
 	return c
+}
+
+func (c *Client) readInput(target Target) *InputObservation {
+	if c.commands != nil && c.commands.ReadInput != nil {
+		return c.commands.ReadInput(target, time.Now())
+	}
+	return nil
+}
+
+func (c *Client) validateInput(target Target) error {
+	// The production document validator checks declared use and business scope.
+	// Never call this input-only adapter from readback/output validation.
+	if c.readInput(target) != nil {
+		return nil
+	}
+	return c.validateTarget(target, false, nil)
 }
 
 func (c *Client) validateTarget(target Target, output bool, value *float64) error {

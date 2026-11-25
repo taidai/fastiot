@@ -5,6 +5,7 @@
 package historyquery
 
 import (
+	"encoding/json"
 	"errors"
 	"sort"
 	"time"
@@ -106,6 +107,7 @@ type Request struct {
 
 // Node is the resolved product node a history request reads.
 type Node struct {
+	Derived   bool
 	Aggregate bool
 	ID        string
 	Type      string
@@ -233,7 +235,16 @@ func (q *Query) Execute(req Request) ([]PointResult, int, error) {
 // aggregated result.
 func (q *Query) read(node Node, typ, key string, start, end time.Time, aggregate time.Duration) (readResult, error) {
 	out := readResult{source: SourceSIOT, records: []Record{}, aggregation: "raw", retention: Retention{Kind: "unknown"}}
-	if node.Aggregate {
+	if node.Derived {
+		if typ != data.PointTypeValue || (key != "" && key != "0") {
+			return out, ErrNotSupported
+		}
+		var err error
+		out, err = q.readDerived(node, start, end)
+		if err != nil {
+			return out, err
+		}
+	} else if node.Aggregate {
 		if typ != AggregateValuePoint || (key != "" && key != "0") {
 			return out, ErrNotSupported
 		}
@@ -267,7 +278,7 @@ func (q *Query) read(node Node, typ, key string, start, end time.Time, aggregate
 			runtimePoint = false
 		}
 	}
-	if !runtimePoint && !node.Aggregate {
+	if !runtimePoint && !node.Aggregate && !node.Derived {
 		if q.SIOT == nil {
 			return out, ErrUnavailable
 		}
@@ -371,14 +382,20 @@ func aggregateRecords(records []Record, aggregate time.Duration, nodeID, deviceI
 	var late bool
 	count := 0
 	quality, unit, timeSource := "", "", ""
+	var evidence []json.RawMessage
 	flush := func() {
 		if count == 0 {
 			return
 		}
 		value := sum / float64(count)
+		text := ""
+		if len(evidence) > 0 {
+			encoded, _ := json.Marshal(map[string]any{"observations": evidence})
+			text = string(encoded)
+		}
 		buckets = append(buckets, Record{
 			PointID: nodeID, DeviceID: deviceID, SourceTime: bucketStart, BucketEnd: bucketStart.Add(aggregate),
-			Quality: quality, Value: &value, Source: source, Unit: unit, TimeSource: timeSource,
+			Quality: quality, Value: &value, Text: text, Source: source, Unit: unit, TimeSource: timeSource,
 			SampleCount: count, Aggregate: aggregate.String(), Kind: history.KindObservation, Late: late,
 		})
 	}
@@ -403,6 +420,7 @@ func aggregateRecords(records []Record, aggregate time.Duration, nodeID, deviceI
 			sum = 0
 		}
 		if count == 0 {
+			evidence = nil
 			late = false
 			bucketStart = at
 			quality = record.Quality
@@ -415,6 +433,9 @@ func aggregateRecords(records []Record, aggregate time.Duration, nodeID, deviceI
 			if timeSource != record.TimeSource {
 				timeSource = ""
 			}
+		}
+		if (source == "derived_runtime" || source == "aggregate_runtime") && json.Valid([]byte(record.Text)) {
+			evidence = append(evidence, json.RawMessage(record.Text))
 		}
 		late = late || record.Late
 		sum += *record.Value

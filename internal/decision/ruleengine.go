@@ -139,14 +139,15 @@ func (l targetLimiter) Limit(now time.Time, output string, requested signal.Valu
 
 // CheckInput and CheckAction describe one evaluation for the lastCheck point.
 type CheckInput struct {
-	Target       Target    `json:"target,omitempty"`
-	ReceivedTime time.Time `json:"received_time"`
-	Input        string    `json:"input"`
-	Value        float64   `json:"value"`
-	Text         string    `json:"text,omitempty"`
-	Kind         string    `json:"kind,omitempty"`
-	Quality      string    `json:"quality"`
-	SourceTime   time.Time `json:"source_time"`
+	Observation  *InputObservation `json:"observation,omitempty"`
+	Target       Target            `json:"target,omitempty"`
+	ReceivedTime time.Time         `json:"received_time"`
+	Input        string            `json:"input"`
+	Value        float64           `json:"value"`
+	Text         string            `json:"text,omitempty"`
+	Kind         string            `json:"kind,omitempty"`
+	Quality      string            `json:"quality"`
+	SourceTime   time.Time         `json:"source_time"`
 }
 
 type CheckAction struct {

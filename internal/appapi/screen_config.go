@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"fastiot/internal/decision"
 	domainaccess "fastiot/internal/domain/access"
 
 	"github.com/simpleiot/simpleiot/client"
@@ -262,6 +263,13 @@ func (h *Handler) screenBindingReferenceAllowed(identity Identity, layer, id str
 	nodes, err := client.GetNodes(h.nc, "all", id, "", false)
 	if err != nil || len(nodes) == 0 {
 		return false
+	}
+	if nodes[0].Type == virtualInputType || nodes[0].Type == calculationType {
+		target := decision.Target{NodeID: id, Use: "decision"}
+		return h.screenReferenceInLayer(identity, layer, id) && h.inputVisible(identity, target) && h.validateInputBinding(nodes[0], target) == nil
+	}
+	if config, ok := h.loadAggregate(id); ok {
+		return h.screenReferenceInLayer(identity, layer, id) && h.aggregateVisible(identity, h.aggregateSnapshot(config))
 	}
 	if nodes[0].Type != "variable" && nodes[0].Type != data.NodeTypeModbusIO && nodes[0].Type != calculationType {
 		return false

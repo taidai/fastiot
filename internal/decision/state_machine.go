@@ -95,18 +95,19 @@ type StateMachineCommand struct {
 }
 
 type StateMachineExecution struct {
-	RequestID    string                `json:"request_id,omitempty"`
-	Version      uint64                `json:"version"`
-	Trace        []StateMachineTrace   `json:"trace,omitempty"`
-	Commands     []StateMachineCommand `json:"commands,omitempty"`
-	At           time.Time             `json:"at"`
-	Event        string                `json:"event"`
-	Status       string                `json:"status"` // confirmed, failed, unknown or held
-	TransitionID string                `json:"transition_id,omitempty"`
-	From         string                `json:"from"`
-	To           string                `json:"to"`
-	Reason       string                `json:"reason,omitempty"`
-	Actions      []CheckAction         `json:"actions,omitempty"`
+	InputObservations map[string]InputObservation `json:"input_observations,omitempty"`
+	RequestID         string                      `json:"request_id,omitempty"`
+	Version           uint64                      `json:"version"`
+	Trace             []StateMachineTrace         `json:"trace,omitempty"`
+	Commands          []StateMachineCommand       `json:"commands,omitempty"`
+	At                time.Time                   `json:"at"`
+	Event             string                      `json:"event"`
+	Status            string                      `json:"status"` // confirmed, failed, unknown or held
+	TransitionID      string                      `json:"transition_id,omitempty"`
+	From              string                      `json:"from"`
+	To                string                      `json:"to"`
+	Reason            string                      `json:"reason,omitempty"`
+	Actions           []CheckAction               `json:"actions,omitempty"`
 }
 
 type StateMachineDocument struct {

@@ -51,6 +51,7 @@ type BindingSet struct {
 // Target connects a stable business ID to a Simple IoT point. Changing a
 // device brand changes this binding, not the decision table or its IDs.
 type Target struct {
+	Use       string `json:"use,omitempty"`
 	CommandID string `json:"command_id,omitempty"`
 	Parameter string `json:"parameter,omitempty"`
 	NodeID    string `json:"node_id"`
@@ -72,22 +73,23 @@ type manualUpdate struct {
 }
 
 type activeTable struct {
-	generation  uint64
-	table       Table
-	bindings    BindingSet
-	values      map[string]signal.Sample
-	loaded      map[string]bool
-	manual      map[string]bool
-	engine      *rule.Engine
-	allocations map[string]*allocationRun
-	sequence    *actionSequence
-	pending     []string
-	rampRates   map[string]float64
-	rampTargets map[string]float64
-	rampValues  map[string]float64
-	rampAt      map[string]time.Time
-	safety      map[string]safety.Output
-	stops       []func()
+	generation    uint64
+	table         Table
+	bindings      BindingSet
+	values        map[string]signal.Sample
+	inputEvidence map[string]*InputObservation
+	loaded        map[string]bool
+	manual        map[string]bool
+	engine        *rule.Engine
+	allocations   map[string]*allocationRun
+	sequence      *actionSequence
+	pending       []string
+	rampRates     map[string]float64
+	rampTargets   map[string]float64
+	rampValues    map[string]float64
+	rampAt        map[string]time.Time
+	safety        map[string]safety.Output
+	stops         []func()
 }
 
 type Client struct {
@@ -275,18 +277,19 @@ func (c *Client) start() (*activeTable, error) {
 
 	c.generation++
 	active := &activeTable{
-		generation:  c.generation,
-		table:       table,
-		bindings:    bindings,
-		values:      make(map[string]signal.Sample),
-		loaded:      make(map[string]bool),
-		manual:      make(map[string]bool),
-		allocations: make(map[string]*allocationRun),
-		rampRates:   make(map[string]float64),
-		rampTargets: make(map[string]float64),
-		rampValues:  make(map[string]float64),
-		rampAt:      make(map[string]time.Time),
-		safety:      make(map[string]safety.Output),
+		generation:    c.generation,
+		table:         table,
+		bindings:      bindings,
+		values:        make(map[string]signal.Sample),
+		inputEvidence: make(map[string]*InputObservation),
+		loaded:        make(map[string]bool),
+		manual:        make(map[string]bool),
+		allocations:   make(map[string]*allocationRun),
+		rampRates:     make(map[string]float64),
+		rampTargets:   make(map[string]float64),
+		rampValues:    make(map[string]float64),
+		rampAt:        make(map[string]time.Time),
+		safety:        make(map[string]safety.Output),
 	}
 	fail := func(err error) (*activeTable, error) {
 		for _, stop := range active.stops {
@@ -349,7 +352,7 @@ func (c *Client) start() (*activeTable, error) {
 		}
 		for _, condition := range config.Conditions {
 			pointTarget := Target{NodeID: condition.PointID, PointType: data.PointTypeValue}
-			if err := c.validateTarget(pointTarget, false, nil); err != nil {
+			if err := c.validateInput(pointTarget); err != nil {
 				return fail(fmt.Errorf("action %s safety point %s: %w", actionID, condition.PointID, err))
 			}
 			requiredPoints[condition.PointID] = pointTarget
@@ -388,8 +391,14 @@ func (c *Client) start() (*activeTable, error) {
 		if target.NodeID == "" {
 			return fail(fmt.Errorf("point %s: missing node_id", pointID))
 		}
-		if err := c.validateTarget(target, false, nil); err != nil {
+		if err := c.validateInput(target); err != nil {
 			return fail(fmt.Errorf("point %s: %w", pointID, err))
+		}
+		if input := c.readInput(target); input != nil {
+			active.values[pointID] = input.Sample(pointID)
+			active.inputEvidence[pointID] = input
+			active.loaded[pointID] = true
+			continue // The authoritative adapter is refreshed at every evaluation.
 		}
 		if target.PointType == "" {
 			target.PointType = data.PointTypeValue
@@ -775,6 +784,7 @@ func (c *Client) recordCheck(outcome rule.Outcome, now time.Time, active *active
 	report.RuleID = c.config.ID
 	for i := range report.Inputs {
 		report.Inputs[i].Target = active.bindings.Points[report.Inputs[i].Input]
+		report.Inputs[i].Observation = active.inputEvidence[report.Inputs[i].Input]
 	}
 	report.SourceRevision = c.documentRevision()
 	if active.sequence != nil {
@@ -875,6 +885,14 @@ func (c *Client) markStale(active *activeTable) []string {
 		observed = c.observations(time.Now())
 	}
 	for pointID, target := range active.bindings.Points {
+		if input := c.readInput(target); input != nil {
+			active.inputEvidence[pointID] = input
+			active.values[pointID] = input.Sample(pointID)
+			if input.Quality != "good" {
+				reasons = append(reasons, "point "+pointID+": "+input.Quality+" "+input.Reason)
+			}
+			continue
+		}
 		if observed != nil {
 			nodes, err := siotclient.GetNodes(c.nc, "all", target.NodeID, "", false)
 			physical := err == nil && len(nodes) > 0 && (nodes[0].Type == data.NodeTypeModbusIO || nodes[0].Type == "opcuaPoint" || nodes[0].Type == "mqttSub")

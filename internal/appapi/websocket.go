@@ -39,7 +39,7 @@ func (h *Handler) serveWS(w http.ResponseWriter, r *http.Request, identity Ident
 		}
 		nodes, err := h.visibleNodes(identity)
 		if err == nil {
-			if err := conn.WriteJSON(map[string]any{"nodes": data.RedactNodes(h.publicRuleNodes(identity, publicInputNodes(nodes))), "at": time.Now().UTC()}); err != nil {
+			if err := conn.WriteJSON(map[string]any{"nodes": data.RedactNodes(h.publicRuleNodes(identity, h.publicInputNodes(identity, publicInputNodes(nodes)))), "at": time.Now().UTC()}); err != nil {
 				return // 客户端断开
 			}
 		}

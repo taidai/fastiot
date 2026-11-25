@@ -70,6 +70,9 @@ func (h *Handler) RunCalculations(ctx context.Context) error {
 			continue
 		}
 		delay, err := h.runCalculationBatch()
+		if err == nil {
+			err = h.persistDerivedInputs()
+		}
 		if err != nil {
 			snapshot := h.CalculationRuntime().Snapshot()
 			ids := []string{}

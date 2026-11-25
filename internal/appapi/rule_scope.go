@@ -30,7 +30,11 @@ func (h *Handler) ruleTargetAllowed(identity Identity, parent, scope string, tar
 	if node.Type != data.NodeTypeVariable && target.Key != "" && target.Key != "0" {
 		return false
 	}
-	if decision.ValidateTarget(h.nc, node.Parent, target, output, nil) != nil {
+	if output {
+		if decision.ValidateTarget(h.nc, node.Parent, target, true, nil) != nil {
+			return false
+		}
+	} else if h.validateInputBinding(node, target) != nil {
 		return false
 	}
 	owner := node.ID
@@ -98,7 +102,7 @@ func (h *Handler) ruleReferencesAllowed(identity Identity, parent string, docume
 		return h.ruleTargetAllowed(identity, parent, document.Scope, target, output)
 	}
 	for _, target := range document.Bindings.Points {
-		if !check(target, false) {
+		if !h.inputVisible(identity, target) || !check(target, false) {
 			return false
 		}
 	}
@@ -112,8 +116,12 @@ func (h *Handler) ruleReferencesAllowed(identity Identity, parent string, docume
 			if action.Notification != nil && h.ValidateNotificationRecipients(parent, action.Notification.RecipientIDs) != nil {
 				return false
 			}
-			if action.Readback != nil && action.Readback.Target.NodeID != "" && !check(action.Readback.Target, false) {
-				return false
+			if action.Readback != nil && action.Readback.Target.NodeID != "" {
+				readback := action.Readback.Target
+				readback.Use = "readback" // Consumer context cannot be overridden by the request.
+				if !check(readback, false) {
+					return false
+				}
 			}
 		}
 	}

@@ -15,7 +15,7 @@ func (h *Handler) machineDefinitionVisible(identity Identity, definition decisio
 	}
 	visible := func(id string) bool { return id == "" || h.allows(identity, id) }
 	for _, target := range definition.Bindings.Points {
-		if !visible(target.NodeID) {
+		if !h.inputVisible(identity, target) {
 			return false
 		}
 	}
@@ -42,6 +42,11 @@ func (h *Handler) machineDefinitionVisible(identity Identity, definition decisio
 func (h *Handler) machineExecutionVisible(identity Identity, execution *decision.StateMachineExecution, document decision.StateMachineDocument, runs []stateMachineRun) bool {
 	if execution == nil {
 		return true
+	}
+	for _, input := range execution.InputObservations {
+		if !h.inputEvidenceVisible(identity, input) {
+			return false
+		}
 	}
 	sourceKnown := false
 	for _, run := range runs {

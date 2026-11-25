@@ -815,7 +815,7 @@ func (h *Handler) snapshot(w http.ResponseWriter, identity Identity) {
 		return
 	}
 	writeJSON(w, map[string]any{
-		"user": identity, "roots": identity.Anchors, "nodes": data.RedactNodes(h.publicRuleNodes(identity, publicInputNodes(markSiteRoot(nodes)))),
+		"user": identity, "roots": identity.Anchors, "nodes": data.RedactNodes(h.publicRuleNodes(identity, h.publicInputNodes(identity, publicInputNodes(markSiteRoot(nodes))))),
 		"industry":                h.projectIndustry(required),
 		"session_timeout_seconds": int(h.sessionTimeout / time.Second),
 	})

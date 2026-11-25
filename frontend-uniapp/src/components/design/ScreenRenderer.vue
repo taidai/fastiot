@@ -41,6 +41,7 @@
 </template>
 
 <script setup lang="ts">
+import { isDerivedInput } from './strategy'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { PREVIEW_MODE } from '../../api/source'
 import { SCREEN_PREVIEW_RUNS, SCREEN_PREVIEW_TREND_BARS } from '../../pages/overview/preview-data'
@@ -81,7 +82,8 @@ const devices = computed(() => boundDevicesForLayer(props.layerId, nodes.value, 
 const deviceIds = computed(() => new Set(devices.value.map(deviceKey)))
 const knownIds = computed(() => new Set(props.ledger.map(deviceKey)))
 const scopedValues = computed(() => props.values.filter(value => props.deviceId ? value.device_id === props.deviceId : valueInLayer(value, scopeNodes.value, deviceIds.value, knownIds.value)))
-const availablePoints = computed(() => new Set([...devicePointIds(nodes.value, devices.value), ...nodes.value.filter(node => scopeNodes.value.has(node.id) && ['variable', 'calculationPoint'].includes(node.type)).map(node => node.id)]))
+const bindingScopeNodes = computed(() => props.document.inherited_from ? descendantNodeIds(props.document.inherited_from, nodes.value) : scopeNodes.value)
+const availablePoints = computed(() => new Set([...devicePointIds(nodes.value, devices.value), ...nodes.value.filter(node => bindingScopeNodes.value.has(node.id) && (node.type === 'variable' || isDerivedInput(node))).map(node => node.id)]))
 const children = computed(() => nodes.value.filter(node => node.parent === props.layerId && isBusinessLayer(node) && (kindLabel(node) !== '设备' || devices.value.some(device => device.business_node_id === node.id))))
 const layerAlarms = computed(() => props.alarms.filter(alarm => alarm.active && alarmInLayer(alarm, scopeNodes.value, deviceIds.value)))
 const qualityDevices = computed(() => props.quality.devices as QualityStats[])

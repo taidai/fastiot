@@ -91,6 +91,8 @@
                         <option v-if="condition.point_id && !availableIds.includes(condition.point_id)" :value="condition.point_id">{{ displayName(condition.point_id) }}（当前未接入）</option>
                         <option v-for="node in available" :key="node.id" :value="businessId(node)">{{ nameOf(node) }}</option>
                       </select>
+                      <select v-if="document.bindings.points[condition.point_id]" aria-label="输入用途" :value="document.bindings.points[condition.point_id].use || 'decision'" @change="document.bindings.points[condition.point_id].use = inputValue($event) as 'decision' | 'protection' | 'interlock'; changed()"><option value="decision">普通决策</option><option value="protection">保护</option><option value="interlock">联锁</option></select>
+                      <span v-if="document.bindings.points[condition.point_id]" class="muted">{{ metricForPoint(document.bindings.points[condition.point_id].node_id, snapshot, values).quality }}</span>
                       <select aria-label="比较逻辑" :value="condition.operator" @change="condition.operator = inputValue($event); changed()">
                         <option v-for="operator in operatorsFor(condition.kind)" :key="operator.value" :value="operator.value">{{ operator.label }}</option>
                       </select>
@@ -230,10 +232,12 @@ import { notificationRecipients } from "../../api/notifications"
 import { request } from "../../api/client"
 import StateMachinePanel from "./StateMachinePanel.vue"
 import AggregationPanel from "./AggregationPanel.vue"
+import { metricForPoint } from '../../pages/overview/overview'
 import { nameOf, point } from "../../types/api"
 import { kindLabel } from "./design"
 import type { Node, Snapshot, StateValue } from "../../types/api"
 import {
+  isDerivedInput,
   businessId,
   getRuleAccess,
   rulesForNode,
@@ -283,7 +287,7 @@ const simAt = ref("")
 const weekdayOptions = [{ label: "一", bit: 1 }, { label: "二", bit: 2 }, { label: "三", bit: 3 }, { label: "四", bit: 4 }, { label: "五", bit: 5 }, { label: "六", bit: 6 }, { label: "日", bit: 0 }]
 
 const nodes = computed(() => props.snapshot?.nodes || [])
-const available = computed(() => nodes.value.filter(node => node.type === "variable" || node.type === "modbusIo"))
+const available = computed(() => nodes.value.filter(node => node.type === "variable" || node.type === "modbusIo" || isDerivedInput(node)))
 const availableIds = computed(() => available.value.map(businessId))
 const outputs = computed(() => [
   ...available.value.filter(node => isWritable(node) && !isRamped(node)),
@@ -530,7 +534,7 @@ function inputKind(id: string): Condition["kind"] {
 function resetLiveInputs() { useLiveInputs() }
 function useLiveInputs() {
   result.value = null
-  const values = liveSimulationInputs(currentDocument(), props.values)
+  const values = liveSimulationInputs(currentDocument(), props.values, nodes.value)
   inputs.value = values.inputs
   textInputs.value = values.textInputs
 }
