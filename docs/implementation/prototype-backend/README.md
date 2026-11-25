@@ -47,5 +47,6 @@ The worktree starts at the current committed source plus only task-related pendi
 - Baseline checkpoint: `55b40dc`; 110 frontend tests and type-check passed. Go authz, decision, appapi and domain/access suites passed from an isolated Docker named volume (appapi 106.5s).
 - Ticket 01 runs on `refs/heads/ticket/prototype-backend-01`, explicitly based on the integration checkpoint. The automatic agent worktree initially chose a different base; that mismatch was detected before editing and replaced with the correctly based worktree.
 - Ticket 01 integrated by fast-forward at `3374d57`. Merger independently passed lockfile install, type-check, six authentication tests and diff whitespace checks; broader browser/Go evidence is in ticket 01, not rerun by merger.
+- Parent independently reran `test:auth:browser` on the integrated branch: production build, default live routing, real keyboard login, 403/500/offline without fallback, bearer session, 401 poll cancellation, explicit preview, token isolation and three preview workbench suites passed. This browser boundary used an isolated HTTP simulator, not a full Go stack; physical writes were zero.
 - Frontier is now 02. Tickets 03, 04, 09, 10 and 19 can run in parallel after 02 passes integration.
 - Local baseline and per-ticket verification must be recorded before marking a ticket complete.
