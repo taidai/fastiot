@@ -23,7 +23,7 @@ func conditionValue(condition Condition) signal.Value {
 }
 
 func ruleConditions(row Row) []rule.Condition {
-	if row.Match == "any" && len(row.Conditions) > 0 {
+	if (row.Match == "any" || row.hasJoins()) && len(row.Conditions) > 0 {
 		points, windows := false, false
 		for _, condition := range row.Conditions {
 			if condition.Kind == "time" {
@@ -81,13 +81,37 @@ func conditionMatches(condition Condition, samples map[string]signal.Sample, now
 	return true, ""
 }
 
-// conditionGroupSamples reduces each OR group to one synthetic boolean. The
+func conditionGroupValues(row Row, samples map[string]signal.Sample, now time.Time) map[string]bool {
+	groups := map[string]bool{}
+	for index, condition := range row.Conditions {
+		input, join := conditionGroupInput(row.ID), row.joinAt(index)
+		if condition.Kind == "time" {
+			input = timeWindowInput(row.ID)
+			join = "AND"
+			if row.Match == "any" {
+				join = "OR"
+			}
+		}
+		matched, _ := conditionMatches(condition, samples, now)
+		previous, found := groups[input]
+		if !found {
+			groups[input] = matched
+		} else if join == "OR" {
+			groups[input] = previous || matched
+		} else {
+			groups[input] = previous && matched
+		}
+	}
+	return groups
+}
+
+// conditionGroupSamples reduces each non-nested point group to one synthetic boolean. The
 // existing rule engine then owns hold/cooldown for the original row ID, rather
 // than splitting an OR row into branches with independent timers.
 func conditionGroupSamples(table Table, now time.Time, samples map[string]signal.Sample) map[string]signal.Sample {
 	result := samples
 	for _, row := range table.Rows {
-		if row.Match != "any" || len(row.Conditions) == 0 {
+		if (row.Match != "any" && !row.hasJoins()) || len(row.Conditions) == 0 {
 			continue
 		}
 		if len(result) == len(samples) {
@@ -96,15 +120,7 @@ func conditionGroupSamples(table Table, now time.Time, samples map[string]signal
 				result[id] = sample
 			}
 		}
-		groups := map[string]bool{}
-		for _, condition := range row.Conditions {
-			input := conditionGroupInput(row.ID)
-			if condition.Kind == "time" {
-				input = timeWindowInput(row.ID)
-			}
-			ok, _ := conditionMatches(condition, samples, now)
-			groups[input] = groups[input] || ok
-		}
+		groups := conditionGroupValues(row, samples, now)
 		// The point OR group and the time-window clause are separate constraints.
 		// Multiple OR windows remain a union, but cannot replace point conditions.
 		for input, matched := range groups {

@@ -122,6 +122,11 @@ function operatorLabel(op: string) {
   return operatorNames.get(op) || op
 }
 
+function conditionJoinText(row: Row, index: number) {
+  if (row.conditions[index].kind === 'time' || !row.conditions.slice(0,index).some(condition => condition.kind !== 'time')) return ''
+  return (row.conditions[index].join || (row.match === 'any' ? 'OR' : 'AND')) + ' '
+}
+
 function conditionValueText(condition: Condition) {
   if (condition.kind === "enum") return condition.text || "—"
   if (condition.kind === "bool") return condition.value ? "是" : "否"
@@ -208,18 +213,32 @@ function bindingsFor(nodes: Node[], existing?: Document["bindings"]): Document["
   return { points, actions }
 }
 
-function initialDocument(rule: Node, nodes: Node[]): Document {
-  let document: Document = { table: { rows: [] }, bindings: bindingsFor(nodes) }
+function storedDocument(rule: Node): Document {
   try {
     const draft = point(rule, "draft")?.text
-    if (draft) document = JSON.parse(draft)
-  } catch {
-    // The server reports malformed persisted documents; the editor starts empty.
-  }
-  document.bindings = bindingsFor(nodes, document.bindings)
-  document.table ||= { rows: [] }
-  document.table.rows ||= []
-  return document
+    if (draft) return JSON.parse(draft)
+  } catch { /* Malformed persisted definitions are reported by the server. */ }
+  return { table: { rows: [] }, bindings: { points: {}, actions: {} } }
+}
+
+function editableDocument(document: Document, nodes: Node[]): Document {
+  return { ...document, bindings: bindingsFor(nodes, document.bindings), table: {
+    rows: (document.table?.rows || []).map(row => ({ ...row, conditions: row.conditions || [], actions: row.actions || [] })),
+  } }
+}
+
+function initialDocument(rule: Node, nodes: Node[]): Document {
+  return editableDocument(storedDocument(rule), nodes)
+}
+
+function requestDocument(document: Document, nodes: Node[]): Document {
+  const bindings = bindingsFor(nodes, document.bindings)
+  const points = new Set(document.table.rows.flatMap(row => row.conditions.filter(condition => condition.kind !== "time").map(condition => condition.point_id)))
+  const actions = new Set(document.table.rows.flatMap(row => row.actions.map(action => action.action_id)))
+  return { ...document, bindings: {
+    points: Object.fromEntries(Object.entries(bindings.points).filter(([id]) => points.has(id))),
+    actions: Object.fromEntries(Object.entries(bindings.actions).filter(([id]) => actions.has(id))),
+  } }
 }
 
 export default function DecisionEditor({ token, rule, nodes, onRefresh, onError, onSelect, readOnly }: Props) {
@@ -237,6 +256,10 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
   )
   const targetOutputs = useMemo(() => [...outputs, ...allocatorOutputs], [outputs, allocatorOutputs])
   const [document, setDocument] = useState<Document>(() => initialDocument(rule, nodes))
+  // Preserve the exact saved wire document (including legitimate nil arrays)
+  // separately from editor normalization, so publication never sends a new draft.
+  const savedDocument = useRef<Document>(storedDocument(rule))
+  const editGeneration = useRef(0)
   const [busy, setBusy] = useState("")
   const [dirty, setDirty] = useState(false)
   const [result, setResult] = useState<Evaluation | null>(null)
@@ -285,7 +308,15 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
     versionDifferent = JSON.stringify({ table: applied.table, bindings: applied.bindings }) !== JSON.stringify({ table: document.table, bindings: document.bindings })
   } catch { /* An unpublished rule has no comparison target. */ }
 
+  function acceptSaved(next: Document, revision: string | undefined, generation: number) {
+    const saved = { ...next, revision: revision || next.revision }
+    savedDocument.current = saved
+    const editedWhileWaiting = editGeneration.current !== generation
+    setDocument(latest => editedWhileWaiting ? { ...latest, revision: saved.revision } : editableDocument(saved, nodes))
+    setDirty(editedWhileWaiting)
+  }
   function setRows(next: Row[]) {
+    editGeneration.current++
     setDocument({ ...document, table: { rows: next } })
     setDirty(true)
     setResult(null)
@@ -342,6 +373,7 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
     return node ? nameOf(node) : id
   }
   function rebind(kind: "points" | "actions", id: string, nodeID: string) {
+    editGeneration.current++
     const targets = { ...document.bindings[kind] }
     targets[id] = { node_id: nodeID, point_type: kind === "points" ? "value" : "valueSet" }
     setDocument({ ...document, bindings: { ...document.bindings, [kind]: targets } })
@@ -360,14 +392,15 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
     setTextInputs(Object.fromEntries(available.map((node) => [businessId(node), point(node, "value")?.text || ""])))
   }
   async function run(kind: "save" | "publish" | "test" | "enable", enabledValue = false) {
+    if (kind === "publish" && (dirty || enabled)) { onError("请先保存草稿并停用，再发布；发布不会启用控制。"); return }
+    const generation = editGeneration.current
     setBusy(kind)
     onError("")
-    const current = { ...document, bindings: bindingsFor(available, document.bindings) }
+    const current = kind === "publish" ? savedDocument.current : requestDocument(document, available)
     try {
       if (kind === "save" || kind === "publish") {
-        await request(token, `/rules/${rule.id}/${kind === "save" ? "draft" : "publish"}`, kind === "save" ? "PUT" : "POST", current)
-        setDocument(current)
-        setDirty(false)
+        const saved = await request<{ revision?: string }>(token, `/rules/${rule.id}/${kind === "save" ? "draft" : "publish"}`, kind === "save" ? "PUT" : "POST", current)
+        acceptSaved(current, saved.revision, generation)
       } else if (kind === "test") {
         setResult(await request<Evaluation>(token, `/rules/${rule.id}/test`, "POST", {
           document: current, inputs,
@@ -386,6 +419,7 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
   }
 
   async function manage(kind: "rename" | "copy" | "delete" | "restore", version?: RuleVersion) {
+    const generation = editGeneration.current
     setBusy(kind)
     onError("")
     try {
@@ -401,9 +435,8 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
         await request(token, `/nodes/${rule.id}`, "DELETE", { parent: rule.parent })
         onSelect("")
       } else if (version) {
-        await request(token, `/rules/${rule.id}/restore`, "POST", { version_id: version.id })
-        setDocument(version.document)
-        setDirty(false)
+        const restored = await request<{ revision: string }>(token, `/rules/${rule.id}/restore`, "POST", { version_id: version.id, revision: document.revision })
+        acceptSaved(version.document, restored.revision, generation)
       }
       await onRefresh()
     } catch (error) {
@@ -424,6 +457,7 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
     return index >= 0 ? `第 ${index + 1} 行` : "已删除的行"
   }
   function setScenarios(next: Scenario[]) {
+    editGeneration.current++
     setDocument({ ...document, scenarios: next })
     setDirty(true)
     setScenarioResults({})
@@ -451,7 +485,7 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
     setBusy("scenarios")
     onError("")
     try {
-      const current = { ...document, bindings: bindingsFor(available, document.bindings) }
+      const current = requestDocument(document, available)
       const response = await request<{ results: ScenarioResult[] }>(token, `/rules/${rule.id}/scenarios`, "POST", { document: current })
       setScenarioResults(Object.fromEntries(response.results.map((item) => [item.scenario_id, item])))
     } catch (error) {
@@ -505,7 +539,7 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
     setBusy("deps")
     onError("")
     try {
-      setDeps(await fetchRuleDeps(token, rule.id, { ...document, bindings: bindingsFor(available, document.bindings) }))
+      setDeps(await fetchRuleDeps(token, rule.id, requestDocument(document, available)))
     } catch (error) {
       onError(error instanceof Error ? error.message : "依赖图生成失败")
     } finally {
@@ -519,11 +553,12 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
       <div>
         <span className="section-kicker">有序决策表</span>
         <h2>{nameOf(rule)}</h2>
-        <p>同一行的条件必须同时满足。从上到下，命中首行即停止。</p>
+        <p>点位条件按 AND/OR 从左到右计算，时间窗独立约束。从上到下，命中首行即停止。</p>
       </div>
       <div className="rule-state">
         <span className={dirty ? "state-dot amber" : "state-dot"}>{dirty ? "有未保存修改" : "草稿已保存"}</span>
         <span>{published ? "已有发布版本" : "尚未发布"}</span>
+        <label>作用范围<select aria-label="规则作用范围" disabled={readOnly || busy !== ""} value={document.scope || ""} onChange={event => { editGeneration.current++; setDocument({ ...document, scope: event.target.value as "self" | "descendants" }); setDirty(true) }}><option value="" disabled>请选择</option><option value="self">本对象</option><option value="descendants">含下级</option></select></label>
         <span>{rows.length} 行 · {referencedInputs.length} 个输入</span>
       </div>
     </div>
@@ -543,7 +578,7 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
     </div>
     {viewMode === "table" && <div className="rule-table-wrap">
       <table className="rule-table">
-        <thead><tr><th>#</th><th>条件（全部满足）</th><th>执行动作</th><th>持续（秒）</th><th>冷却（秒）</th><th>操作</th></tr></thead>
+        <thead><tr><th>#</th><th>条件（从左到右）</th><th>执行动作</th><th>持续（秒）</th><th>冷却（秒）</th><th>操作</th></tr></thead>
         <tbody>
           {rows.map((row, rowIndex) => <tr key={row.row_id} className={result?.row_id === row.row_id ? "sim-hit" : ""} title="点击行编辑条件和动作"
             onClick={(event) => {
@@ -554,7 +589,7 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
             }}>
             <td>{rowIndex + 1}</td>
             <td><div className="rule-chips">
-              {row.conditions.length === 0 ? <span className="rule-chip default">默认行</span> : row.conditions.map((condition, index) => <span className="rule-chip" key={index}>{condition.kind === "time" ? `时间 ${timeConditionText(condition)}` : `${displayName(condition.point_id)} ${operatorLabel(condition.operator)} ${conditionValueText(condition)}`}</span>)}
+              {row.conditions.length === 0 ? <span className="rule-chip default">默认行</span> : row.conditions.map((condition, index) => <span className="rule-chip" key={index}>{condition.kind === "time" ? `时间 ${timeConditionText(condition)}` : `${conditionJoinText(row, index)}${displayName(condition.point_id)} ${operatorLabel(condition.operator)} ${conditionValueText(condition)}`}</span>)}
             </div></td>
             <td><div className="rule-chips">
               {row.actions.length === 0 ? <span className="rule-chip muted">不执行动作</span> : row.actions.map((action, index) => <span className="rule-chip" key={index}>{displayName(action.action_id)} = {action.value}</span>)}
@@ -579,7 +614,7 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
     </div>}
     {showVersions && !readOnly && <div className="version-panel">
       {published && <div className="version-compare"><strong>草稿与运行版本</strong><span>当前草稿 {rows.length} 行；运行版本 {appliedRows} 行</span><span>{versionDifferent ? "存在规则内容差异" : "规则内容一致"}</span></div>}
-      {versions.length === 0 ? <p>首次发布后，再次发布会在这里保存历史版本。</p> : versions.map((version) => <div className="version-line" key={version.id}><div><strong>{new Date(version.published_at).toLocaleString("zh-CN")}</strong><span>{version.document.table.rows.length} 行</span></div><button className="secondary-button" disabled={busy !== ""} onClick={() => void manage("restore", version)}>恢复此版本</button></div>)}
+      {versions.length === 0 ? <p>首次发布后，再次发布会在这里保存历史版本。</p> : versions.map((version) => <div className="version-line" key={version.id}><div><strong>{new Date(version.published_at).toLocaleString("zh-CN")}</strong><span>{version.document.table.rows.length} 行</span></div><button className="secondary-button" disabled={busy !== ""} onClick={() => void manage("restore", version)}>恢复到草稿</button></div>)}
     </div>}
 
     {showStrategy && !readOnly && <div className="strategy-panel">
@@ -665,7 +700,7 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
         <div className="row-main">
           {row.conditions.length === 0 && rowIndex < rows.length - 1 && <div className="row-warning" role="status">默认行会命中所有输入，下面的规则不会执行。</div>}
           <div className="logic-block">
-            <div className="logic-title"><span>当以下条件同时满足</span><button className="text-button" disabled={!available.length} title={!available.length ? "没有可用输入点位，先到设备页添加" : undefined} onClick={() => {
+            <div className="logic-title"><span>点位条件按连接方式从左到右计算，时间窗独立</span><button className="text-button" disabled={!available.length} title={!available.length ? "没有可用输入点位，先到设备页添加" : undefined} onClick={() => {
               if (!available[0]) return
               updateRow(rowIndex, { ...row, conditions: [...row.conditions, { point_id: businessId(available[0]), operator: "gt", value: 0 }] })
             }}>+ 条件</button></div>
@@ -673,6 +708,7 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
             {row.conditions.map((condition, conditionIndex) => {
               const kind = condition.kind || "number"
               return <div className="logic-line condition-line" key={conditionIndex}>
+                {kind !== "time" && row.conditions.slice(0,conditionIndex).some(item => item.kind !== "time") && <select aria-label={`条件 ${conditionIndex + 1} 连接方式`} disabled={readOnly} value={condition.join || (row.match === "any" ? "OR" : "AND")} onChange={event => updateCondition(rowIndex, conditionIndex, { join: event.target.value as "AND" | "OR" })}><option value="AND">AND</option><option value="OR">OR</option></select>}
                 {kind !== "time" && <select aria-label="输入点位" value={condition.point_id} onChange={(event) => updateCondition(rowIndex, conditionIndex, { point_id: event.target.value })}>
                   {available.map((node) => <option key={node.id} value={businessId(node)}>{nameOf(node)}</option>)}
                 </select>}
@@ -901,13 +937,13 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
       <div className="action-buttons">
         <button className="text-button" onClick={() => simulationRef.current?.scrollIntoView({ block: "center" })}>模拟</button>
         <button className="secondary-button" disabled={readOnly || busy !== ""} onClick={() => run("save")}>{busy === "save" ? "保存中…" : "保存草稿"}</button>
-        <button className="primary-button" disabled={readOnly || busy !== "" || rows.length === 0} onClick={() => setConfirmAction("publish")}>{busy === "publish" ? "发布中…" : "发布当前规则"}</button>
+        <button className="primary-button" disabled={readOnly || busy !== "" || rows.length === 0 || dirty || enabled} onClick={() => setConfirmAction("publish")}>{busy === "publish" ? "发布中…" : "发布当前规则"}</button>
       </div>
     </div>
 
     {confirmAction && <ConfirmDialog
       title={confirmAction === "publish" ? "确认发布当前规则" : "确认删除规则"}
-      message={confirmAction === "publish" ? "发布后规则会按当前草稿运行；请确认条件、目标和顺序已经检查。" : "删除后规则及其版本将从业务树移除，不能撤销。"}
+      message={confirmAction === "publish" ? "发布已保存的草稿版本，不会启用控制；请确认条件、目标和顺序已经检查。" : "删除后规则及其版本将从业务树移除，不能撤销。"}
       confirmLabel={confirmAction === "publish" ? "确认发布" : "确认删除"}
       danger={confirmAction === "delete"}
       busy={busy !== ""}

@@ -39,6 +39,7 @@ export type CalculationList = {
 }
 
 export type Condition = {
+  join?: "AND" | "OR"
   point_id: string
   operator: string
   value: number
@@ -49,7 +50,7 @@ export type Condition = {
   weekday_mask?: number
 }
 export type Action = { action_id: string; value: number }
-export type Row = { row_id: string; conditions: Condition[]; actions: Action[]; hold_ms?: number; cooldown_ms?: number }
+export type Row = { row_id: string; match?: "all" | "any"; conditions: Condition[]; actions: Action[]; hold_ms?: number; cooldown_ms?: number }
 export type Target = { node_id: string; point_type?: string; key?: string }
 export type Scenario = {
   scenario_id: string
@@ -70,6 +71,8 @@ export type ScenarioResult = {
   detail?: string
 }
 export type Document = {
+  scope?: "self" | "descendants"
+  revision?: string
   table: { rows: Row[] }
   bindings: { points: Record<string, Target>; actions: Record<string, Target> }
   scenarios?: Scenario[]

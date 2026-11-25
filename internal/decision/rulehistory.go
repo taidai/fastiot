@@ -67,6 +67,24 @@ func describeRow(row Row) string {
 		parts = append(parts, conditionText(condition))
 	}
 	summary := strings.Join(parts, " 且 ")
+	if row.hasJoins() || row.Match == "any" {
+		points, windows := []string{}, []string{}
+		for index, condition := range row.Conditions {
+			if condition.Kind == "time" {
+				windows = append(windows, conditionText(condition))
+				continue
+			}
+			text := conditionText(condition)
+			if len(points) > 0 {
+				text = row.joinAt(index) + " " + text
+			}
+			points = append(points, text)
+		}
+		summary = "从左到右：" + strings.Join(points, " ")
+		if len(windows) > 0 {
+			summary += "；独立时间窗：" + strings.Join(windows, "；")
+		}
+	}
 	if len(row.Actions) > 0 {
 		actions := make([]string, 0, len(row.Actions))
 		for _, action := range row.Actions {
@@ -98,8 +116,36 @@ func actionText(a Action) string {
 	return fmt.Sprintf("%s = %g", a.ActionID, a.Value)
 }
 
+func rowJoinDescription(row Row) string {
+	joins := []string{}
+	seenPoint := false
+	windows := 0
+	for index, condition := range row.Conditions {
+		if condition.Kind == "time" {
+			windows++
+			continue
+		}
+		if seenPoint {
+			joins = append(joins, row.joinAt(index))
+		}
+		seenPoint = true
+	}
+	result := strings.Join(joins, " → ")
+	if windows > 1 {
+		relation := "AND"
+		if row.Match == "any" {
+			relation = "OR"
+		}
+		result += "；时间窗 " + relation
+	}
+	return result
+}
+
 func diffRow(a, b Row) []string {
 	detail := make([]string, 0)
+	if before, after := rowJoinDescription(a), rowJoinDescription(b); before != after {
+		detail = append(detail, "条件连接（从左到右）："+before+" → "+after)
+	}
 	aCond := make([]string, 0, len(a.Conditions))
 	bCond := make([]string, 0, len(b.Conditions))
 	for _, c := range a.Conditions {
