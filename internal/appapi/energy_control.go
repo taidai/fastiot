@@ -262,15 +262,15 @@ func (h *Handler) ReconcileCabinetCommands() {
 				event = decision.EvStopConfirmed
 			}
 		case command.Failed, command.Unknown:
-			// 启动失败回到待机；停机未确认按故障处理，禁止自动调度。
-			if pending.Event == "start" {
-				_, _, _ = ApplyCabinetEvent(h.nc, unit, decision.EvStopConfirmed)
-			} else {
-				_, _, _ = ApplyCabinetEvent(h.nc, unit, decision.EvFault)
+			// 未确认的启停都不能推定实际状态。沿用安全过程阻断，检修态保留。
+			if _, _, err := ApplyCabinetEvent(h.nc, unit, decision.EvFault); err != nil {
+				continue
 			}
 			h.clearPending(unit.ID)
 			if h.audit != nil {
-				_ = h.audit.Append(auditRecord(pending, string(outcome.State), outcome.Reason))
+				record := auditRecord(pending, string(outcome.State), "request "+pending.RequestID+": "+outcome.Reason+"；启停结果未确认，实际状态未核实；安全阻断不代表已证实设备故障")
+				record.Result = "failure"
+				_ = h.audit.Append(record)
 			}
 			continue
 		default:

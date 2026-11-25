@@ -107,6 +107,83 @@ func TestCabinetRejectedCommandDoesNotEnterTransition(t *testing.T) {
 	}
 }
 
+func TestCabinetUnconfirmedOutcomeEndsProcess(t *testing.T) {
+	for _, event := range []string{"start", "stop"} {
+		for _, mode := range []string{"reject", "disconnect"} {
+			for _, maintenance := range []bool{false, true} {
+				name := event + "-" + mode
+				if maintenance {
+					name += "-maintenance"
+				}
+				t.Run(name, func(t *testing.T) {
+					definition := strings.Replace(operationProfile, `"id":"set"`, `"id":"`+event+`"`, 1)
+					definition = strings.Replace(definition, `"default":10`, `"default":20`, 1)
+					f, bus, sim := operationFixtureWithProfile(t, definition)
+					var model unitModelView
+					call(t, http.MethodGet, f.base+"/modbus/"+bus+"/units/1/model", f.token, nil, &model)
+					unit, err := CreateDomainNode(f.handler.nc, snapshotRoot(t, f.base, f.token), NodeTypeEnergyUnit, map[string]string{"description": "unconfirmed cabinet"})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err := CreateDomainNode(f.handler.nc, unit, data.NodeTypeDevice, map[string]string{PointTypePowerSetpoint: model.Model.PointMap["Target"]}); err != nil {
+						t.Fatal(err)
+					}
+					before := decision.CabinetStandby
+					if event == "stop" {
+						before = decision.CabinetRunning
+					}
+					if err := SetCabinetState(f.handler.nc, unit, before); err != nil {
+						t.Fatal(err)
+					}
+					sim.mu.Lock()
+					sim.writeMode = mode
+					sim.mu.Unlock()
+					eventURL := f.base + "/energy-units/" + unit + "/events"
+					status, body := call(t, http.MethodPost, eventURL, f.token, map[string]string{"event": event, "request_id": "cabinet-unconfirmed"}, nil)
+					if status != 200 {
+						t.Fatalf("submit: %d %s", status, body)
+					}
+					want := "failed"
+					if mode == "disconnect" {
+						want = "unknown"
+					}
+					waitPumpCommand(t, f.base, f.token, bus, "cabinet-unconfirmed", want, 4*time.Second)
+					wantProcess := decision.CabinetFault
+					if maintenance {
+						status, body = call(t, http.MethodPost, eventURL, f.token, map[string]string{"event": "enter_maintenance"}, nil)
+						if status != 200 {
+							t.Fatalf("maintenance: %d %s", status, body)
+						}
+						wantProcess = decision.CabinetMaintenance
+					}
+					f.handler.ReconcileCabinetCommands()
+					f.handler.ReconcileCabinetCommands()
+					node := f.node(t, unit)
+					state := LoadCabinetState(node)
+					_, pending := loadPendingCommand(node)
+					writes := sim.written()
+					var outcome pumpCommandOutcome
+					status, body = call(t, http.MethodGet, f.base+"/modbus/"+bus+"/units/1/commands/cabinet-unconfirmed", f.token, nil, &outcome)
+					t.Logf("%s/%s maintenance=%t: command=%s cabinet=%s pending=%t simulator_writes=%v", event, mode, maintenance, outcome.State, state, pending, writes)
+					if status != 200 || outcome.State != want {
+						t.Errorf("reconciliation changed canonical outcome: %d %s", status, body)
+					}
+					if pending || state != wantProcess {
+						t.Errorf("terminal process state=%s pending=%t want %s", state, pending, wantProcess)
+					}
+					_, auditBody := call(t, http.MethodGet, f.base+"/audit", f.token, nil, nil)
+					if !strings.Contains(auditBody, want) || !strings.Contains(auditBody, "实际状态未核实") || !strings.Contains(auditBody, "不代表已证实设备故障") {
+						t.Error("unconfirmed result lacks explicit process-block explanation")
+					}
+					if len(writes) != 1 || writes[0] != [3]uint16{1, 10, 20} {
+						t.Fatalf("unexpected physical attempts: %v", writes)
+					}
+				})
+			}
+		}
+	}
+}
+
 // TestEnergyControlEvents 验证控制器人工操作的 HTTP 语义：人工模式立即停止
 // 自动调度；检修/故障确认走状态机；没有命令运行时不假装启停成功。
 func TestEnergyControlEvents(t *testing.T) {
