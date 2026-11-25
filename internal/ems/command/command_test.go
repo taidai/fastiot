@@ -2,6 +2,7 @@ package command
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -98,6 +99,191 @@ func TestSubmitIsIdempotent(t *testing.T) {
 	conflict.CommandID = "stop"
 	if _, err := m.Submit(t0, conflict); err == nil {
 		t.Fatal("expected conflict for reused request id")
+	}
+}
+
+func TestRequestIdentityBindsActorAndDevice(t *testing.T) {
+	writer := &fakeWriter{}
+	samples := map[string]signal.Sample{}
+	m := manager(writer, &samples)
+	if _, err := m.Submit(t0, request("scoped")); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"actor", "device"} {
+		changed := request("scoped")
+		if field == "actor" {
+			changed.Actor = "other"
+		} else {
+			changed.DeviceID = "pcs2"
+		}
+		if _, err := m.Submit(t0, changed); err == nil {
+			t.Errorf("reused request with different %s was accepted", field)
+		}
+	}
+	if writer.calls != 1 {
+		t.Fatalf("writes=%d", writer.calls)
+	}
+}
+
+func TestReadbackDeadlineUsesObservationAndArrivalNotTick(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		observed, received time.Duration
+		quality            signal.Quality
+		want               State
+	}{
+		{"on_time_processed_later", 4 * time.Second, 4 * time.Second, signal.Good, Confirmed},
+		{"late_observation", 6 * time.Second, 6 * time.Second, signal.Good, Unknown},
+		{"late_arrival", 4 * time.Second, 6 * time.Second, signal.Good, Unknown},
+		{"old_cache", -time.Second, 4 * time.Second, signal.Good, Unknown},
+		{"clock_backwards_on_arrival", 4 * time.Second, 3 * time.Second, signal.Good, Unknown},
+		{"missing_arrival", 4 * time.Second, 0, signal.Good, Unknown},
+		{"invalid", 4 * time.Second, 4 * time.Second, signal.Invalid, Unknown},
+		{"stale", 4 * time.Second, 4 * time.Second, signal.Stale, Unknown},
+		{"future", 8 * time.Second, 8 * time.Second, signal.Good, Unknown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			writer := &fakeWriter{}
+			samples := map[string]signal.Sample{}
+			m := manager(writer, &samples)
+			if _, err := m.Submit(t0, request("deadline")); err != nil {
+				t.Fatal(err)
+			}
+			samples["run"] = signal.Sample{Input: "run", Value: signal.Flag(true), Quality: tc.quality, SourceTime: t0.Add(tc.observed), ReceivedTime: t0.Add(tc.received)}
+			m.Tick(t0.Add(6 * time.Second))
+			got, _ := m.Get("deadline")
+			if got.State != tc.want {
+				t.Fatalf("state=%s want %s", got.State, tc.want)
+			}
+			m.Tick(t0.Add(10 * time.Second))
+			if writer.calls != 1 {
+				t.Fatalf("timeout retried physical action: %d", writer.calls)
+			}
+		})
+	}
+}
+
+func TestDeclaredReadbackTolerance(t *testing.T) {
+	for _, value := range []float64{20.2, 20.3} {
+		writer := &fakeWriter{}
+		samples := map[string]signal.Sample{}
+		m := manager(writer, &samples)
+		m.SetProfiles(func(string) (device.Profile, bool) {
+			return device.Profile{ID: "tolerance", Points: []device.Point{{ID: "target", Kind: signal.Number}}, Commands: []device.Command{{ID: "set", ReadbackTolerance: 0.25, Parameters: []device.Parameter{{Name: "target", Point: "target", Kind: signal.Number, Default: 20}}}}}, true
+		})
+		_, err := m.Submit(t0, Request{ID: "tolerance", DeviceID: "pcs1", CommandID: "set"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		samples["target"] = signal.Sample{Input: "target", Value: signal.Num(value), Quality: signal.Good, SourceTime: t0.Add(time.Second), ReceivedTime: t0.Add(time.Second)}
+		m.Tick(t0.Add(time.Second))
+		got, _ := m.Get("tolerance")
+		if (got.State == Confirmed) != (value == 20.2) {
+			t.Fatalf("readback %g: %s", value, got.State)
+		}
+	}
+}
+
+func TestDeclaredCommandSafetyRejectionIsNotADeviceFailure(t *testing.T) {
+	writer := &fakeWriter{}
+	samples := map[string]signal.Sample{}
+	m := manager(writer, &samples)
+	m.Guard = func(GuardRequest) safety.Verdict {
+		return safety.Verdict{Decision: safety.DecisionRefused, Reason: "interlock"}
+	}
+	got, err := m.Submit(t0, request("rejected"))
+	if err != nil || got.State != State("rejected") || writer.calls != 0 {
+		t.Fatalf("rejection=%+v err=%v writes=%d", got, err, writer.calls)
+	}
+}
+
+func TestDeclaredBooleanRegisterParameterRejectsNonBinaryValue(t *testing.T) {
+	writer := &fakeWriter{}
+	samples := map[string]signal.Sample{}
+	m := manager(writer, &samples)
+	m.SetProfiles(func(string) (device.Profile, bool) {
+		return device.Profile{ID: "binary", Points: []device.Point{{ID: "target", Kind: signal.Number}}, Commands: []device.Command{{ID: "set", Parameters: []device.Parameter{{Name: "value", Point: "target", Kind: signal.Number, Binary: true}}}}}, true
+	})
+	if _, err := m.Submit(t0, Request{ID: "invalid-bool", DeviceID: "pcs1", CommandID: "set", Parameters: map[string]float64{"value": 2}}); err == nil || writer.calls != 0 {
+		t.Fatalf("boolean declaration ignored: err=%v writes=%d", err, writer.calls)
+	}
+}
+
+func TestJournalFailureAfterDispatchKeepsUnknownWithoutRetry(t *testing.T) {
+	writer := &fakeWriter{}
+	samples := map[string]signal.Sample{}
+	m := manager(writer, &samples)
+	saves := 0
+	m.Persist = func(Outcome) error {
+		saves++
+		if saves > 1 {
+			return errors.New("disk unavailable")
+		}
+		return nil
+	}
+	_, err := m.Submit(t0, request("journal-failed"))
+	if err == nil {
+		t.Fatal("post-dispatch persistence failure was hidden")
+	}
+	got, found := m.Get("journal-failed")
+	if !found || got.State != Unknown {
+		t.Fatalf("unpersisted outcome: %+v", got)
+	}
+	again, err := m.Submit(t0.Add(time.Second), request("journal-failed"))
+	if err != nil || again.State != Unknown || writer.calls != 1 {
+		t.Fatalf("ambiguous write retried: %+v %v writes=%d", again, err, writer.calls)
+	}
+}
+
+func TestRetryParameterNamesCannotCollideWithSerializedValues(t *testing.T) {
+	writer := &fakeWriter{}
+	samples := map[string]signal.Sample{}
+	m := manager(writer, &samples)
+	m.SetProfiles(func(string) (device.Profile, bool) {
+		return device.Profile{ID: "two-parameters", Points: []device.Point{{ID: "a", Kind: signal.Number}, {ID: "b", Kind: signal.Number}}, Commands: []device.Command{{ID: "set", Parameters: []device.Parameter{{Name: "a", Point: "a", Kind: signal.Number}, {Name: "b", Point: "b", Kind: signal.Number}}}}}, true
+	})
+	req := Request{ID: "encoded", DeviceID: "pcs1", CommandID: "set", Parameters: map[string]float64{"a": 1, "b": 2}}
+	if _, err := m.Submit(t0, req); err != nil {
+		t.Fatal(err)
+	}
+	req.Parameters = map[string]float64{"a=1;b": 2}
+	if _, err := m.Submit(t0, req); err == nil {
+		t.Fatal("different parameters collided with existing request fingerprint")
+	}
+	if writer.calls != 1 {
+		t.Fatalf("writes=%d", writer.calls)
+	}
+}
+
+func TestLegacyRequestIdentityRemainsReadableButRejectsAmbiguousKeys(t *testing.T) {
+	writer := &fakeWriter{}
+	samples := map[string]signal.Sample{}
+	m := manager(writer, &samples)
+	m.Preload([]Outcome{{RequestID: "legacy", DeviceID: "pcs1", CommandID: "set", Actor: "operator", State: Confirmed, Fingerprint: "command:set;a=1;b=2"}})
+	req := Request{ID: "legacy", DeviceID: "pcs1", CommandID: "set", Actor: "operator", Parameters: map[string]float64{"a": 1, "b": 2}}
+	if got, err := m.Submit(t0, req); err != nil || got.State != Confirmed {
+		t.Fatalf("legacy retry lost result: %+v %v", got, err)
+	}
+	req.Parameters = map[string]float64{"a=1;b": 2}
+	if _, err := m.Submit(t0, req); err == nil {
+		t.Fatal("ambiguous legacy keys accepted")
+	}
+	if writer.calls != 0 {
+		t.Fatal("legacy retry executed physical action")
+	}
+}
+
+func TestRequestIdentityEncodingFailureDoesNotDispatch(t *testing.T) {
+	writer := &fakeWriter{}
+	samples := map[string]signal.Sample{}
+	m := manager(writer, &samples)
+	req := request("invalid-identity")
+	req.Parameters = map[string]float64{"invalid": math.NaN()}
+	if _, err := m.Submit(t0, req); err == nil {
+		t.Fatal("encoding failure accepted")
+	}
+	if writer.calls != 0 {
+		t.Fatal("invalid identity dispatched")
 	}
 }
 

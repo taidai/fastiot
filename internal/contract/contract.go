@@ -50,14 +50,23 @@ type CommandRequest struct {
 
 // CommandOutcome is the lifecycle state of one command request.
 type CommandOutcome struct {
-	RequestID string    `json:"request_id"`
-	DeviceID  string    `json:"device_id"`
-	CommandID string    `json:"command_id"`
-	Actor     string    `json:"actor"`
-	State     string    `json:"state"` // accepted | executing | confirmed | failed | unknown
-	Reason    string    `json:"reason,omitempty"`
-	StartedAt time.Time `json:"started_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	RequestID string               `json:"request_id"`
+	DeviceID  string               `json:"device_id"`
+	CommandID string               `json:"command_id"`
+	Actor     string               `json:"actor"`
+	State     string               `json:"state"` // accepted | executing | confirmed | failed | unknown
+	Reason    string               `json:"reason,omitempty"`
+	StartedAt time.Time            `json:"started_at"`
+	UpdatedAt time.Time            `json:"updated_at"`
+	Deadline  time.Time            `json:"deadline,omitempty"`
+	Observed  []CommandObservation `json:"observed,omitempty"`
+}
+
+// CommandObservation is the actual evidence that confirmed a request.
+type CommandObservation struct {
+	Point string    `json:"point"`
+	Value string    `json:"value"`
+	At    time.Time `json:"at"`
 }
 
 // AuditRecord is one business audit entry.

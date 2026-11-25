@@ -134,6 +134,17 @@ func clientIP(r *http.Request) string {
 	return r.RemoteAddr
 }
 
+func (h *Handler) recordManualIntent(identity Identity, r *http.Request, id string, manual bool) error {
+	if h.audit == nil {
+		return nil
+	}
+	action := "恢复自动"
+	if manual {
+		action = "人工接管"
+	}
+	return h.audit.Append(audit.Record{Time: time.Now(), Actor: identity.UserID, Action: "控制写入", Object: "点位 " + id, Detail: action + "：明确确认；安全保护继续有效", Result: "requested", IP: clientIP(r)})
+}
+
 func (h *Handler) recordAudit(actor string, r *http.Request, status int) {
 	if h.audit == nil {
 		return

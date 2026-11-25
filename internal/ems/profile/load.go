@@ -138,6 +138,9 @@ func normalize(p *Profile) error {
 		if spec.Readback != "" && !pointNames[spec.Readback] {
 			return fmt.Errorf("命令 %q 的回读点 %q 未声明", spec.ID, spec.Readback)
 		}
+		if spec.ReadbackTolerance < 0 {
+			return fmt.Errorf("命令 %q 的回读容差不能为负数", spec.ID)
+		}
 		if spec.TimeoutMS < 0 || spec.TimeoutMS > 60000 {
 			return fmt.Errorf("命令 %q 的超时 %d ms 无效（0–60000）", spec.ID, spec.TimeoutMS)
 		}

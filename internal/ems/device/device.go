@@ -4,6 +4,7 @@ package device
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	"fastiot/internal/ems/signal"
@@ -28,9 +29,10 @@ type Write struct {
 
 // Readback is the condition that proves a command took effect.
 type Readback struct {
-	Point string
-	Op    string
-	Value signal.Value
+	Point     string
+	Op        string
+	Value     signal.Value
+	Tolerance float64
 }
 
 // Parameter is one operator-supplied value of a named command.
@@ -44,16 +46,19 @@ type Parameter struct {
 	Min      float64
 	Max      float64
 	Default  float64
+	// Binary preserves a Profile boolean constraint on a numeric register.
+	Binary bool
 }
 
 // Command is a named device action such as start, stop, standby or reset.
 type Command struct {
-	ID         string
-	Name       string
-	Writes     []Write
-	Readback   []Readback
-	Parameters []Parameter
-	Timeout    time.Duration
+	ID                string
+	Name              string
+	Writes            []Write
+	Readback          []Readback
+	Parameters        []Parameter
+	Timeout           time.Duration
+	ReadbackTolerance float64
 }
 
 // Profile is the model for one vendor and product.
@@ -96,6 +101,9 @@ func (p Profile) Validate() error {
 			return fmt.Errorf("profile %s: duplicate command %s", p.ID, command.ID)
 		}
 		commands[command.ID] = true
+		if command.ReadbackTolerance < 0 || math.IsNaN(command.ReadbackTolerance) || math.IsInf(command.ReadbackTolerance, 0) {
+			return fmt.Errorf("command %s: invalid readback tolerance", command.ID)
+		}
 		if command.Timeout < 0 {
 			return fmt.Errorf("profile %s: command %s has a negative timeout", p.ID, command.ID)
 		}
@@ -211,6 +219,9 @@ func CheckReadbackSince(readback []Readback, samples map[string]signal.Sample, n
 			}
 		}
 		matched, err := sample.Value.Compare(condition.Op, condition.Value)
+		if condition.Tolerance > 0 && condition.Op == "eq" && sample.Value.Kind == signal.Number && condition.Value.Kind == signal.Number {
+			matched = math.Abs(sample.Value.Num-condition.Value.Num) <= condition.Tolerance
+		}
 		if err != nil {
 			return false, err.Error()
 		}

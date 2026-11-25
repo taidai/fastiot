@@ -46,6 +46,7 @@ export type UnitModel = {
   }
   points: import("./overview").UnitPoint[]
   commands: UnitCommand[]
+  manual_allowed?: boolean
   profile_errors?: string[]
   missing?: string[]
 }
@@ -59,15 +60,8 @@ export type OperationRecord = {
   reason?: string
   started_at: string
   updated_at: string
-}
-
-export type ManualWriteResult = {
-  request_id: string
-  status: string
-  target: number
-  actor: string
-  created_at: string
-  reason?: string
+  deadline?: string
+  observed?: { point: string; value: string; at: string }[]
 }
 
 export function unitBase(device: Pick<LedgerDevice, "channel_id" | "server_id">) {
@@ -83,8 +77,7 @@ export async function loadOperationRecords(device: LedgerDevice) {
   return result.commands || []
 }
 
-export async function submitUnitCommand(device: LedgerDevice, commandID: string, parameters: Record<string, number>) {
-  const requestID = crypto.randomUUID()
+export async function submitUnitCommand(device: LedgerDevice, commandID: string, parameters: Record<string, number>, requestID: string) {
   const outcome = await request<OperationRecord>(`${unitBase(device)}/commands`, "POST", {
     request_id: requestID,
     command_id: commandID,
@@ -97,10 +90,6 @@ export async function loadUnitCommand(device: LedgerDevice, requestID: string) {
   return request<OperationRecord>(`${unitBase(device)}/commands/${encodeURIComponent(requestID)}`)
 }
 
-export async function writeUnitPoint(pointID: string, value: number) {
-  return request<ManualWriteResult>(`/nodes/${encodeURIComponent(pointID)}/value`, "POST", {
-    value,
-    point_type: "valueSet",
-    request_id: crypto.randomUUID(),
-  })
+export async function setManualMode(pointID: string, manual: boolean) {
+  return request<{ manual: boolean }>(`/nodes/${encodeURIComponent(pointID)}/manual`, "POST", { manual })
 }

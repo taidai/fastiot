@@ -21,6 +21,11 @@ import {
 } from "./overview.ts"
 import { DEFAULT_APPEARANCE, normalizeAppearance } from "./appearance.ts"
 
+test('rejected commands are terminal and not failed physical operations', () => {
+  assert.equal(commandStateText('rejected'), '已拒绝')
+  assert.equal(isTerminalCommandState('rejected'), true)
+})
+
 const snapshot = {
   roots: ["site"],
   nodes: [

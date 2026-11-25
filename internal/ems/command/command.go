@@ -3,6 +3,7 @@
 package command
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -19,10 +20,13 @@ import (
 // State is the lifecycle of one command request.
 type State string
 
+var ErrJournal = errors.New("command journal unavailable")
+
 const (
 	Accepted   State = "accepted"
 	Executing  State = "executing"
 	Confirmed  State = "confirmed"
+	Rejected   State = "rejected"
 	Failed     State = "failed"
 	Unknown    State = "unknown"
 	Superseded State = "superseded"
@@ -75,6 +79,7 @@ type Outcome struct {
 	State        State
 	StartedAt    time.Time
 	UpdatedAt    time.Time
+	Deadline     time.Time
 	Writes       []device.Write
 	Readback     []device.Readback
 	Reason       string
@@ -121,9 +126,12 @@ type Manager struct {
 	Guard    func(GuardRequest) safety.Verdict
 	// Persist, when set, receives every stored state change. It is called
 	// under the manager lock, so it must not call back into the manager.
-	Persist func(Outcome)
-	orders  map[string]Outcome
-	order   []string
+	Persist func(Outcome) error
+	// Lookup reads evicted identities from the same durable command journal.
+	// Both callbacks run under Mu, including the pre-dispatch reservation.
+	Lookup func(string) (Outcome, bool, error)
+	orders map[string]Outcome
+	order  []string
 	// confirmed remembers the last confirmed point-write value per
 	// device+point, used as the safe fallback value.
 	confirmed map[string]float64
@@ -151,6 +159,46 @@ func (m *Manager) Submit(now time.Time, request Request) (Outcome, error) {
 	return m.submitLocked(now, request)
 }
 
+// Existing returns a retry's canonical result without reevaluating current
+// device state. Callers must still authorize the actor and target on every call.
+func (m *Manager) Existing(request Request) (Outcome, bool, error) {
+	m.Mu.Lock()
+	defer m.Mu.Unlock()
+	return m.existing(request)
+}
+
+func (m *Manager) existing(request Request) (Outcome, bool, error) {
+	existing, found := m.orders[request.ID]
+	if !found && m.Lookup != nil {
+		var err error
+		existing, found, err = m.Lookup(request.ID)
+		if err != nil {
+			return Outcome{}, false, fmt.Errorf("%w: %v", ErrJournal, err)
+		}
+	}
+	if !found {
+		return Outcome{}, false, nil
+	}
+	fingerprint, err := fingerprintOf(request)
+	if err != nil {
+		return Outcome{}, false, err
+	}
+	if !strings.HasPrefix(existing.Fingerprint, "v2:") {
+		// Old outcomes stay immutable. Ambiguous legacy parameter encodings
+		// fail closed instead of claiming that two different requests match.
+		for name := range request.Parameters {
+			if strings.ContainsAny(name, ";=") {
+				return Outcome{}, false, errors.New("ambiguous legacy request parameters")
+			}
+		}
+		fingerprint = legacyFingerprintOf(request)
+	}
+	if existing.DeviceID != request.DeviceID || existing.Actor != request.Actor || existing.Source != request.Source || existing.CommandID != request.CommandID || existing.Fingerprint != fingerprint {
+		return Outcome{}, false, fmt.Errorf("request id %s already used with different actor, target or parameters", request.ID)
+	}
+	return existing, true, nil
+}
+
 func (m *Manager) submitLocked(now time.Time, request Request) (Outcome, error) {
 	if request.ID == "" || request.DeviceID == "" || (request.CommandID == "" && request.Point == "") {
 		return Outcome{}, errors.New("request id and device and a command or point are required")
@@ -158,16 +206,17 @@ func (m *Manager) submitLocked(now time.Time, request Request) (Outcome, error) 
 	if request.CommandID != "" && request.Point != "" {
 		return Outcome{}, errors.New("a request is either a named command or a point write")
 	}
-	fingerprint := fingerprintOf(request)
-	if existing, ok := m.orders[request.ID]; ok {
-		if existing.Fingerprint != fingerprint {
-			return Outcome{}, fmt.Errorf("request id %s already used with different parameters", request.ID)
-		}
-		return existing, nil
+	fingerprint, err := fingerprintOf(request)
+	if err != nil {
+		return Outcome{}, err
+	}
+	if existing, found, err := m.existing(request); found || err != nil {
+		return existing, err
 	}
 
 	var writes []device.Write
 	var readback []device.Readback
+	timeout := m.Default
 	if request.Point != "" {
 		if !request.Value.Valid() {
 			return Outcome{}, errors.New("point write value is not finite")
@@ -186,8 +235,14 @@ func (m *Manager) submitLocked(now time.Time, request Request) (Outcome, error) 
 		if err := profile.Validate(); err != nil {
 			return Outcome{}, err
 		}
+		if command.Timeout > 0 {
+			timeout = command.Timeout
+		}
 		writes = append([]device.Write(nil), command.Writes...)
 		readback = append([]device.Readback(nil), command.Readback...)
+		for i := range readback {
+			readback[i].Tolerance = command.ReadbackTolerance
+		}
 		allowed := make(map[string]bool, len(command.Parameters))
 		for _, parameter := range command.Parameters {
 			allowed[parameter.Name] = true
@@ -197,6 +252,12 @@ func (m *Manager) submitLocked(now time.Time, request Request) (Outcome, error) 
 			}
 			if parameter.HasRange && (raw < parameter.Min || raw > parameter.Max) {
 				return Outcome{}, fmt.Errorf("parameter %s is outside [%g, %g]", parameter.Name, parameter.Min, parameter.Max)
+			}
+			if parameter.Binary && raw != 0 && raw != 1 {
+				return Outcome{}, fmt.Errorf("parameter %s must be 0 or 1", parameter.Name)
+			}
+			if !signal.Num(raw).Valid() {
+				return Outcome{}, fmt.Errorf("parameter %s is not finite", parameter.Name)
 			}
 			var value signal.Value
 			if parameter.Kind == signal.Bool {
@@ -216,7 +277,7 @@ func (m *Manager) submitLocked(now time.Time, request Request) (Outcome, error) 
 				}
 			}
 			if !hasReadback {
-				readback = append(readback, device.Readback{Point: parameter.Point, Op: "eq", Value: value})
+				readback = append(readback, device.Readback{Point: parameter.Point, Op: "eq", Value: value, Tolerance: command.ReadbackTolerance})
 			}
 		}
 		for name := range request.Parameters {
@@ -229,7 +290,7 @@ func (m *Manager) submitLocked(now time.Time, request Request) (Outcome, error) 
 	outcome := Outcome{
 		RequestID: request.ID, DeviceID: request.DeviceID, CommandID: request.CommandID,
 		Actor: request.Actor, State: Accepted, StartedAt: now, UpdatedAt: now,
-		Writes: writes, Readback: readback,
+		Writes: writes, Readback: readback, Deadline: now.Add(timeout),
 		DispatchID: request.DispatchID, Source: request.Source, Stage: request.Stage,
 		FallbackOf: request.FallbackOf, Fingerprint: fingerprint, SafeFallback: request.SafeFallback,
 	}
@@ -242,8 +303,13 @@ func (m *Manager) submitLocked(now time.Time, request Request) (Outcome, error) 
 			}).Effective()
 			if verdict.Decision == safety.DecisionRefused {
 				outcome.State = Failed
+				if request.CommandID != "" {
+					outcome.State = Rejected
+				}
 				outcome.Reason = verdict.Reason
-				m.store(outcome)
+				if err := m.store(outcome); err != nil {
+					return m.orders[request.ID], err
+				}
 				return outcome, nil
 			}
 			if verdict.Decision != safety.DecisionClamped {
@@ -265,18 +331,26 @@ func (m *Manager) submitLocked(now time.Time, request Request) (Outcome, error) 
 		m.store(outcome)
 		return outcome, errors.New("no device writer")
 	}
+	// Reserve the identity durably before the adapter can enqueue physical I/O.
+	if err := m.store(outcome); err != nil {
+		return Outcome{}, fmt.Errorf("%w: %v", ErrJournal, err)
+	}
 	if err := m.Writer.Write(request.DeviceID, request.ID, writes); err != nil {
 		outcome.State = Failed
 		outcome.Reason = "write failed: " + err.Error()
 		outcome.UpdatedAt = now
-		m.store(outcome)
+		if err := m.store(outcome); err != nil {
+			return m.orders[request.ID], err
+		}
 		return outcome, nil
 	}
 	if request.NoReadback {
 		outcome.State = Submitted
 		outcome.Reason = "write accepted; no mapped device readback"
 	}
-	m.store(outcome)
+	if err := m.store(outcome); err != nil {
+		return m.orders[request.ID], err
+	}
 	return outcome, nil
 }
 
@@ -294,12 +368,12 @@ func (m *Manager) Track(now time.Time, request Request) (Outcome, error) {
 	if !request.Value.Valid() {
 		return Outcome{}, errors.New("point write value is not finite")
 	}
-	fingerprint := fingerprintOf(request)
-	if existing, ok := m.orders[request.ID]; ok {
-		if existing.Fingerprint != fingerprint {
-			return Outcome{}, fmt.Errorf("request id %s already used with different parameters", request.ID)
-		}
-		return existing, nil
+	fingerprint, err := fingerprintOf(request)
+	if err != nil {
+		return Outcome{}, err
+	}
+	if existing, found, err := m.existing(request); found || err != nil {
+		return existing, err
 	}
 	outcome := Outcome{
 		RequestID: request.ID, DeviceID: request.DeviceID,
@@ -308,7 +382,9 @@ func (m *Manager) Track(now time.Time, request Request) (Outcome, error) {
 		Source: request.Source, Stage: request.Stage, DispatchID: request.DispatchID,
 		Fingerprint: fingerprint, External: true,
 	}
-	m.store(outcome)
+	if err := m.store(outcome); err != nil {
+		return Outcome{}, err
+	}
 	return outcome, nil
 }
 
@@ -324,7 +400,9 @@ func (m *Manager) SetState(now time.Time, requestID string, state State, reason 
 	outcome.State = state
 	outcome.Reason = reason
 	outcome.UpdatedAt = now
-	m.store(outcome)
+	if err := m.store(outcome); err != nil {
+		return m.orders[requestID], true
+	}
 	return outcome, true
 }
 
@@ -345,7 +423,22 @@ func (m *Manager) FailWrite(now time.Time, requestID, reason string) {
 }
 
 // fingerprintOf renders the normalized semantics used for duplicate detection.
-func fingerprintOf(request Request) string {
+func fingerprintOf(request Request) (string, error) {
+	// encoding/json sorts map keys and escapes names, unlike delimiter joining.
+	encoded, err := json.Marshal(struct {
+		Command                  string
+		Parameters               map[string]float64 `json:",omitempty"`
+		Point                    string
+		Value                    signal.Value
+		NoReadback, SafeFallback bool
+	}{request.CommandID, request.Parameters, request.Point, request.Value, request.NoReadback, request.SafeFallback})
+	if err != nil {
+		return "", fmt.Errorf("invalid command identity: %w", err)
+	}
+	return "v2:" + string(encoded), nil
+}
+
+func legacyFingerprintOf(request Request) string {
 	if request.Point != "" {
 		return "point:" + request.Point + "=" + request.Value.String()
 	}
@@ -401,16 +494,22 @@ func (m *Manager) Supersede(deviceID string) int {
 // first so a 1-second dispatch loop cannot grow memory without bound.
 const maxOrders = 2000
 
-func (m *Manager) store(outcome Outcome) {
+func (m *Manager) store(outcome Outcome) error {
+	if m.Persist != nil {
+		if err := m.Persist(outcome); err != nil {
+			if previous, exists := m.orders[outcome.RequestID]; exists {
+				previous.State, previous.Reason, previous.UpdatedAt = Unknown, "command_journal_unavailable", outcome.UpdatedAt
+				m.orders[outcome.RequestID] = previous
+			}
+			return fmt.Errorf("%w: %v", ErrJournal, err)
+		}
+	}
 	if _, exists := m.orders[outcome.RequestID]; !exists {
 		m.order = append(m.order, outcome.RequestID)
 	}
 	m.orders[outcome.RequestID] = outcome
-	if m.Persist != nil {
-		m.Persist(outcome)
-	}
 	if len(m.order) <= maxOrders {
-		return
+		return nil
 	}
 	drop := len(m.order) - maxOrders
 	kept := make([]string, 0, len(m.order))
@@ -435,6 +534,7 @@ func (m *Manager) store(outcome Outcome) {
 		kept = append(kept, id)
 	}
 	m.order = kept
+	return nil
 }
 
 // Preload seeds the manager with outcomes from a previous run. Anything not
@@ -485,21 +585,29 @@ func (m *Manager) Tick(now time.Time) {
 		if outcome.External {
 			continue
 		}
-		timeout := m.Default
-		if outcome.CommandID != "" {
-			profile, ok := m.Profiles(outcome.DeviceID)
-			if !ok {
-				outcome.State = Failed
-				outcome.Reason = "device disappeared"
-				outcome.UpdatedAt = now
+		deadline := outcome.Deadline
+		if deadline.IsZero() {
+			deadline = outcome.StartedAt.Add(m.Default)
+		}
+		// Judge the observation and arrival, not the scheduling of this Tick.
+		// A sample first received after the deadline cannot retroactively confirm.
+		samples := make(map[string]signal.Sample)
+		for point, sample := range m.Samples(outcome.DeviceID, now) {
+			// Keep monotonic timeout checks, and independently require the
+			// serialized observation/arrival evidence to fit the wall-clock
+			// window. A host clock step must not yield contradictory proof.
+			observed, received := sample.SourceTime.Round(0), sample.ReceivedTime.Round(0)
+			monotonicWindow := sample.SourceTime.After(outcome.StartedAt) && sample.ReceivedTime.After(outcome.StartedAt) && !sample.SourceTime.After(deadline) && !sample.ReceivedTime.After(deadline) && !sample.SourceTime.After(now) && !sample.ReceivedTime.After(now)
+			wallWindow := observed.After(outcome.StartedAt.Round(0)) && received.After(outcome.StartedAt.Round(0)) && !observed.After(deadline.Round(0)) && !received.After(deadline.Round(0)) && !observed.After(now.Round(0)) && !received.After(now.Round(0)) && !received.Before(observed)
+			if monotonicWindow != wallWindow && outcome.Reason != "clock_basis_inconsistent" {
+				outcome.Reason = "clock_basis_inconsistent"
 				m.store(outcome)
+			}
+			if !monotonicWindow || !wallWindow {
 				continue
 			}
-			if command, found := profile.Command(outcome.CommandID); found && command.Timeout > 0 {
-				timeout = command.Timeout
-			}
+			samples[point] = sample
 		}
-		samples := m.Samples(outcome.DeviceID, now)
 		if confirmed, reason := device.CheckReadbackSince(outcome.Readback, samples, now, m.MaxAge, outcome.StartedAt); confirmed {
 			outcome.State = Confirmed
 			outcome.Reason = ""
@@ -510,9 +618,11 @@ func (m *Manager) Tick(now time.Time) {
 			}
 			m.store(outcome)
 			continue
-		} else if now.Sub(outcome.StartedAt) >= timeout {
+		} else if !now.Before(deadline) {
 			outcome.State = Unknown
-			outcome.Reason = "no readback before timeout: " + reason
+			if outcome.Reason != "clock_basis_inconsistent" {
+				outcome.Reason = "no readback before timeout: " + reason
+			}
 			outcome.UpdatedAt = now
 			m.store(outcome)
 			if outcome.CommandID == "" && outcome.SafeFallback && outcome.FallbackOf == "" && len(outcome.Writes) == 1 {
@@ -554,10 +664,19 @@ func observe(readback []device.Readback, samples map[string]signal.Sample) []Obs
 
 // Get returns a tracked outcome.
 func (m *Manager) Get(id string) (Outcome, bool) {
+	outcome, found, _ := m.Find(id)
+	return outcome, found
+}
+
+// Find also resolves a cold request from durable history and surfaces I/O errors.
+func (m *Manager) Find(id string) (Outcome, bool, error) {
 	m.Mu.Lock()
 	defer m.Mu.Unlock()
 	outcome, ok := m.orders[id]
-	return outcome, ok
+	if !ok && m.Lookup != nil {
+		return m.Lookup(id)
+	}
+	return outcome, ok, nil
 }
 
 // List returns outcomes in submission order.
