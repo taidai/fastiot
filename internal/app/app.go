@@ -334,6 +334,22 @@ func Start(ctx context.Context, cfg Config) (*App, error) {
 		return nil
 	}, func(error) { emsCancel() })
 
+	group.Add(func() error {
+		select {
+		case <-readyCh:
+		case <-emsCtx.Done():
+			return nil
+		}
+		handler := calculationHandler.Load()
+		if handler == nil {
+			return errors.New("aggregate handler not initialized")
+		}
+		if err := handler.RunAggregates(emsCtx); err != nil && !errors.Is(err, context.Canceled) {
+			return err
+		}
+		return nil
+	}, func(error) { emsCancel() })
+
 	// An external cancellation (context or App.Close) stops the group.
 	group.Add(func() error {
 		<-runCtx.Done()
