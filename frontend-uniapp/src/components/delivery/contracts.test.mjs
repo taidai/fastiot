@@ -85,7 +85,7 @@ test("deliveryError explains refused dependencies in Chinese without hiding vers
 })
 
 test("deliveryError explains confirmation and rollback/package limits", () => {
-  assert.equal(deliveryError({ status: 409, code: "preflight_failed", message: "preflight_failed" }), "预检存在阻断项；确认后仍可发布，但发布不等于部署")
+  assert.equal(deliveryError({ status: 409, code: "preflight_failed", message: "preflight_failed" }), "预检存在阻断项；请修复后重新预检，不能发布可交付版本")
   assert.equal(deliveryError({ status: 409, code: "calculation_rollback_unsupported", message: "x" }), "当前版本或工程包含计算点，后端不支持回退")
   assert.equal(deliveryError({ status: 409, code: "virtual_input_rollback_unsupported", message: "x" }), "当前版本或工程包含虚拟输入点，后端不支持回退")
   assert.equal(deliveryError({ status: 409, code: "package_in_use", message: "x" }), "行业配置仍在使用，后端已拒绝停用")

@@ -123,6 +123,7 @@
 import IndustryGate from '../../components/IndustryGate.vue'
 import { industryBlocked } from '../../stores/session'
 import { currentProject, projectContext } from '../../stores/projects'
+import { onLoad } from "@dcloudio/uni-app"
 import { computed, onMounted, onUnmounted, ref, watch } from "vue"
 import TopBar from "../../components/TopBar.vue"
 import AlarmCenter from "../../components/AlarmCenter.vue"
@@ -148,6 +149,10 @@ type LayerScreen = ScreenConfig & { inherited_from?: string; blocks?: unknown[];
 type LayerScreenState = { screen: LayerScreen | null; error: boolean }
 
 const current = ref("site")
+onLoad(query => {
+  const step = String(query?.step || "")
+  if (["site", "tree", "access", "strategy", "ui", "delivery"].includes(step)) current.value = step
+})
 const activeTool = ref('')
 const dependencyBlocked = computed(() => PREVIEW_MODE && !previewWorkspace.emsEnabled && !!previewProjects.find(p => p.id === previewWorkspace.projectId)?.requiresEms)
 async function changeProject() {

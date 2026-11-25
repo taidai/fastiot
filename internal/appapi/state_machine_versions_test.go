@@ -29,14 +29,12 @@ func TestStateMachineProjectRollbackPreservesCurrentProcessAndRejectsIncompatibl
 	must("/state-machines", map[string]any{"parent": site, "name": "Process memory", "definition": definition}, &machine)
 	path := "/state-machines/" + machine.ID
 	must(path+"/publish", map[string]any{"revision": machine.Revision}, &machine)
-	var incompatible versionSummary
-	must("/projects/publish", map[string]any{"site": site, "confirm": true}, &incompatible)
+	incompatible := freezeRecoveryBaseline(t, f.handler, Identity{UserID: "fixture", Anchors: []string{root}}, site, "incompatible recovery baseline")
 	definition.States = []string{"idle", "active"}
 	definition.Transitions = []decision.StateTransition{{ID: "start", From: "idle", Event: "start", To: "active"}}
 	must(path+"/draft", map[string]any{"revision": machine.Revision, "definition": definition}, &machine)
 	must(path+"/publish", map[string]any{"revision": machine.Revision}, &machine)
-	var compatible versionSummary
-	must("/projects/publish", map[string]any{"site": site, "confirm": true}, &compatible)
+	compatible := freezeRecoveryBaseline(t, f.handler, Identity{UserID: "fixture", Anchors: []string{root}}, site, "compatible recovery baseline")
 	event := map[string]any{"revision": machine.Revision, "request_id": "pre-rollback-event", "event": "start", "confirm": true}
 	must(path+"/execute", event, &machine)
 	version, revision := machine.Version, machine.Revision

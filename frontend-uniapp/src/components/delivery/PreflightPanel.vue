@@ -27,6 +27,7 @@
             <view class="gate-detail">{{ gate.detail || "—" }}</view>
             <view v-if="gate.object" class="gate-object">对象：{{ gate.object }}</view>
             <view v-if="gate.next_step" class="next-step">下一步：{{ gate.next_step }}</view>
+            <button v-if="gate.repair_node && gate.repair_step" class="ghost" @click="$emit('repair', gate)">去修复 →</button>
             <view v-if="gate.informational" class="informational">仅提示，不计入总状态</view>
           </view>
         </view>
@@ -41,10 +42,10 @@
 import { ref } from "vue"
 import { clock, statusText } from "./contracts"
 
-type Gate = { key: string; title: string; status: string; detail: string; object?: string; next_step?: string; informational?: boolean }
+type Gate = { key: string; title: string; status: string; detail: string; object?: string; next_step?: string; repair_node?: string; repair_step?: string; informational?: boolean }
 type Report = { id?: string; generated_at?: string; operator?: string; status: string; summary: Record<string, number>; gates: Gate[] }
 defineProps<{ report: Report | null; latest: Report | null; error: string; busy: boolean; canRun: boolean }>()
-defineEmits<{ (event: "run"): void }>()
+defineEmits<{ (event: "run"): void; (event: "repair", gate: Gate): void }>()
 const expanded = ref(false)
 </script>
 

@@ -7,7 +7,7 @@
     <p v-if="notice" class="notice" role="status">{{ notice }}</p>
     <p v-if="!canConfigure" class="note">当前账号可查看接入状态，但没有配置权限；写操作已停用。</p>
 
-    <view v-if="!businessDevices.length" class="empty-access">
+    <view v-if="!businessDevices.length && !selectedUnit" class="empty-access">
       <view class="panel-head"><h3>还没有设备</h3></view><p class="note">先回第 2 步搭台账，把设备建成占位。</p><button class="ghost" @click="emit('navigate', 'tree')">回第 2 步 →</button>
     </view>
     <template v-else>

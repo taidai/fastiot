@@ -56,6 +56,7 @@ type Handler struct {
 	generatedScreens   *genscreen.Store
 	packages           atomic.Pointer[industry.Registry]
 	industryMu         sync.RWMutex // activation is exclusive with engineering/control mutations
+	engineeringMu      sync.RWMutex // publication/inspection shares one HTTP configuration epoch
 
 	siteGoalMu    sync.Mutex
 	siteGoalCache map[string]siteGoalEntry
@@ -320,6 +321,26 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.generatedScreenFrame(w, r, frameParts[1])
 		return
 	}
+	// ponytail: one engineering epoch per instance; split by project only if
+	// measured configuration throughput requires it. Runtime commands/feedback
+	// must not wait behind this lock. Authenticate within the configuration epoch
+	// so a concurrent account edit cannot leave publication using stale grants.
+	configurationMutation := false
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		requirement, _ := authz.Required(r)
+		configurationMutation = requirement.AdminOnly
+		switch requirement.Action {
+		case ActionConfigure, ActionDelete, ActionRulePublish, ActionVirtualInputApply, ActionCalculationApply, ActionAccountManage, ActionSiteSettings:
+			configurationMutation = true
+		}
+	}
+	if configurationMutation {
+		h.engineeringMu.Lock()
+		defer h.engineeringMu.Unlock()
+	} else if strings.HasPrefix(path, "delivery/") || strings.HasPrefix(path, "projects/") || path == "projects" {
+		h.engineeringMu.RLock()
+		defer h.engineeringMu.RUnlock()
+	}
 	identity, ok := h.authenticate(w, r)
 	if !ok {
 		return
@@ -383,7 +404,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	parts := strings.Split(path, "/")
 	physicalConfiguration := parts[0] == "modbus" && (len(parts) == 1 || r.Method == http.MethodPut || (len(parts) > 2 && parts[2] == "io") || (len(parts) == 4 && parts[2] == "units" && parts[3] == "apply"))
-	alarmConfiguration := physicalConfiguration || parts[0] == "alarm-types" || parts[0] == "templates" || (parts[0] == "nodes" && (len(parts) < 3 || parts[2] == "move")) || parts[0] == "projects"
+	alarmConfiguration := physicalConfiguration || parts[0] == "alarm-types" || parts[0] == "templates" || (parts[0] == "nodes" && (len(parts) < 3 || parts[2] == "move")) || (parts[0] == "projects" && path != "projects/publish")
 	if r.Method != http.MethodGet && (alarmConfiguration || parts[0] == "nodes" || parts[0] == "rules" || strings.HasPrefix(path, "ems/screen/")) {
 		h.virtualInputMu.Lock()
 		defer h.virtualInputMu.Unlock()
@@ -464,7 +485,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "projects/sources" && r.Method == http.MethodGet:
 		h.reuseSourcesHandler(w, identity)
 	case path == "projects/export" && r.Method == http.MethodGet:
-		h.exportProjectHandler(w, identity, r.URL.Query().Get("site"))
+		h.exportProjectHandler(w, identity, r.URL.Query().Get("site"), r.URL.Query().Get("version"))
 	case path == "projects/import" && r.Method == http.MethodPost:
 		h.importProjectHandler(w, r, identity)
 	case path == "projects/reuse/preview" && r.Method == http.MethodGet:
@@ -480,7 +501,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !decodeJSON(w, r, &req) {
 			return
 		}
-		h.publishHandler(w, identity, req.Site, req.Note, req.Confirm)
+		h.publishHandler(w, identity, req.Site, req.Note, req.Confirm, req.ExpectedFingerprint)
 	case path == "projects/versions" && r.Method == http.MethodGet:
 		h.versionsHandler(w, identity, r.URL.Query().Get("site"))
 	case path == "projects/rollback" && r.Method == http.MethodPost:

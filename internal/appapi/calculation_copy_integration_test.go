@@ -62,11 +62,7 @@ func TestCalculationProjectCopyRemapsDraftReferences(t *testing.T) {
 		t.Fatal(body)
 	}
 	create("external", calculation.Definition{Operator: "add", Inputs: []string{a, outside.ID}, Kind: "number", Unit: "kW"})
-	var version versionSummary
-	status, body = call(t, http.MethodPost, base+"/projects/publish", token, publishRequest{Site: site, Note: "isolated configuration fixture, not hardware acceptance", Confirm: true}, &version)
-	if status != 200 {
-		t.Fatalf("publish fixture configuration: %d %s", status, body)
-	}
+	version := freezeRecoveryBaseline(t, h, Identity{UserID: "fixture", Anchors: []string{root}}, site, "incomplete copy fixture; not deliverable")
 	writes, err := h.nc.SubscribeSync(siotclient.SubjectNodePoints("*") + "." + calculationDocument + ".>")
 	if err != nil {
 		t.Fatal(err)

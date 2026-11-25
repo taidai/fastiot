@@ -134,10 +134,13 @@ func TestPackageContentCounts(t *testing.T) {
 		{Ref: "n5", Type: NodeTypeEnergyUnit, Parent: "n1", Points: data.Points{
 			data.NewPointString(capabilityRulePoint, "", `{"id":"capability"}`),
 		}},
+		{Ref: "n6", Type: calculationType, Parent: "n1"},
+		{Ref: "n7", Type: virtualInputType, Parent: "n1"},
+		{Ref: "n8", Type: "area", Parent: "n1", Points: data.Points{data.NewPointString(aggregatePoint, "", `{}`)}},
 	}
 	points, strategies := packageContentCounts(nodes)
-	if points != 1 || strategies != 3 {
-		t.Fatalf("counts = %d points, %d strategies; want 1 and 3", points, strategies)
+	if points != 4 || strategies != 3 {
+		t.Fatalf("counts = %d points, %d strategies; want 4 and 3", points, strategies)
 	}
 }
 

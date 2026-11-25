@@ -77,21 +77,26 @@ type packageScreen struct {
 }
 
 type projectPackage struct {
-	Format        string              `json:"format"`
-	FormatVersion int                 `json:"format_version"`
-	ID            string              `json:"id"`
-	Name          string              `json:"name"`
-	Version       int                 `json:"version"`
-	SourceVersion string              `json:"source_version,omitempty"`
-	CreatedAt     time.Time           `json:"created_at"`
-	Operator      string              `json:"operator"`
-	Dependencies  []packageDependency `json:"dependencies"`
-	Nodes         []packageNode       `json:"nodes"`
-	PointCount    int                 `json:"point_count"`
-	StrategyCount int                 `json:"strategy_count"`
-	Screens       []packageScreen     `json:"screens"`
-	Stripped      []packageStrip      `json:"stripped"`
-	Warnings      []string            `json:"warnings"`
+	Format            string              `json:"format"`
+	FormatVersion     int                 `json:"format_version"`
+	ID                string              `json:"id"`
+	Name              string              `json:"name"`
+	Version           int                 `json:"version"`
+	SourceVersion     string              `json:"source_version,omitempty"`
+	SourceFingerprint string              `json:"source_fingerprint,omitempty"`
+	Deliverable       bool                `json:"deliverable"`
+	Integrity         string              `json:"integrity,omitempty"`
+	Manifest          map[string]string   `json:"manifest,omitempty"`
+	ScreenCount       int                 `json:"screen_count"`
+	CreatedAt         time.Time           `json:"created_at"`
+	Operator          string              `json:"operator"`
+	Dependencies      []packageDependency `json:"dependencies"`
+	Nodes             []packageNode       `json:"nodes"`
+	PointCount        int                 `json:"point_count"`
+	StrategyCount     int                 `json:"strategy_count"`
+	Screens           []packageScreen     `json:"screens"`
+	Stripped          []packageStrip      `json:"stripped"`
+	Warnings          []string            `json:"warnings"`
 }
 
 type importProjectRequest struct {
@@ -120,16 +125,23 @@ var packageRuntimePoints = map[string]bool{
 	PointTypeActualPower: true, PointTypePVAvailableKW: true, PointTypePVLimitKW: true,
 	PointTypePVForecastKW: true, PointTypeEVMaxLoadKW: true, PointTypeEVCurtailableKW: true,
 	PointTypeEVOnlineRatio: true,
+	"valueSet":             true, "ruleAccess": true, "easyemsAllocHistory": true,
+	"businessId": true, "easyemsInput": true, "easyemsDerivedObservation": true, "ruleExecutionFact": true,
+}
+
+func packageSecretKey(key string) bool {
+	key = strings.ToLower(strings.NewReplacer("-", "", "_", "", " ", "").Replace(key))
+	return isSecretPoint(key) || key == "authorization" || key == "cookie" || key == "setcookie"
 }
 
 func packageStripReason(node data.NodeEdge, p data.Point) string {
 	switch {
-	case isSecretPoint(p.Type):
+	case packageSecretKey(p.Type):
 		return "凭据"
 	case reuseRuntimePoints[p.Type]:
 		return "运行状态"
 	case packageRuntimePoints[p.Type]:
-		return "运行目标"
+		return "实例身份、授权或运行数据"
 	case node.Type == data.NodeTypeModbus && reuseConnectionPoints[p.Type]:
 		return "连接地址"
 	case node.Type == "decisionTable" && p.Type == "enabled":
@@ -147,6 +159,18 @@ func (pkg projectPackage) validate() error {
 	}
 	if pkg.FormatVersion != projectPackageFormatVersion {
 		return fmt.Errorf("unsupported_package_version:%d", pkg.FormatVersion)
+	}
+	if pkg.Deliverable || pkg.Integrity != "" {
+		if err := pkg.verifyIntegrity(); err != nil {
+			return err
+		}
+		if pkg.Deliverable && (pkg.SourceVersion == "" || len(pkg.SourceFingerprint) != 64) {
+			return fmt.Errorf("package_source_fingerprint_missing")
+		}
+		points, strategies := packageContentCounts(pkg.Nodes)
+		if points != pkg.PointCount || strategies != pkg.StrategyCount || packageScreenCount(pkg.Nodes, pkg.Screens) != pkg.ScreenCount {
+			return fmt.Errorf("package_counts_mismatch")
+		}
 	}
 	if len(pkg.Nodes) == 0 {
 		return fmt.Errorf("invalid_package_structure:empty")
@@ -183,6 +207,39 @@ func (pkg projectPackage) validate() error {
 			sites++
 		}
 	}
+	for _, node := range pkg.Nodes {
+		for _, point := range node.Points {
+			if point.Tombstone%2 != 0 {
+				continue
+			}
+			if point.Type == generatedScreenDraftType {
+				carried := false
+				for _, screen := range pkg.Screens {
+					carried = carried || screen.Node == node.Ref
+				}
+				if !carried {
+					return fmt.Errorf("missing_screen:%s", node.Ref)
+				}
+				continue // only the validated screens entry is authoritative on import
+			}
+			if packageJSONDefinition(data.NodeEdge{Type: node.Type}, point) && (!json.Valid([]byte(point.Txt())) || point.Txt() == "null") {
+				return fmt.Errorf("invalid_package_definition:%s", point.Type)
+			}
+			if pkg.Deliverable && packageStripReason(data.NodeEdge{Type: node.Type}, point) != "" {
+				return fmt.Errorf("package_contains_runtime_or_secret")
+			}
+			if structuredPackagePoint(point.Type) {
+				if _, err := mapPackageReferences(point, func(id string) string { return id }); err != nil {
+					return err
+				}
+			}
+			for _, ref := range packageReferences(data.NodeEdge{Type: node.Type}, point) {
+				if !refs[ref] {
+					return fmt.Errorf("invalid_package_structure:missing_reference")
+				}
+			}
+		}
+	}
 	if sites != 1 {
 		return fmt.Errorf("invalid_package_structure:site_root")
 	}
@@ -208,6 +265,17 @@ func (pkg projectPackage) validate() error {
 			if token == "" || !refs[ref] {
 				return fmt.Errorf("missing_screen_binding:%s", screen.Node)
 			}
+		}
+		for _, binding := range genscreen.Parse(screen.Source).FindBindings() {
+			if binding.Declared && screen.Bindings[binding.ID] == "" {
+				return fmt.Errorf("missing_screen_binding:%s", screen.Node)
+			}
+		}
+		if screen.Build != genscreen.BuildFor(screen.Source) {
+			return fmt.Errorf("screen_build_mismatch:%s", screen.Node)
+		}
+		if screen.Artifact != genscreen.Fingerprint(screen.Source) {
+			return fmt.Errorf("screen_artifact_mismatch:%s", screen.Node)
 		}
 	}
 	if _, err := orderPackageRefs(pkg.Nodes); err != nil {
@@ -262,14 +330,44 @@ func orderPackageRefs(nodes []packageNode) ([]string, error) {
 // packageReferences 列出一个点指向的节点 ID；导出据此把通道、规则等接入层
 // 对象一起收进项目包。
 func packageReferences(node data.NodeEdge, p data.Point) []string {
+	if p.Type == generatedScreenDraftType {
+		var draft struct {
+			Source string `json:"source"`
+		}
+		if json.Unmarshal([]byte(p.Txt()), &draft) != nil {
+			return nil
+		}
+		var refs []string
+		for _, binding := range genscreen.Parse(draft.Source).FindBindings() {
+			if binding.Declared && binding.ID != "" {
+				refs = append(refs, binding.ID)
+			}
+		}
+		return refs
+	}
+	if structuredPackagePoint(p.Type) {
+		var refs []string
+		_, _ = mapPackageReferences(p, func(id string) string {
+			if id != "" {
+				refs = append(refs, id)
+			}
+			return id
+		})
+		return refs
+	}
 	if node.Type == data.NodeTypeModbus && p.Type == unitModelPoint {
 		var model unitModelConfig
 		if json.Unmarshal([]byte(p.Txt()), &model) != nil {
 			return nil
 		}
-		refs := []string{model.BusinessNodeID}
+		refs := []string{}
+		if model.BusinessNodeID != "" {
+			refs = append(refs, model.BusinessNodeID)
+		}
 		for _, id := range model.PointMap {
-			refs = append(refs, id)
+			if id != "" {
+				refs = append(refs, id)
+			}
 		}
 		return refs
 	}
@@ -362,6 +460,7 @@ func packageReferences(node data.NodeEdge, p data.Point) []string {
 		for _, target := range document.Bindings.Actions {
 			refs = append(refs, target.NodeID)
 		}
+		mapRuleReadbacks(&document, func(id string) string { refs = append(refs, id); return id })
 	case stateMachineDocumentPoint:
 		var document decision.StateMachineDocument
 		if json.Unmarshal([]byte(p.Txt()), &document) != nil {
@@ -378,9 +477,89 @@ func packageReferences(node data.NodeEdge, p data.Point) []string {
 	return out
 }
 
+func mapRuleReadbacks(document *decision.Document, mapID func(string) string) {
+	mapActions := func(actions []decision.Action) {
+		for i := range actions {
+			if actions[i].Readback != nil && actions[i].Readback.Target.NodeID != "" {
+				actions[i].Readback.Target.NodeID = mapID(actions[i].Readback.Target.NodeID)
+			}
+		}
+	}
+	for i := range document.Table.Rows {
+		mapActions(document.Table.Rows[i].Actions)
+	}
+	for i := range document.Scenarios {
+		mapActions(document.Scenarios[i].ExpectActions)
+	}
+}
+
+// Structured definitions keep their schema while every identity-bearing field
+// is visited by the same mapper for collection, validation and import rewriting.
+func packageJSONDefinition(node data.NodeEdge, point data.Point) bool {
+	if structuredPackagePoint(point.Type) {
+		return true
+	}
+	switch point.Type {
+	case PointTypePCCFeedback, capabilityInputsPoint, forecastInputsPoint, capabilityRulePoint, capabilityAllocatorPoint, PointTypeGroupMembers, aggregatePoint, calculationDocument, virtualInputDocument, generatedScreenDraftType:
+		return true
+	case unitModelPoint:
+		return node.Type == data.NodeTypeModbus
+	case "draft", "applied":
+		return node.Type == "decisionTable"
+	case stateMachineDocumentPoint:
+		return node.Type == stateMachineType
+	}
+	return false
+}
+
+func structuredPackagePoint(typ string) bool {
+	switch typ {
+	case screenPointType, dailyStatsPoint, "easyemsUnitMembers", PointTypePointMap, "easyemsAllocator", "easyemsSafety":
+		return true
+	}
+	return false
+}
+
+func mapPackageReferences(p data.Point, mapID func(string) string) (data.Point, error) {
+	var document any
+	if err := json.Unmarshal([]byte(p.Txt()), &document); err != nil {
+		return p, fmt.Errorf("invalid_package_definition:%s", p.Type)
+	}
+	var visit func(any, string) any
+	visit = func(value any, key string) any {
+		switch v := value.(type) {
+		case map[string]any:
+			for name, child := range v {
+				v[name] = visit(child, name)
+			}
+		case []any:
+			for i, child := range v {
+				v[i] = visit(child, key)
+			}
+		case string:
+			if p.Type == PointTypePointMap || key == "point_id" || key == "point_ids" || key == "node_id" || key == "communication_point_id" || p.Type == screenPointType && key == "layer" {
+				if v != "" {
+					return mapID(v)
+				}
+			}
+		}
+		return value
+	}
+	document = visit(document, "")
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		return p, err
+	}
+	return data.NewPointString(p.Type, p.Key, string(encoded)), nil
+}
+
 // packagePoints 把节点配置写成包内点：剥离现场绑定，引用改写成包内 ref。
 // 包外引用会被移除并在 warnings 里说明，绝不留下旧 ID 冒充可用。
 func packagePoints(node data.NodeEdge, idMap map[string]string, strips *[]packageStrip, warnings *[]string) data.Points {
+	label := idMap[node.ID]
+	if label == "" {
+		label = node.Type
+	}
 	points := make(data.Points, 0, len(node.Points))
 	for _, p := range node.Points {
 		if p.Tombstone%2 != 0 {
@@ -392,7 +571,7 @@ func packagePoints(node data.NodeEdge, idMap map[string]string, strips *[]packag
 		}
 		if reason := packageStripReason(node, p); reason != "" {
 			if strips != nil {
-				*strips = append(*strips, packageStrip{Node: nodeName(node), Point: p.Type, Reason: reason})
+				*strips = append(*strips, packageStrip{Node: label, Point: p.Type, Reason: reason})
 			}
 			continue
 		}
@@ -402,38 +581,54 @@ func packagePoints(node data.NodeEdge, idMap map[string]string, strips *[]packag
 				var model unitModelConfig
 				if json.Unmarshal([]byte(p.Txt()), &model) == nil &&
 					(model.Verified || model.Verifier != "" || model.VerifiedAt != "" || model.Verification != "" || model.DeviceSerial != "") {
-					*strips = append(*strips, packageStrip{Node: nodeName(node), Point: unitModelPoint, Reason: "现场验收信息"})
+					*strips = append(*strips, packageStrip{Node: label, Point: unitModelPoint, Reason: "现场验收信息"})
 				}
 			case p.Type == capabilityRulePoint:
 				var rule decision.CapabilityRule
 				if json.Unmarshal([]byte(p.Txt()), &rule) == nil && rule.State != decision.RuleDraft {
-					*strips = append(*strips, packageStrip{Node: nodeName(node), Point: capabilityRulePoint, Reason: "控制启动"})
+					*strips = append(*strips, packageStrip{Node: label, Point: capabilityRulePoint, Reason: "控制启动"})
 				}
 			}
 		}
 		rewritten, keep, unresolved := rewritePackagePoint(node, p, idMap)
 		if len(unresolved) > 0 && warnings != nil {
-			addPackageWarning(warnings, fmt.Sprintf("「%s」引用的对象不在项目包内，导入后需重新绑定", nodeName(node)))
+			addPackageWarning(warnings, fmt.Sprintf("「%s」的现场引用需在目标实例重新绑定；通知接收账号须显式选择，不继承权限", label))
 		}
 		if !keep {
 			continue
 		}
 		rewritten.Time = time.Time{}
 		rewritten.Origin = ""
-		points = append(points, *rewritten)
+		points = append(points, packageWirePoint(*rewritten))
 	}
 	return points
+}
+
+func packageScreenCount(nodes []packageNode, screens []packageScreen) int {
+	count := len(screens)
+	for _, node := range nodes {
+		for _, point := range node.Points {
+			if point.Type == screenPointType && point.Tombstone%2 == 0 {
+				count++
+				break
+			}
+		}
+	}
+	return count
 }
 
 func packageContentCounts(nodes []packageNode) (points, strategies int) {
 	for _, node := range nodes {
 		switch node.Type {
-		case data.NodeTypeModbusIO, data.NodeTypeVariable, NodeTypeOpcuaPoint:
+		case data.NodeTypeModbusIO, data.NodeTypeVariable, NodeTypeOpcuaPoint, calculationType, virtualInputType:
 			points++
 		case "decisionTable", "stateMachine":
 			strategies++
 		}
 		for _, point := range node.Points {
+			if point.Type == aggregatePoint && point.Tombstone%2 == 0 {
+				points++
+			}
 			if point.Type == capabilityRulePoint && point.Tombstone%2 == 0 {
 				strategies++
 			}
@@ -452,6 +647,23 @@ func addPackageWarning(warnings *[]string, message string) {
 }
 
 func rewritePackagePoint(node data.NodeEdge, p data.Point, idMap map[string]string) (*data.Point, bool, []string) {
+	if structuredPackagePoint(p.Type) {
+		var unresolved []string
+		rewritten, err := mapPackageReferences(p, func(id string) string {
+			if id == "" {
+				return ""
+			}
+			if mapped, ok := idMap[id]; ok {
+				return mapped
+			}
+			unresolved = append(unresolved, id)
+			return ""
+		})
+		if err != nil {
+			return &p, false, []string{"invalid_document"}
+		}
+		return &rewritten, true, unresolved
+	}
 	point := p
 	remap := func(id string) (string, bool) {
 		if id == "" {
@@ -733,6 +945,14 @@ func rewritePackagePoint(node data.NodeEdge, p data.Point, idMap map[string]stri
 		}
 		document.Bindings.Points = rewriteTargets(document.Bindings.Points)
 		document.Bindings.Actions = rewriteTargets(document.Bindings.Actions)
+		mapRuleReadbacks(&document, func(id string) string {
+			if mapped, ok := idMap[id]; ok {
+				return mapped
+			}
+			unresolved = append(unresolved, id)
+			return ""
+		})
+		document.Simulation = nil
 		unresolved = append(unresolved, document.ClearNotificationRecipients()...)
 		encoded, _ := json.Marshal(document)
 		rewritten := data.NewPointString(p.Type, p.Key, string(encoded))
@@ -776,7 +996,7 @@ func (h *Handler) collectProjectPackageNodes(siteID string) ([]data.NodeEdge, []
 	included := make(map[string]bool, len(subtree))
 	for _, node := range subtree {
 		if skipped[node.ID] {
-			strips = append(strips, packageStrip{Node: nodeName(node), Point: node.Type, Reason: "凭据与账号"})
+			strips = append(strips, packageStrip{Node: node.Type, Point: node.Type, Reason: "凭据与账号"})
 			continue
 		}
 		index[node.ID] = node
@@ -822,6 +1042,23 @@ func (h *Handler) collectProjectPackageNodes(siteID string) ([]data.NodeEdge, []
 	}
 	for changed := true; changed; {
 		changed = false
+		// Access bindings live on the channel, not the business device. Include
+		// their definitions even when no control/setpoint reference exists.
+		for channelID, members := range channelMembers {
+			for _, member := range members {
+				for _, point := range member.Points {
+					if point.Type != unitModelPoint || point.Tombstone%2 != 0 {
+						continue
+					}
+					var model unitModelConfig
+					if json.Unmarshal([]byte(point.Txt()), &model) == nil && included[model.BusinessNodeID] {
+						if includeChannel(channelID) {
+							changed = true
+						}
+					}
+				}
+			}
+		}
 		for id := range included {
 			node, ok := index[id]
 			if !ok {
@@ -941,7 +1178,7 @@ func screenDraftPoint(points data.Points) (data.Point, bool) {
 // screen. A draft that cannot be represented, or that carries a credential, is
 // refused: the package never ships a page the target could not rebuild or must
 // not copy.
-func collectProjectScreens(nodes []data.NodeEdge, idMap map[string]string, warnings *[]string) ([]packageScreen, error) {
+func collectProjectScreens(nodes []data.NodeEdge, idMap map[string]string) ([]packageScreen, error) {
 	screens := make([]packageScreen, 0, 1)
 	for _, node := range nodes {
 		point, ok := screenDraftPoint(node.Points)
@@ -959,7 +1196,7 @@ func collectProjectScreens(nodes []data.NodeEdge, idMap map[string]string, warni
 		}
 		source, bindings, unresolved := packageScreenBindings(genscreen.Parse(draft.Source).FindBindings(), draft.Source, idMap)
 		if len(unresolved) > 0 {
-			addPackageWarning(warnings, fmt.Sprintf("「%s」的画面绑定了项目包外的点位，导入后需重新绑定", nodeName(node)))
+			return nil, fmt.Errorf("missing_screen_binding:%s", idMap[node.ID])
 		}
 		screens = append(screens, packageScreen{
 			Node: idMap[node.ID], Source: source, Bindings: bindings,
@@ -1019,8 +1256,26 @@ func (h *Handler) exportProjectPackage(identity Identity, siteID string) (projec
 	if err != nil {
 		return projectPackage{}, err
 	}
+	pkg, err := h.packageFromNodes(identity, nodes, strips, warnings)
+	if err != nil {
+		return projectPackage{}, err
+	}
+	frozen, err := h.snapshotNodes(identity, siteID, "", nodes)
+	if err != nil {
+		return projectPackage{}, err
+	}
+	pkg.SourceFingerprint = engineeringFingerprint(frozen.Nodes, pkg.Dependencies)
+	pkg.seal()
+	return pkg, pkg.validate()
+}
+
+// The caller owns the captured node set; package construction never rereads it.
+func (h *Handler) packageFromNodes(identity Identity, nodes []data.NodeEdge, strips []packageStrip, warnings []string) (projectPackage, error) {
 	idMap := make(map[string]string, len(nodes))
 	for i, node := range nodes {
+		if !h.allows(identity, node.ID) {
+			return projectPackage{}, fmt.Errorf("source_forbidden")
+		}
 		idMap[node.ID] = fmt.Sprintf("n%d", i+1)
 	}
 	operator := identity.Email
@@ -1032,7 +1287,10 @@ func (h *Handler) exportProjectPackage(identity Identity, siteID string) (projec
 		ID: "pp-" + data.NewID(), Name: nodeName(nodes[0]), CreatedAt: time.Now().UTC(),
 		Operator: operator, Dependencies: []packageDependency{}, Stripped: strips, Warnings: warnings,
 	}
-	screens, err := collectProjectScreens(nodes, idMap, &pkg.Warnings)
+	if err := h.validatePackageSource(identity, nodes, idMap); err != nil {
+		return projectPackage{}, err
+	}
+	screens, err := collectProjectScreens(nodes, idMap)
 	if err != nil {
 		return projectPackage{}, err
 	}
@@ -1046,6 +1304,11 @@ func (h *Handler) exportProjectPackage(identity Identity, siteID string) (projec
 			parent = idMap[node.Parent]
 		}
 		pkg.Nodes = append(pkg.Nodes, packageNode{Ref: idMap[node.ID], Type: node.Type, Parent: parent, Points: points})
+		for _, point := range points {
+			if point.Type == PointTypeProfileID && point.Txt() != "" {
+				profiles[point.Txt()] = true
+			}
+		}
 		if node.Type != data.NodeTypeModbus {
 			continue
 		}
@@ -1085,11 +1348,9 @@ func (h *Handler) exportProjectPackage(identity Identity, siteID string) (projec
 		}
 		return pkg.Dependencies[i].ID < pkg.Dependencies[j].ID
 	})
-	versions, err := h.listVersions(siteID)
-	if err == nil && len(versions) > 0 {
-		pkg.SourceVersion = versions[0].ID
-	}
-	pkg.Version = len(versions) + 1
+	// A draft export is never labelled as the latest published version.
+	pkg.Version = 1
+	pkg.ScreenCount = packageScreenCount(pkg.Nodes, pkg.Screens)
 	return pkg, nil
 }
 
@@ -1378,8 +1639,14 @@ func (h *Handler) importProjectPackage(identity Identity, pkg projectPackage, pa
 	return result, nil
 }
 
-func (h *Handler) exportProjectHandler(w http.ResponseWriter, identity Identity, siteID string) {
-	pkg, err := h.exportProjectPackage(identity, siteID)
+func (h *Handler) exportProjectHandler(w http.ResponseWriter, identity Identity, siteID string, versionID ...string) {
+	var pkg projectPackage
+	var err error
+	if len(versionID) > 0 && versionID[0] != "" {
+		pkg, err = h.frozenProjectPackage(identity, siteID, versionID[0])
+	} else {
+		pkg, err = h.exportProjectPackage(identity, siteID)
+	}
 	if err != nil {
 		status := http.StatusBadRequest
 		if err.Error() == "source_forbidden" {

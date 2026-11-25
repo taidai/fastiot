@@ -37,6 +37,13 @@ test("project package uses prototype tables and actions without demo controls", 
   assert.match(page, /模拟依赖不匹配/)
 })
 
+test("blocked publish offers repair rather than a confirmation bypass", () => {
+  for (const surface of [page, read("../design/DeliveryStep.vue")]) {
+    assert.equal(/publish\(true\)|预检未通过，仍要发布/.test(surface), false, "ordinary publish must not offer bypass")
+    assert.match(surface, /修复后重新预检/)
+  }
+})
+
 test("import guide keeps all four prototype stages and only marks factual progress", () => {
   assert.match(page, /\{\{ importResult \? "跨实例导入" : "跨实例交付" \}\}/)
   assert.match(page, /在干净实例导入，再重新绑定现场/)
