@@ -35,6 +35,11 @@ func (d Document) RuleTable() (rule.Table, error) {
 			Hold:     time.Duration(row.HoldMS) * time.Millisecond,
 			Cooldown: time.Duration(row.CooldownMS) * time.Millisecond,
 		})
+		// Later authored rows are unreachable after an unconditional first match.
+		// Keep them in the document/traces, not in the runtime's default-last table.
+		if len(row.Conditions) == 0 {
+			break
+		}
 	}
 	return rule.Table{ID: "decision", Version: 1, Rows: rows}, nil
 }
@@ -87,12 +92,13 @@ func commandSafety(now time.Time, spec *safety.Output, value float64, samples ma
 // targetLimiter enforces product safety and manual takeover before an action
 // leaves the engine.
 type targetLimiter struct {
-	nc      *nats.Conn
-	parent  string
-	actions map[string]Target
-	manual  func(actionID string) bool
-	safety  map[string]safety.Output
-	values  *map[string]signal.Sample
+	nc       *nats.Conn
+	parent   string
+	actions  map[string]Target
+	manual   func(actionID string) bool
+	safety   map[string]safety.Output
+	values   *map[string]signal.Sample
+	validate func(Target, bool, *float64) error
 }
 
 func (l targetLimiter) Limit(now time.Time, output string, requested signal.Value) rule.LimitResult {
@@ -107,7 +113,11 @@ func (l targetLimiter) Limit(now time.Time, output string, requested signal.Valu
 		return rule.LimitResult{Blocked: true, Reason: "only numeric setpoints are supported"}
 	}
 	value := requested.Num
-	if err := ValidateTarget(l.nc, l.parent, target, true, &value); err != nil {
+	validate := l.validate
+	if validate == nil {
+		validate = func(t Target, output bool, v *float64) error { return ValidateTarget(l.nc, l.parent, t, output, v) }
+	}
+	if err := validate(target, true, &value); err != nil {
 		return rule.LimitResult{Blocked: true, Reason: err.Error()}
 	}
 	if spec, ok := l.safety[output]; ok {
@@ -129,30 +139,38 @@ func (l targetLimiter) Limit(now time.Time, output string, requested signal.Valu
 
 // CheckInput and CheckAction describe one evaluation for the lastCheck point.
 type CheckInput struct {
-	Input      string    `json:"input"`
-	Value      float64   `json:"value"`
-	Text       string    `json:"text,omitempty"`
-	Kind       string    `json:"kind,omitempty"`
-	Quality    string    `json:"quality"`
-	SourceTime time.Time `json:"source_time"`
+	Target       Target    `json:"target,omitempty"`
+	ReceivedTime time.Time `json:"received_time"`
+	Input        string    `json:"input"`
+	Value        float64   `json:"value"`
+	Text         string    `json:"text,omitempty"`
+	Kind         string    `json:"kind,omitempty"`
+	Quality      string    `json:"quality"`
+	SourceTime   time.Time `json:"source_time"`
 }
 
 type CheckAction struct {
-	Output    string        `json:"output"`
-	Requested float64       `json:"requested"`
-	Applied   float64       `json:"applied"`
-	Blocked   bool          `json:"blocked"`
-	Reason    string        `json:"reason"`
-	Status    string        `json:"status,omitempty"`
-	Shares    []alloc.Share `json:"shares,omitempty"`
+	CommandID    string        `json:"command_id,omitempty"`
+	Confirmation string        `json:"confirmation,omitempty"`
+	Target       Target        `json:"target,omitempty"`
+	Output       string        `json:"output"`
+	Requested    float64       `json:"requested"`
+	Applied      float64       `json:"applied"`
+	Blocked      bool          `json:"blocked"`
+	Reason       string        `json:"reason"`
+	Status       string        `json:"status,omitempty"`
+	Shares       []alloc.Share `json:"shares,omitempty"`
 }
 
 type CheckReport struct {
-	At      time.Time     `json:"at"`
-	Row     string        `json:"row"`
-	State   string        `json:"state"`
-	Inputs  []CheckInput  `json:"inputs"`
-	Actions []CheckAction `json:"actions"`
+	RuleID         string        `json:"rule_id,omitempty"`
+	SourceRevision string        `json:"source_revision,omitempty"`
+	ExecutionID    string        `json:"execution_id,omitempty"`
+	At             time.Time     `json:"at"`
+	Row            string        `json:"row"`
+	State          string        `json:"state"`
+	Inputs         []CheckInput  `json:"inputs"`
+	Actions        []CheckAction `json:"actions"`
 }
 
 func buildCheck(outcome rule.Outcome, now time.Time) CheckReport {
@@ -172,7 +190,7 @@ func buildCheck(outcome rule.Outcome, now time.Time) CheckReport {
 		}
 		report.Inputs = append(report.Inputs, CheckInput{
 			Input: sample.Input, Value: value, Text: text, Kind: sample.Value.Kind.String(),
-			Quality: sample.Quality.String(), SourceTime: sample.SourceTime,
+			Quality: sample.Quality.String(), SourceTime: sample.SourceTime, ReceivedTime: sample.ReceivedTime,
 		})
 	}
 	for _, action := range outcome.Actions {
@@ -281,6 +299,13 @@ func (d Document) Simulate(inputs map[string]float64, texts map[string]string, n
 			trace.State = "no-match"
 			if row.Match == "any" {
 				for _, condition := range row.Conditions {
+					group := conditionGroupInput(row.ID)
+					if condition.Kind == "time" {
+						group = timeWindowInput(row.ID)
+					}
+					if samples[group].Value.Bool {
+						continue
+					}
 					if _, reason := conditionMatches(condition, samples, now); reason != "" {
 						trace.Reasons = append(trace.Reasons, reason)
 					}
@@ -300,7 +325,7 @@ func (d Document) Simulate(inputs map[string]float64, texts map[string]string, n
 			trace.State = result.State
 			trace.Reasons = []string{fmt.Sprintf("held %dms is less than required %dms", heldMS, row.HoldMS)}
 			result.Rows = append(result.Rows, trace)
-			return result, nil
+			return explainUnvisitedRows(result, d.Table.Rows), nil
 		}
 		result.State = string(rule.StateFired)
 		if row.sequenced() {
@@ -320,9 +345,16 @@ func (d Document) Simulate(inputs map[string]float64, texts map[string]string, n
 			}
 		}
 		result.Rows = append(result.Rows, trace)
-		return result, nil
+		return explainUnvisitedRows(result, d.Table.Rows), nil
 	}
 	return result, nil
+}
+
+func explainUnvisitedRows(result SimulationResult, rows []Row) SimulationResult {
+	for _, row := range rows[len(result.Rows):] {
+		result.Rows = append(result.Rows, SimulationRow{RowID: row.ID, State: "skipped", RequiredMS: row.HoldMS, Reasons: []string{"earlier row " + result.RowID + " matched; ordered first-match stops evaluation"}})
+	}
+	return result
 }
 
 func joinReasons(reasons []string) string {

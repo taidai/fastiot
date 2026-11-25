@@ -33,6 +33,8 @@ type DecisionTable struct {
 }
 
 type Document struct {
+	Scope    string     `json:"scope,omitempty"`
+	Revision string     `json:"revision,omitempty"`
 	Table    Table      `json:"table"`
 	Bindings BindingSet `json:"bindings"`
 	// Scenarios are saved simulations; the running engine ignores them.
@@ -49,6 +51,8 @@ type BindingSet struct {
 // Target connects a stable business ID to a Simple IoT point. Changing a
 // device brand changes this binding, not the decision table or its IDs.
 type Target struct {
+	CommandID string `json:"command_id,omitempty"`
+	Parameter string `json:"parameter,omitempty"`
 	NodeID    string `json:"node_id"`
 	PointType string `json:"point_type,omitempty"`
 	Key       string `json:"key,omitempty"`
@@ -99,6 +103,7 @@ type Client struct {
 	lastCheckRow  string
 	lastAllocSig  string
 	observations  Observations
+	commands      *RuleCommands
 }
 
 func NewDecisionTableClient(nc *nats.Conn, config DecisionTable) siotclient.Client {
@@ -126,6 +131,7 @@ func (c *Client) Run() error {
 	var active *activeTable
 	stopActive := func() {
 		if active != nil {
+			c.abandonSequence(active)
 			for _, stop := range active.stops {
 				stop()
 			}
@@ -252,6 +258,11 @@ func (c *Client) start() (*activeTable, error) {
 	if err := json.Unmarshal([]byte(c.config.Applied), &document); err != nil {
 		return nil, fmt.Errorf("published table: %w", err)
 	}
+	if c.commands != nil {
+		if err := c.commands.Validate(c.config.ID, document); err != nil {
+			return nil, err
+		}
+	}
 	table := document.Table
 	if err := document.Validate(); err != nil {
 		return nil, err
@@ -301,11 +312,11 @@ func (c *Client) start() (*activeTable, error) {
 			if !ok || target.NodeID == "" {
 				return fail(fmt.Errorf("row %s: action %s is not bound", row.ID, action.ActionID))
 			}
-			if err := ValidateTarget(c.nc, c.config.Parent, target, true, &action.Value); err != nil {
+			if err := c.validateTarget(target, true, &action.Value); err != nil {
 				return fail(fmt.Errorf("action %s: %w", action.ActionID, err))
 			}
 			if action.Readback != nil && action.Readback.Target.NodeID != "" {
-				if err := ValidateTarget(c.nc, c.config.Parent, action.Readback.Target, false, nil); err != nil {
+				if err := c.validateTarget(action.Readback.Target, false, nil); err != nil {
 					return fail(fmt.Errorf("action %s readback: %w", action.ActionID, err))
 				}
 			}
@@ -332,7 +343,7 @@ func (c *Client) start() (*activeTable, error) {
 		}
 		for _, condition := range config.Conditions {
 			pointTarget := Target{NodeID: condition.PointID, PointType: data.PointTypeValue}
-			if err := ValidateTarget(c.nc, c.config.Parent, pointTarget, false, nil); err != nil {
+			if err := c.validateTarget(pointTarget, false, nil); err != nil {
 				return fail(fmt.Errorf("action %s safety point %s: %w", actionID, condition.PointID, err))
 			}
 			requiredPoints[condition.PointID] = pointTarget
@@ -340,7 +351,7 @@ func (c *Client) start() (*activeTable, error) {
 	}
 
 	engine, err := rule.New(ruleTable, nil, targetLimiter{
-		nc: c.nc, parent: c.config.Parent, actions: bindings.Actions,
+		nc: c.nc, parent: c.config.Parent, actions: bindings.Actions, validate: c.validateTarget,
 		manual: func(actionID string) bool { return active.manual[actionID] },
 		safety: safetySpecs, values: &active.values,
 	})
@@ -371,7 +382,7 @@ func (c *Client) start() (*activeTable, error) {
 		if target.NodeID == "" {
 			return fail(fmt.Errorf("point %s: missing node_id", pointID))
 		}
-		if err := ValidateTarget(c.nc, c.config.Parent, target, false, nil); err != nil {
+		if err := c.validateTarget(target, false, nil); err != nil {
 			return fail(fmt.Errorf("point %s: %w", pointID, err))
 		}
 		if target.PointType == "" {
@@ -459,6 +470,16 @@ func (c *Client) evaluate(active *activeTable) error {
 }
 
 func (c *Client) evaluateNow(active *activeTable) error {
+	if c.commands != nil {
+		var document Document
+		if err := json.Unmarshal([]byte(c.config.Applied), &document); err != nil {
+			return err
+		}
+		if err := c.commands.Validate(c.config.ID, document); err != nil {
+			c.abandonSequence(active)
+			return err
+		}
+	}
 	if active.engine == nil {
 		return nil
 	}
@@ -479,6 +500,7 @@ func (c *Client) evaluateNow(active *activeTable) error {
 	rampChanged := false
 	sequenceChanged := false
 	if active.sequence != nil && outcome.MatchedRow != active.sequence.rowID {
+		c.abandonSequence(active)
 		active.sequence = nil
 		sequenceChanged = true
 	}
@@ -488,8 +510,16 @@ func (c *Client) evaluateNow(active *activeTable) error {
 	if outcome.Fired {
 		sequencedRow := false
 		for _, row := range active.table.Rows {
-			if row.ID == outcome.MatchedRow && row.sequenced() {
+			if row.ID == outcome.MatchedRow && (row.sequenced() || c.commands != nil) {
 				active.sequence = newActionSequence(row)
+				if c.commands != nil {
+					id, err := c.reserveExecution(row.ID, now)
+					if err != nil {
+						active.sequence = nil
+						return err
+					}
+					active.sequence.executionID = id
+				}
 				sequencedRow = true
 				sequenceChanged = true
 				clear(active.rampTargets)
@@ -731,7 +761,16 @@ func (c *Client) recordCheck(outcome rule.Outcome, now time.Time, active *active
 	if active.sequence != nil && active.sequence.rowID == outcome.MatchedRow {
 		report.Actions = append([]CheckAction(nil), active.sequence.checks...)
 	}
+	report.RuleID = c.config.ID
+	for i := range report.Inputs {
+		report.Inputs[i].Target = active.bindings.Points[report.Inputs[i].Input]
+	}
+	report.SourceRevision = c.documentRevision()
+	if active.sequence != nil {
+		report.ExecutionID = active.sequence.executionID
+	}
 	for i := range report.Actions {
+		report.Actions[i].Target = active.bindings.Actions[report.Actions[i].Output]
 		if run, ok := active.allocations[report.Actions[i].Output]; ok {
 			report.Actions[i].Shares = run.result.Shares
 			report.Actions[i].Status = run.status
@@ -763,7 +802,30 @@ func (c *Client) recordCheck(outcome rule.Outcome, now time.Time, active *active
 // invalid point simply stays absent.
 func (c *Client) markStale(active *activeTable) []string {
 	var reasons []string
+	var observed map[string]signal.Sample
+	if c.commands != nil && c.observations != nil {
+		observed = c.observations(time.Now())
+	}
 	for pointID, target := range active.bindings.Points {
+		if observed != nil {
+			nodes, err := siotclient.GetNodes(c.nc, "all", target.NodeID, "", false)
+			physical := err == nil && len(nodes) > 0 && (nodes[0].Type == data.NodeTypeModbusIO || nodes[0].Type == "opcuaPoint" || nodes[0].Type == "mqttSub")
+			if physical {
+				sample, present := observed[target.NodeID]
+				if !present {
+					sample.Quality = signal.Uninitialized
+				}
+				sample.Input = pointID
+				active.values[pointID] = sample
+				if present {
+					active.loaded[pointID] = true
+				}
+				if sample.Quality != signal.Good {
+					reasons = append(reasons, "point "+pointID+": "+sample.Quality.String())
+					continue
+				}
+			}
+		}
 		err := validateFreshInput(c.nc, pointID, target)
 		sample, present := active.values[pointID]
 		if err != nil {

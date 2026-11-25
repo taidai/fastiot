@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/simpleiot/simpleiot/data"
 )
 
 // WebSocket 实时推送：/ws 端点每 2 秒推送当前 snapshot（节点树），
@@ -38,7 +39,7 @@ func (h *Handler) serveWS(w http.ResponseWriter, r *http.Request, identity Ident
 		}
 		nodes, err := h.visibleNodes(identity)
 		if err == nil {
-			if err := conn.WriteJSON(map[string]any{"nodes": publicInputNodes(nodes), "at": time.Now().UTC()}); err != nil {
+			if err := conn.WriteJSON(map[string]any{"nodes": data.RedactNodes(h.publicRuleNodes(identity, publicInputNodes(nodes))), "at": time.Now().UTC()}); err != nil {
 				return // 客户端断开
 			}
 		}

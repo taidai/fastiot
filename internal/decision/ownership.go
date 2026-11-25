@@ -17,9 +17,13 @@ type outputTarget struct {
 func normalizeOutput(target Target) outputTarget {
 	pointType := target.PointType
 	if pointType == "" {
-		pointType = "value"
+		pointType = "valueSet"
 	}
-	return outputTarget{nodeID: target.NodeID, pointType: pointType, key: target.Key}
+	key := target.Key
+	if key == "0" {
+		key = ""
+	}
+	return outputTarget{nodeID: target.NodeID, pointType: pointType, key: key}
 }
 
 func outputTargets(document Document) []outputTarget {
@@ -51,11 +55,39 @@ func outputTargets(document Document) []outputTarget {
 // enable and on republish of an already enabled table, so ownership cannot be
 // changed by publishing a new version behind the operator's back.
 func ValidateOutputOwnership(nc *nats.Conn, ruleID string, document Document) error {
+	return ValidateResolvedOutputOwnership(nc, ruleID, document, nil)
+}
+
+// ValidateResolvedOutputOwnership includes the complete declared command write
+// set supplied by the application's Profile resolver, without another evaluator.
+func ValidateResolvedOutputOwnership(nc *nats.Conn, ruleID string, document Document, resolve func(Document) ([]Target, error)) error {
+	targets := func(doc Document) ([]outputTarget, error) {
+		if resolve == nil {
+			return outputTargets(doc), nil
+		}
+		raw, err := resolve(doc)
+		if err != nil {
+			return nil, err
+		}
+		result := []outputTarget{}
+		seen := map[outputTarget]bool{}
+		for _, target := range raw {
+			normalized := normalizeOutput(target)
+			if !seen[normalized] {
+				seen[normalized] = true
+				result = append(result, normalized)
+			}
+		}
+		return result, nil
+	}
 	tables, err := siotclient.GetNodesType[DecisionTable](nc, "all", "all")
 	if err != nil {
 		return fmt.Errorf("cannot verify output ownership")
 	}
-	mine := outputTargets(document)
+	mine, err := targets(document)
+	if err != nil {
+		return err
+	}
 	if len(mine) == 0 {
 		return nil
 	}
@@ -67,7 +99,11 @@ func ValidateOutputOwnership(nc *nats.Conn, ruleID string, document Document) er
 		if json.Unmarshal([]byte(table.Applied), &other) != nil {
 			continue
 		}
-		for _, owned := range outputTargets(other) {
+		otherTargets, err := targets(other)
+		if err != nil {
+			return fmt.Errorf("cannot resolve active output ownership: %w", err)
+		}
+		for _, owned := range otherTargets {
 			for _, target := range mine {
 				if owned == target {
 					name := table.Description

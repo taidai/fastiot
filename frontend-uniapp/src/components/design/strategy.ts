@@ -1,7 +1,13 @@
-import type { Node, Point } from "../../types/api"
+import type { Node, Point, StateValue } from "../../types/api"
 
 function activePoint(node: Node, type: string): Point | undefined {
   return node.points.find(item => item.type === type && (item.tombstone || 0) % 2 === 0)
+}
+
+export type RuleAccess = { draft_restricted?: boolean; applied_restricted?: boolean; history_restricted?: boolean; trace_restricted?: boolean; diagnostics_restricted?: boolean }
+export function getRuleAccess(node?: Node | null): RuleAccess {
+  try { return JSON.parse(node ? activePoint(node, 'ruleAccess')?.text || '{}' : '{}') }
+  catch { return { draft_restricted: true, applied_restricted: true } }
 }
 
 export type Condition = {
@@ -29,8 +35,10 @@ export type Row = {
   hold_ms?: number
   cooldown_ms?: number
 }
-export type Target = { node_id: string; point_type?: string; key?: string }
+export type Target = { node_id: string; point_type?: string; key?: string; command_id?: string; parameter?: string }
 export type DecisionDocument = {
+  scope?: "self" | "descendants"
+  revision?: string
   table: { rows: Row[] }
   bindings: { points: Record<string, Target>; actions: Record<string, Target> }
   scenarios?: unknown[]
@@ -70,6 +78,22 @@ export function parseDocument(text?: string): DecisionDocument {
       actions: { ...(raw.bindings?.actions || {}) },
     },
   }
+}
+
+// Only traverse the authorized snapshot. A hidden ancestor is a hard boundary.
+export function rulesForNode(rules: Node[], nodes: Node[], nodeID: string): Node[] {
+  const ancestors = new Set<string>()
+  let current = nodes.find(node => node.id === nodeID)
+  while (current && !ancestors.has(current.id)) {
+    ancestors.add(current.id)
+    current = nodes.find(node => node.id === current!.parent)
+  }
+  return rules.filter(rule => {
+    if (!ancestors.has(rule.parent)) return false
+    if (rule.parent === nodeID) return true
+    try { return parseDocument(activePoint(rule, "applied")?.text).scope === "descendants" }
+    catch { return false }
+  })
 }
 
 export function businessId(node: Node) {
@@ -113,12 +137,52 @@ export function withBindings(document: DecisionDocument, nodes: Node[]): Decisio
   return result
 }
 
+export function referencedDocument(document: DecisionDocument): DecisionDocument {
+  const points = new Set(document.table.rows.flatMap(row => row.conditions.filter(c => c.kind !== "time").map(c => c.point_id)))
+  const actions = new Set(document.table.rows.flatMap(row => row.actions.map(a => a.action_id)))
+  return { ...document, bindings: {
+    points: Object.fromEntries(Object.entries(document.bindings.points).filter(([id]) => points.has(id))),
+    actions: Object.fromEntries(Object.entries(document.bindings.actions).filter(([id]) => actions.has(id))),
+  } }
+}
+
 export function moveRows<T>(rows: T[], index: number, direction: -1 | 1): T[] {
   const target = index + direction
   if (target < 0 || target >= rows.length) return [...rows]
   const result = [...rows]
   ;[result[index], result[target]] = [result[target], result[index]]
   return result
+}
+
+export function ruleWeekdayMask(event: unknown): number {
+  const values = (event as { detail?: { value?: unknown } }).detail?.value
+  if (!Array.isArray(values) || values.some(value => !/^[0-6]$/.test(String(value)))) throw new Error('星期选择无效')
+  return values.reduce((mask, value) => mask | (1 << Number(value)), 0)
+}
+
+export function ruleInputValue(event: unknown): string {
+  const input = event as { detail?: { value?: unknown }; target?: { value?: unknown } }
+  return String(input.detail?.value ?? input.target?.value ?? '')
+}
+
+export function ruleInputNumber(event: unknown): number {
+  const raw = ruleInputValue(event).trim()
+  const value = Number(raw)
+  return raw && Number.isFinite(value) ? value : Number.NaN
+}
+
+export function liveSimulationInputs(document: DecisionDocument, values: StateValue[]) {
+  const inputs: Record<string, number> = {}
+  const textInputs: Record<string, string> = {}
+  for (const [id, target] of Object.entries(document.bindings.points)) {
+    const sample = values.find(value => value.point_id === target.node_id)
+    if (!sample || sample.quality !== 'good' || !sample.source_time) continue
+    if (sample.expires_at && Date.parse(sample.expires_at) <= Date.now()) continue
+    if (sample.value.kind === 'number' && Number.isFinite(sample.value.number)) inputs[id] = sample.value.number!
+    else if (sample.value.kind === 'bool' && sample.value.bool !== undefined) inputs[id] = sample.value.bool ? 1 : 0
+    else if (sample.value.kind === 'enum' && sample.value.enum) textInputs[id] = sample.value.enum
+  }
+  return { inputs, textInputs }
 }
 
 export function createSimulationPayload(
@@ -128,6 +192,7 @@ export function createSimulationPayload(
   at: string,
   heldMS = 0,
 ) {
+  if (!Number.isFinite(heldMS) || heldMS < 0 || Object.values(inputs).some(value => !Number.isFinite(value))) throw new Error('模拟数值无效，不会提交请求')
   const simulationDocument = heldMS > 0 ? { ...document, simulation: { held_ms: heldMS } } : document
   return {
     document: simulationDocument,

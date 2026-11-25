@@ -2,13 +2,13 @@
   <view class="strategy">
     <view class="strategy-head">
       <view class="step-head"><b>第 4 步 · 配策略</b><span>有序、首命中、可模拟；作用范围必须写清楚。</span></view>
-      <span v-if="selectedRule" class="chip" :class="dirty ? 'warn' : 'ok'">{{ dirty ? '有未保存修改' : '草稿已读取' }}</span>
+      <span v-if="selectedRule" class="chip" :class="dirty ? 'warn' : 'ok'">{{ definitionRestricted ? '内容受限' : dirty ? '有未保存修改' : selectedRule.parent !== strategyParent ? '继承发布版本' : '草稿已读取' }}</span>
     </view>
     <section class="card glass step-card">
-    <view class="panel-head"><h3>{{ strategyNodeName }}</h3><span class="tag">{{ strategyNodeKind }}</span><span class="tag">{{ ruleScopeLabel }}</span></view>
+    <view class="panel-head"><h3>{{ strategyNodeName }}</h3><span class="tag">{{ strategyNodeKind }}</span><span class="tag" :title="`${ruleParent} · ${document.revision || ''}`">{{ ruleScopeLabel }}<template v-if="document.revision"> · {{ document.revision.slice(0, 8) }}</template></span></view>
     <view class="acc-grid">
-      <view class="acc-card"><view class="card-title">作用范围</view><p class="note">{{ strategyScopeText }}</p><p class="note">决策表后端固定校验父对象子树，没有“仅本对象”开关；下级可看到继承来源。</p></view>
-      <view class="acc-card machine-workspace"><StateMachinePanel :snapshot="snapshot" :parent="strategyParent" :read-only="readOnly" @refresh="emit('refresh')" /></view>
+      <view class="acc-card"><view class="card-title">作用范围</view><p class="note">{{ strategyScopeText }}</p><p class="note">仅显式声明“含下级”的发布规则可继承；继承规则只读，需回到来源对象修改。</p></view>
+      <view class="acc-card machine-workspace"><StateMachinePanel :snapshot="snapshot" :parent="strategyParent" :read-only="props.readOnly" @refresh="emit('refresh')" /></view>
     </view>
 
     <view v-if="visibleRules.length > 1" class="rule-tabs" aria-label="决策表列表">
@@ -18,10 +18,19 @@
       </button>
     </view>
 
+    <view v-if="!props.readOnly" class="actions">
+      <select aria-label="新规则作用范围" v-model="newScope"><option value="" disabled>选择新规则作用范围</option><option value="self">本对象</option><option value="descendants">含下级</option></select>
+      <button class="ghost" :disabled="!newScope || busy !== '' || dirty" @click="createRule">＋ 本对象决策表</button>
+    </view>
     <view v-if="!visibleRules.length" class="empty">当前作用范围还没有决策表。空数据不以演示规则替代。</view>
 
     <template v-else-if="selectedRule">
       <view class="rule-summary">
+        <label>作用范围
+          <select aria-label="规则作用范围" :value="document.scope || ''" :disabled="readOnly || busy !== ''" @change="document.scope = inputValue($event) as 'self' | 'descendants'; changed()">
+            <option value="" disabled>请选择作用范围</option><option value="self">本对象</option><option value="descendants">含下级</option>
+          </select>
+        </label>
         <view><strong>{{ nameOf(selectedRule) }}</strong><span class="src"> {{ rows.length }} 行 · {{ referencedInputs.length }} 个输入</span></view>
         <view class="chips">
           <span class="chip" :class="published ? 'ok' : ''">{{ published ? '已有发布版本' : '尚未发布' }}</span>
@@ -30,6 +39,7 @@
       </view>
       <p v-if="runtimeError" class="error">运行异常：{{ runtimeError }}</p>
       <p v-if="loadError" class="error">{{ loadError }}</p>
+      <p v-if="ruleAccess.history_restricted || ruleAccess.trace_restricted || ruleAccess.diagnostics_restricted" class="note" role="status">部分历史或运行详情因引用范围或来源限制而受限；当前可见定义保持原样。</p>
 
       <h5 class="section-title">决策表 · 有序，首命中</h5>
       <div class="table-wrap">
@@ -105,9 +115,10 @@
                       <input aria-label="开始时间" type="time" :value="condition.start || ''" @input="condition.start = inputValue($event); changed()">
                       <span>至</span>
                       <input aria-label="结束时间" type="time" :value="condition.end || ''" @input="condition.end = inputValue($event); changed()">
-                      <view class="weekdays" aria-label="星期">
-                        <label v-for="day in weekdayOptions" :key="day.bit"><input type="checkbox" :checked="Boolean((condition.weekday_mask || 0) & (1 << day.bit))" @change="toggleWeekday(condition, day.bit, $event)">{{ day.label }}</label>
-                      </view>
+                      <checkbox-group class="weekdays" aria-label="星期" @change="setWeekdays(condition, $event)">
+                        <label v-for="day in weekdayOptions" :key="day.bit"><checkbox :value="String(day.bit)" :checked="Boolean((condition.weekday_mask || 0) & (1 << day.bit))" :disabled="readOnly || busy !== ''" color="var(--accent)" role="checkbox" :aria-label="`周${day.label}`" :aria-checked="Boolean((condition.weekday_mask || 0) & (1 << day.bit))" :tabindex="readOnly || busy !== '' ? -1 : 0" @keydown.space.prevent="toggleWeekday(condition, day.bit)" />{{ day.label }}</label>
+                      </checkbox-group>
+                      <span class="src">未选星期表示每天</span>
                       <button class="ghost" aria-label="删除时间窗" @click="removeCondition(row, condition)">×</button>
                     </view>
                     <view v-if="!timeConditions(row).length" class="src">常驻</view>
@@ -119,8 +130,11 @@
                     <view v-for="(action, actionIndex) in row.actions" :key="actionIndex" class="action-editor">
                       <span class="sequence-index">{{ actionIndex + 1 }}</span>
                       <select aria-label="输出点位" :value="action.action_id" @change="action.action_id = inputValue($event); changed()">
-                        <option v-if="action.action_id && !outputIds.includes(action.action_id)" :value="action.action_id">{{ displayName(action.action_id) }}（当前不可写）</option>
+                        <option v-if="action.action_id && !outputIds.includes(action.action_id)" :value="action.action_id">{{ displayName(action.action_id) }}</option>
                         <option v-for="node in outputs" :key="node.id" :value="businessId(node)">{{ nameOf(node) }}{{ node.type === 'group' ? '（分配器）' : '' }}</option>
+                      </select>
+                      <select v-if="commandRequired[actionNodeID(action)]" aria-label="声明设备命令" :value="document.bindings.actions[action.action_id]?.command_id || ''" @change="setCommand(action, $event)">
+                        <option value="">选择型号声明命令</option><option v-for="command in commandsFor(action)" :key="command.id" :value="command.id">{{ command.name }}</option>
                       </select>
                       <label>设为 <input aria-label="输出值" type="number" step="any" :value="action.value" @input="action.value = inputNumber($event); changed()"></label>
                       <label>延时（秒）<input aria-label="动作延时" type="number" min="0" step="0.1" :value="(action.delay_ms || 0) / 1000" @input="setActionTiming(row, action, 'delay_ms', $event)"></label>
@@ -136,7 +150,7 @@
             </template>
           </tbody>
         </table>
-        <view v-else class="empty">这张决策表还没有规则行。可添加条件行，或添加所有前行未命中时执行的默认行。</view>
+        <view v-else class="empty">{{ definitionRestricted ? '规则内容受限，不能把不可见内容当作空规则。' : '这张决策表还没有规则行。可添加条件行，或添加所有前行未命中时执行的默认行。' }}</view>
       </div>
 
       <view class="actions" v-if="!readOnly">
@@ -147,16 +161,16 @@
 
       <view class="simulation">
         <view class="editor-title"><strong>用当前草稿模拟</strong><span>后端纯计算，不写设备</span></view>
-        <view class="simulation-grid">
+        <view class="simulation-grid" :aria-busy="busy === 'simulate'">
           <label v-for="id in referencedInputs" :key="id">{{ displayName(id) }}
-            <select v-if="inputKind(id) === 'bool'" :value="inputs[id] ?? 0" @change="inputs[id] = inputNumber($event); result = null"><option :value="1">是</option><option :value="0">否</option></select>
-            <input v-else-if="inputKind(id) === 'enum'" :value="textInputs[id] || ''" placeholder="枚举文本" @input="textInputs[id] = inputValue($event); result = null">
-            <input v-else type="number" step="any" :value="inputs[id] ?? 0" @input="inputs[id] = inputNumber($event); result = null">
+            <select v-if="inputKind(id) === 'bool'" :disabled="busy !== ''" :value="inputs[id] ?? ''" @change="setSimulationNumber(id, $event)"><option value="">无有效输入</option><option :value="1">是</option><option :value="0">否</option></select>
+            <input v-else-if="inputKind(id) === 'enum'" :disabled="busy !== ''" :value="textInputs[id] || ''" placeholder="枚举文本" @input="textInputs[id] = inputValue($event); result = null">
+            <input v-else type="number" :disabled="busy !== ''" step="any" :value="inputs[id] ?? ''" placeholder="无有效输入" @input="setSimulationNumber(id, $event)">
           </label>
-          <label>模拟时刻<input type="datetime-local" :value="simAt" @input="simAt = inputValue($event); result = null"></label>
-          <label>条件已持续（秒）<input type="number" min="0" step="0.1" :value="heldSeconds" @input="heldSeconds = Math.max(0, inputNumber($event)); result = null"></label>
+          <label>模拟时刻<input :disabled="busy !== ''" type="datetime-local" :value="simAt" @input="simAt = inputValue($event); result = null"></label>
+          <label>条件已持续（秒）<input :disabled="busy !== ''" type="number" min="0" step="0.1" :value="heldSeconds" @input="heldSeconds = Math.max(0, inputNumber($event)); result = null"></label>
         </view>
-        <view class="actions"><button v-if="referencedInputs.length" class="ghost" @click="useLiveInputs">使用当前值</button><button class="primary" :disabled="busy !== ''" @click="simulate">{{ busy === 'simulate' ? '计算中…' : '开始模拟' }}</button></view>
+        <view class="actions"><button v-if="referencedInputs.length" class="ghost" :disabled="busy !== ''" @click="useLiveInputs">使用当前值</button><button class="primary" :disabled="busy !== '' || definitionRestricted" @click="simulate">{{ busy === 'simulate' ? '计算中…' : '开始模拟' }}</button></view>
         <p class="note">模拟使用上方假设的持续秒数，不读取或改写后台计时；动作只生成计划，不写设备。</p>
         <view v-if="result" class="sim-result" role="status">
           <strong>{{ result.state === 'waiting-hold' ? `第 ${rowPosition(result.row_id || '')} 行等待持续确认` : result.row_id ? `命中第 ${rowPosition(result.row_id)} 行` : '没有命中规则' }}</strong>
@@ -172,18 +186,18 @@
         <view class="actions">
           <button class="ghost" :disabled="readOnly || busy !== '' || (!enabled && !published)" @click="setEnabled(!enabled)">{{ enabled ? '停用自动' : '启用自动' }}</button>
           <button class="ghost" :disabled="readOnly || busy !== '' || !dirty" @click="saveDraft">{{ busy === 'save' ? '保存中…' : '保存草稿' }}</button>
-          <button class="primary" :disabled="readOnly || busy !== '' || !rows.length" @click="confirmPublish = true">发布当前规则</button>
+          <button class="primary" :disabled="readOnly || busy !== '' || !rows.length || dirty || enabled" @click="confirmPublish = true">发布当前规则</button>
         </view>
       </view>
       <view v-if="confirmPublish" class="publish-confirm" role="alert">
-        <span>发布会将当前 {{ rows.length }} 行草稿设为运行版本{{ enabled ? '，已启用规则会使用新版本' : '，但不会自动启用' }}。</span>
+        <span>发布将固定已保存的 {{ rows.length }} 行草稿版本，不启用自动运行。修改运行版本前需先停用。</span>
         <button class="ghost" :disabled="busy !== ''" @click="confirmPublish = false">取消</button>
         <button class="primary" :disabled="busy !== ''" @click="publish">{{ busy === 'publish' ? '发布中…' : '确认发布' }}</button>
       </view>
       <p v-if="notice" class="notice" role="status">{{ notice }}</p>
       <p v-if="error" class="error" role="alert">{{ error }}</p>
     </template>
-    <details class="aggregate-disclosure"><summary>聚合与计算</summary><AggregationPanel :snapshot="snapshot" :parent="strategyParent" :read-only="readOnly" /></details>
+    <details class="aggregate-disclosure"><summary>聚合与计算</summary><AggregationPanel :snapshot="snapshot" :parent="strategyParent" :read-only="props.readOnly" /></details>
     <view class="tool-line"><span>策略的输入从哪来</span><button class="ghost" @click="emit('tool', 'aggregate')">聚合计算 →</button><button class="ghost" @click="emit('tool', 'calculations')">计算点 →</button><button class="ghost" @click="emit('tool', 'virtualInputs')">虚拟输入 →</button></view>
     <view class="tool-line"><span>什么算异常</span><button class="ghost" @click="emit('tool', 'alarmTypes')">报警类型 →</button></view>
     <div class="actions"><button class="primary" @click="emit('navigate', 'ui')">下一步：配界面 →</button></div>
@@ -198,9 +212,16 @@ import StateMachinePanel from "./StateMachinePanel.vue"
 import AggregationPanel from "./AggregationPanel.vue"
 import { nameOf, point } from "../../types/api"
 import { kindLabel } from "./design"
-import type { Node, Snapshot } from "../../types/api"
+import type { Node, Snapshot, StateValue } from "../../types/api"
 import {
   businessId,
+  getRuleAccess,
+  rulesForNode,
+  referencedDocument,
+  liveSimulationInputs,
+  ruleInputValue,
+  ruleInputNumber,
+  ruleWeekdayMask,
   actionText,
   conditionText,
   createSimulationPayload,
@@ -213,10 +234,14 @@ import {
 } from "./strategy"
 import type { Condition, DecisionDocument, Evaluation, Row, Action } from "./strategy"
 
-const props = withDefaults(defineProps<{ snapshot: Snapshot | null; rules: Node[]; selectedNodeId?: string; readOnly?: boolean }>(), { selectedNodeId: "", readOnly: false })
+const props = withDefaults(defineProps<{ snapshot: Snapshot | null; rules: Node[]; values?: StateValue[]; selectedNodeId?: string; readOnly?: boolean }>(), { values: () => [], selectedNodeId: "", readOnly: false })
 const emit = defineEmits<{ (event: "refresh"): void; (event: "navigate", value: "ui"): void; (event: "tool", value: string): void }>()
 
+type CommandChoice = { id: string; name: string; available: boolean; point_id?: string; value?: number; parameters?: { name: string; point_id?: string }[] }
+const commandChoices = ref<Record<string, CommandChoice[]>>({})
+const commandRequired = ref<Record<string, boolean>>({})
 const selectedId = ref("")
+const newScope = ref<"" | "self" | "descendants">("")
 const heldSeconds = ref(0)
 const document = ref<DecisionDocument>(parseDocument())
 const expandedId = ref("")
@@ -247,26 +272,14 @@ const strategyNode = computed(() => nodes.value.find(node => node.id === props.s
 const strategyParent = computed(() => strategyNode.value?.id || defaultParent.value)
 const strategyNodeName = computed(() => strategyNode.value ? nameOf(strategyNode.value) : "未选择对象")
 const strategyNodeKind = computed(() => strategyNode.value ? kindLabel(strategyNode.value) : "—")
-const ruleParent = computed(() => {
-  let current = strategyNode.value
-  const seen = new Set<string>()
-  while (current && !seen.has(current.id)) {
-    if (props.rules.some(rule => rule.parent === current!.id)) return current.id
-    seen.add(current.id)
-    current = nodes.value.find(node => node.id === current!.parent) || null
-  }
-  return strategyParent.value
-})
-const visibleRules = computed(() => props.rules.filter(rule => rule.parent === ruleParent.value))
+const visibleRules = computed(() => rulesForNode(props.rules, nodes.value, strategyParent.value))
+const ruleParent = computed(() => selectedRule.value?.parent || strategyParent.value)
 const ruleScopeLabel = computed(() => ruleParent.value === strategyParent.value ? "本层决策表" : `继承 ${nodes.value.find(node => node.id === ruleParent.value) ? nameOf(nodes.value.find(node => node.id === ruleParent.value)!) : ruleParent.value}`)
-const strategyScopeText = computed(() => {
-  const devices: Node[] = []
-  const walk = (node: Node) => { if (node.type === "device") devices.push(node); nodes.value.filter(child => child.parent === node.id).forEach(walk) }
-  if (strategyNode.value) walk(strategyNode.value)
-  const inherited = ruleParent.value !== strategyParent.value ? `继承自 ${nodes.value.find(node => node.id === ruleParent.value) ? nameOf(nodes.value.find(node => node.id === ruleParent.value)!) : ruleParent.value}；` : ""
-  return `${inherited}本对象与下级（${devices.length} 台设备${devices.length ? `：${devices.slice(0, 6).map(nameOf).join("、")}${devices.length > 6 ? " 等" : ""}` : ""}）。`
-})
+const strategyScopeText = computed(() => `${ruleScopeLabel.value}；${document.value.scope === 'self' ? '本对象及其声明绑定' : document.value.scope === 'descendants' ? '本对象与下级及其声明绑定' : '尚未声明作用范围，不允许运行'}。`)
 const selectedRule = computed(() => visibleRules.value.find(rule => rule.id === selectedId.value) || null)
+const ruleAccess = computed(() => getRuleAccess(selectedRule.value))
+const definitionRestricted = computed(() => selectedRule.value?.parent === strategyParent.value ? ruleAccess.value.draft_restricted : ruleAccess.value.applied_restricted)
+const readOnly = computed(() => props.readOnly || definitionRestricted.value || (!!selectedRule.value && selectedRule.value.parent !== strategyParent.value))
 const rows = computed(() => document.value.table.rows)
 const referencedInputs = computed(() => [...new Set(rows.value.flatMap(row => row.conditions.filter(condition => condition.kind !== "time").map(condition => condition.point_id)))])
 const runtimeError = computed(() => selectedRule.value ? point(selectedRule.value, "error")?.text || "" : "")
@@ -276,7 +289,47 @@ const lastMatchText = computed(() => lastMatchId.value ? (rows.value.some(row =>
 watch(() => visibleRules.value.map(rule => rule.id).join("|"), () => {
   if (!visibleRules.value.some(rule => rule.id === selectedId.value)) selectedId.value = visibleRules.value[0]?.id || ""
 }, { immediate: true })
-watch(selectedId, () => loadRule(), { immediate: true })
+watch([selectedId, strategyParent], () => loadRule(), { immediate: true })
+watch(definitionRestricted, () => loadRule())
+watch(() => selectedRule.value && selectedRule.value.parent !== strategyParent.value ? point(selectedRule.value, 'applied')?.text : '', () => { if (!dirty.value) loadRule() })
+watch(() => `${selectedId.value}|${outputs.value.map(node => node.id).join('|')}`, loadCommands, { immediate: true })
+
+async function loadCommands() {
+  const ruleID = selectedId.value
+  commandChoices.value = {}
+  commandRequired.value = {}
+  const units = new Map<string, Node[]>()
+  for (const node of outputs.value.filter(node => node.type === 'modbusIo')) {
+    const server = point(node, 'id')?.value
+    if (!server) continue
+    const url = `/modbus/${encodeURIComponent(node.parent)}/units/${server}/model`
+    units.set(url, [...(units.get(url) || []), node])
+  }
+  for (const [url, points] of units) {
+    try {
+      const view = await request<{ model?: { profile_id?: string }; commands: CommandChoice[] }>(url)
+      if (selectedId.value !== ruleID) return
+      for (const node of points) {
+        commandRequired.value[node.id] = !!view.model?.profile_id
+        commandChoices.value[node.id] = (view.commands || []).filter(command => command.available && ((command.parameters || []).filter(parameter => parameter.point_id === node.id).length === 1 || command.point_id === node.id))
+      }
+    } catch { if (selectedId.value === ruleID) for (const node of points) commandRequired.value[node.id] = true }
+  }
+}
+function actionNodeID(action: Action) { return document.value.bindings.actions[action.action_id]?.node_id || '' }
+function commandsFor(action: Action) { return commandChoices.value[actionNodeID(action)] || [] }
+function setCommand(action: Action, event: Event) {
+  const binding = document.value.bindings.actions[action.action_id]
+  if (!binding) return
+  const choice = commandsFor(action).find(command => command.id === inputValue(event))
+  const node = nodes.value.find(node => node.id === binding.node_id)
+  const alias = choice ? `${node ? businessId(node) : binding.node_id}::${choice.id}` : (node ? businessId(node) : binding.node_id)
+  const parameter = choice?.parameters?.find(parameter => parameter.point_id === binding.node_id)?.name || ''
+  document.value.bindings.actions[alias] = { ...binding, command_id: choice?.id || '', parameter }
+  action.action_id = alias
+  if (choice && !parameter && choice.value !== undefined) action.value = choice.value
+  changed()
+}
 
 function loadRule() {
   const rule = selectedRule.value
@@ -289,8 +342,14 @@ function loadRule() {
   expandedId.value = ""
   published.value = !!rule && !!point(rule, "applied")?.text
   enabled.value = !!rule && (point(rule, "enabled")?.value || 0) !== 0
+  if (definitionRestricted.value) {
+    document.value = parseDocument()
+    loadError.value = '规则定义引用超出当前范围或来源不可确认，内容受限。'
+    inputs.value = {}; textInputs.value = {}
+    return
+  }
   try {
-    document.value = withBindings(parseDocument(rule ? point(rule, "draft")?.text : ""), nodes.value)
+    document.value = withBindings(parseDocument(rule ? point(rule, rule.parent === strategyParent.value ? "draft" : "applied")?.text : ""), nodes.value)
   } catch (cause) {
     document.value = withBindings(parseDocument(), nodes.value)
     loadError.value = cause instanceof Error ? `${cause.message}；未覆盖服务端草稿。` : "草稿无法读取"
@@ -299,7 +358,8 @@ function loadRule() {
 }
 
 function displayName(id: string) {
-  const node = nodes.value.find(item => businessId(item) === id)
+  const binding = document.value.bindings.actions[id] || document.value.bindings.points[id]
+  const node = nodes.value.find(item => businessId(item) === id || item.id === binding?.node_id)
   return node ? nameOf(node) : id || "—"
 }
 function durationText(milliseconds?: number) { return milliseconds ? `${milliseconds / 1000}s` : "0s" }
@@ -317,12 +377,8 @@ function timeWindowSummary(row: Row) {
 function traceFor(rowID: string) { return result.value?.rows?.find(row => row.row_id === rowID) }
 function setMatch(row: Row, event: Event) { row.match = inputValue(event) as "all" | "any"; changed() }
 function rowPosition(id: string) { const index = rows.value.findIndex(row => row.row_id === id); return index >= 0 ? index + 1 : "—" }
-function inputValue(event: Event) { return (event.target as HTMLInputElement | HTMLSelectElement).value }
-function inputNumber(event: Event) {
-  const raw = inputValue(event).trim()
-  const value = Number(raw)
-  return raw && Number.isFinite(value) ? value : 0
-}
+function inputValue(event: Event) { return ruleInputValue(event) }
+function inputNumber(event: Event) { return ruleInputNumber(event) }
 function changed() {
   dirty.value = true
   result.value = null
@@ -332,7 +388,7 @@ function changed() {
 }
 function currentDocument() {
   document.value = withBindings(document.value, nodes.value)
-  return document.value
+  return referencedDocument(document.value)
 }
 function addRow(defaultRow: boolean) {
   const first = available.value[0]
@@ -392,10 +448,14 @@ function changeConditionKind(condition: Condition, event: Event) {
   else Object.assign(condition, { kind, point_id: condition.point_id || availableIds.value[0] || "", operator: kind === "number" ? "gt" : "eq", value: kind === "bool" ? 0 : condition.value, text: kind === "enum" ? condition.text || "" : "", start: "", end: "", weekday_mask: 0 })
   changed()
 }
-function toggleWeekday(condition: Condition, bit: number, event: Event) {
-  const checked = (event.target as HTMLInputElement).checked
-  const mask = condition.weekday_mask || 0
-  condition.weekday_mask = checked ? mask | (1 << bit) : mask & ~(1 << bit)
+function setWeekdays(condition: Condition, event: unknown) {
+  if (readOnly.value || busy.value) return
+  condition.weekday_mask = ruleWeekdayMask(event)
+  changed()
+}
+function toggleWeekday(condition: Condition, bit: number) {
+  if (readOnly.value || busy.value) return
+  condition.weekday_mask = (condition.weekday_mask || 0) ^ (1 << bit)
   changed()
 }
 function setTiming(row: Row, field: "hold_ms" | "cooldown_ms", event: Event) {
@@ -405,92 +465,103 @@ function setTiming(row: Row, field: "hold_ms" | "cooldown_ms", event: Event) {
 function inputKind(id: string): Condition["kind"] {
   return rows.value.flatMap(row => row.conditions).find(condition => condition.point_id === id && condition.kind && condition.kind !== "number")?.kind || "number"
 }
-function resetLiveInputs() {
-  inputs.value = {}
-  textInputs.value = {}
-  for (const node of available.value) {
-    const id = businessId(node)
-    const current = point(node, "value")
-    if (current && Number.isFinite(current.value)) inputs.value[id] = current.value || 0
-    if (current?.text) textInputs.value[id] = current.text
-  }
-}
+function resetLiveInputs() { useLiveInputs() }
 function useLiveInputs() {
   result.value = null
-  for (const id of referencedInputs.value) {
-    const node = available.value.find(item => businessId(item) === id)
-    if (!node) {
-      delete inputs.value[id]
-      delete textInputs.value[id]
-      continue
-    }
-    const current = point(node, "value")
-    if (current && Number.isFinite(current.value)) inputs.value[id] = current.value || 0
-    else delete inputs.value[id]
-    if (current?.text) textInputs.value[id] = current.text
-    else delete textInputs.value[id]
-  }
+  const values = liveSimulationInputs(currentDocument(), props.values)
+  inputs.value = values.inputs
+  textInputs.value = values.textInputs
+}
+function setSimulationNumber(id: string, event: Event) {
+  const raw = inputValue(event).trim()
+  const value = Number(raw)
+  if (!raw || !Number.isFinite(value)) delete inputs.value[id]
+  else inputs.value[id] = value
+  result.value = null
+}
+function editContext() { return `${selectedId.value}|${strategyParent.value}|${document.value.revision || ''}` }
+async function createRule() {
+  if (!newScope.value || busy.value || dirty.value) return
+  const context = editContext()
+  busy.value = "create"
+  error.value = ""
+  try {
+    const created = await request<{ id: string }>("/rules", "POST", { parent: strategyParent.value, description: `${strategyNodeName.value}规则`, document: { ...parseDocument(), scope: newScope.value } })
+    if (context !== editContext()) { emit('refresh'); return }
+    selectedId.value = created.id
+    emit("refresh")
+  } catch (cause) { if (context === editContext()) error.value = cause instanceof Error ? cause.message : "创建失败" }
+  finally { busy.value = "" }
 }
 async function simulate() {
   if (!selectedRule.value || busy.value) return
+  const context = editContext()
   busy.value = "simulate"
   result.value = null
   error.value = ""
   notice.value = ""
   try {
-    result.value = await request<Evaluation>(`/rules/${encodeURIComponent(selectedRule.value.id)}/test`, "POST", createSimulationPayload(currentDocument(), inputs.value, textInputs.value, simAt.value, Math.round(heldSeconds.value * 1000)))
+    const evaluation = await request<Evaluation>(`/rules/${encodeURIComponent(selectedRule.value.id)}/test`, "POST", createSimulationPayload(currentDocument(), inputs.value, textInputs.value, simAt.value, Math.round(heldSeconds.value * 1000)))
+    if (context === editContext()) result.value = evaluation
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "模拟失败"
+    if (context === editContext()) error.value = cause instanceof Error ? cause.message : "模拟失败"
   } finally {
     busy.value = ""
   }
 }
 async function saveDraft() {
   if (!selectedRule.value || busy.value) return
+  const context = editContext()
   busy.value = "save"
   error.value = ""
   notice.value = ""
   try {
-    await request(`/rules/${encodeURIComponent(selectedRule.value.id)}/draft`, "PUT", currentDocument())
+    const saved = await request<{ revision: string }>(`/rules/${encodeURIComponent(selectedRule.value.id)}/draft`, "PUT", currentDocument())
+    if (context !== editContext()) { emit('refresh'); return }
+    document.value.revision = saved.revision
     dirty.value = false
     notice.value = "草稿已保存，运行版本未改变。"
     emit("refresh")
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "保存草稿失败"
+    if (context === editContext()) error.value = cause instanceof Error ? cause.message : "保存草稿失败"
   } finally {
     busy.value = ""
   }
 }
 async function publish() {
   if (!selectedRule.value || busy.value || !rows.value.length) return
+  const context = editContext()
   busy.value = "publish"
   error.value = ""
   notice.value = ""
   try {
     await request(`/rules/${encodeURIComponent(selectedRule.value.id)}/publish`, "POST", currentDocument())
+    if (context !== editContext()) { emit('refresh'); return }
     dirty.value = false
     published.value = true
     confirmPublish.value = false
-    notice.value = enabled.value ? "发布成功，已启用规则的运行版本已更新。" : "发布成功；规则仍保持停用。"
+    notice.value = "发布成功；规则仍保持停用。"
     emit("refresh")
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "发布失败"
+    if (context === editContext()) error.value = cause instanceof Error ? cause.message : "发布失败"
   } finally {
     busy.value = ""
   }
 }
 async function setEnabled(value: boolean) {
   if (!selectedRule.value || busy.value || (value && !published.value)) return
+  const context = editContext()
   busy.value = "enable"
   error.value = ""
   notice.value = ""
   try {
     await request(`/rules/${encodeURIComponent(selectedRule.value.id)}/enable`, "POST", { enabled: value })
+    if (context !== editContext()) { emit('refresh'); return }
     enabled.value = value
     notice.value = value ? "自动运行已启用。" : "自动运行已停用。"
     emit("refresh")
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "启停失败"
+    if (context === editContext()) error.value = cause instanceof Error ? cause.message : "启停失败"
   } finally {
     busy.value = ""
   }
@@ -500,7 +571,7 @@ async function setEnabled(value: boolean) {
 <style scoped>
 .tool-line { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; color: var(--faint); font-size: 12px; }
 .tool-line uni-button { margin: 0; min-height: 25px; padding: 2px 8px; font-size: 11px; }
-.strategy { display: grid; gap: 12px; min-width: 0; }
+.strategy { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; }
 .strategy-head, .rule-summary, .publish-bar, .editor-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .step-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .step-head b { font-size: 16px; }

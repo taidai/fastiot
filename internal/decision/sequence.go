@@ -9,20 +9,22 @@ import (
 	siotclient "github.com/simpleiot/simpleiot/client"
 	"github.com/simpleiot/simpleiot/data"
 
+	"fastiot/internal/ems/command"
 	"fastiot/internal/ems/signal"
 )
 
 type actionSequence struct {
-	rowID     string
-	actions   []Action
-	checks    []CheckAction
-	next      int
-	notBefore time.Time
-	started   time.Time
-	baseline  time.Time
-	waiting   bool
-	done      bool
-	err       string
+	executionID string
+	rowID       string
+	actions     []Action
+	checks      []CheckAction
+	next        int
+	notBefore   time.Time
+	started     time.Time
+	baseline    time.Time
+	waiting     bool
+	done        bool
+	err         string
 }
 
 func readbackTarget(action Action, binding Target) Target {
@@ -32,6 +34,9 @@ func readbackTarget(action Action, binding Target) Target {
 	}
 	if target.NodeID == "" {
 		target.NodeID = binding.NodeID
+		if target.Key == "" {
+			target.Key = binding.Key
+		}
 	}
 	if target.PointType == "" {
 		target.PointType = data.PointTypeValue
@@ -87,6 +92,80 @@ func (s *actionSequence) confirm() {
 	}
 }
 
+func (c *Client) checkRuleReadback(s *actionSequence, action Action, binding Target, now time.Time) bool {
+	check := &s.checks[s.next]
+	outcome, ok := c.commands.Get(check.CommandID)
+	if !ok {
+		s.fail("unknown", "canonical command unavailable")
+		return true
+	}
+	if outcome.State != command.Accepted && outcome.State != command.Executing && outcome.State != command.Confirmed {
+		s.fail(string(outcome.State), outcome.Reason)
+		return true
+	}
+	readback := action.Readback
+	if readback == nil {
+		readback = &Readback{TimeoutMS: 5000}
+	}
+	deadline := s.started.Add(time.Duration(readback.TimeoutMS) * time.Millisecond)
+	target := readbackTarget(action, binding)
+	if outcome.External {
+		if c.commands.SoftwareFeedback == nil {
+			s.fail("unknown", "software feedback adapter unavailable")
+			return true
+		}
+		outcome, ok = c.commands.SoftwareFeedback(check.CommandID, target, readback.TimeoutMS, readback.Tolerance)
+		if !ok {
+			s.fail("unknown", "software command unavailable")
+			return true
+		}
+		if outcome.State == command.Confirmed {
+			s.confirm()
+			check.Confirmation = "software"
+			return true
+		}
+		if outcome.State != command.Accepted {
+			s.fail(string(outcome.State), outcome.Reason)
+			return true
+		}
+		if !now.Before(deadline) {
+			s.fail("unknown", "software acknowledgment result could not be persisted")
+			return true
+		}
+		return false
+	}
+	if c.observations != nil {
+		sample, present := c.observations(now)[target.NodeID]
+		value := sample.Value.Num
+		if sample.Value.Kind == signal.Bool {
+			value = data.BoolToFloat(sample.Value.Bool)
+		}
+		if present && sample.Quality == signal.Good && (sample.Value.Kind == signal.Number || sample.Value.Kind == signal.Bool) && finite(value) && sample.SourceTime.After(s.started) && sample.ReceivedTime.After(s.started) && !sample.SourceTime.After(deadline) && !sample.ReceivedTime.After(deadline) && !sample.SourceTime.After(now) && !sample.ReceivedTime.After(now) {
+			state, reason := command.Confirmed, ""
+			if math.Abs(value-check.Applied) > readback.Tolerance {
+				state, reason = command.Failed, "readback does not match requested value"
+			}
+			// A rule's extra readback constraint cannot confirm a device command.
+			// Only the canonical manager may establish device confirmation.
+			if state == command.Failed {
+				s.fail(string(state), reason)
+				return true
+			}
+			if outcome.State == command.Confirmed {
+				s.confirm()
+				check.Confirmation = "device"
+				return true
+			}
+		}
+	}
+	if !now.Before(deadline) {
+		reason := "readback timeout; result unknown"
+		s.fail("unknown", reason)
+		return true
+	}
+	return false
+}
+
 func (c *Client) stepSequence(active *activeTable, now time.Time) bool {
 	s := active.sequence
 	if s == nil || s.done {
@@ -110,7 +189,7 @@ func (c *Client) stepSequence(active *activeTable, now time.Time) bool {
 			return false
 		}
 		limiter := targetLimiter{
-			nc: c.nc, parent: c.config.Parent, actions: active.bindings.Actions,
+			nc: c.nc, parent: c.config.Parent, actions: active.bindings.Actions, validate: c.validateTarget,
 			manual: func(actionID string) bool { return active.manual[actionID] },
 			safety: active.safety, values: &active.values,
 		}
@@ -125,7 +204,12 @@ func (c *Client) stepSequence(active *activeTable, now time.Time) bool {
 			s.fail("failed", "ramped outputs are not supported in an action sequence")
 			return true
 		}
-		if run, ok := active.allocations[action.ActionID]; ok {
+		if c.commands != nil {
+			if err := c.submitRuleStep(active, action, target); err != nil {
+				s.fail("failed", err.Error())
+				return true
+			}
+		} else if run, ok := active.allocations[action.ActionID]; ok {
 			s.started = now
 			if err := run.start(c.nc, limited.Value.Num, now); err != nil {
 				s.fail("failed", err.Error())
@@ -151,6 +235,9 @@ func (c *Client) stepSequence(active *activeTable, now time.Time) bool {
 		return true
 	}
 
+	if c.commands != nil {
+		return c.checkRuleReadback(s, action, active.bindings.Actions[action.ActionID], now)
+	}
 	if run, ok := active.allocations[action.ActionID]; ok {
 		run.step(c.nc, now)
 		check.Shares = run.result.Shares

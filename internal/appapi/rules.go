@@ -33,7 +33,18 @@ func (h *Handler) copyRule(w http.ResponseWriter, r *http.Request, identity Iden
 	if input.Description == "" {
 		input.Description = rule.Desc() + " 副本"
 	}
-	draft, _ := rule.Points.Text("draft", "")
+	document, err := documentSource(rule, "draft")
+	if err != nil {
+		writeError(w, http.StatusConflict, "invalid_draft")
+		return
+	}
+	if !h.checkedRuleDocument(w, identity, rule, document) {
+		return
+	}
+	document.Revision = data.NewID()
+	document.Simulation = nil
+	encoded, _ := json.Marshal(document)
+	draft := string(encoded)
 	newID := data.NewID()
 	if err := client.SendNodeType(h.nc, decision.DecisionTable{
 		ID: newID, Parent: rule.Parent, Description: input.Description, Draft: draft,
@@ -41,7 +52,7 @@ func (h *Handler) copyRule(w http.ResponseWriter, r *http.Request, identity Iden
 		writeError(w, http.StatusBadRequest, "copy_failed")
 		return
 	}
-	writeJSON(w, map[string]string{"id": newID})
+	writeJSON(w, map[string]string{"id": newID, "revision": document.Revision})
 }
 
 func (h *Handler) publishRule(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
@@ -61,19 +72,24 @@ func (h *Handler) publishDocument(w http.ResponseWriter, identity Identity, rule
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if !h.documentInScope(rule, document) {
-		writeError(w, http.StatusForbidden, "target_out_of_scope")
+	if !h.checkedRuleDocument(w, identity, rule, document) {
 		return
 	}
-	if enabled, _ := rule.Points.Find("enabled", ""); enabled.Val() != 0 {
-		h.ownershipMu.Lock()
-		defer h.ownershipMu.Unlock()
-		if err := decision.ValidateOutputOwnership(h.nc, rule.ID, document); err != nil {
-			writeError(w, http.StatusConflict, "output_owned")
-			return
-		}
+	if err := h.ruleExecutionSupport(identity, rule.Parent, document); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
 	}
+	if enabled, _ := rule.Points.Value("enabled", ""); enabled != 0 {
+		writeError(w, http.StatusConflict, "disable_before_publish")
+		return
+	}
+	document.Simulation = nil
 	encoded, _ := json.Marshal(document)
+	draft, _ := rule.Points.Text("draft", "")
+	if document.Revision == "" || string(encoded) != draft {
+		writeError(w, http.StatusConflict, "save_draft_before_publish")
+		return
+	}
 	previous, _ := rule.Points.Text("applied", "")
 	if previous == string(encoded) {
 		writeJSON(w, map[string]any{"saved": true, "unchanged": true})
@@ -87,9 +103,13 @@ func (h *Handler) publishDocument(w http.ResponseWriter, identity Identity, rule
 			writeError(w, http.StatusConflict, "invalid_published_version")
 			return
 		}
+		previousPoint, _ := rule.Points.Find("applied", "")
 		version := RuleVersion{
-			ID: data.NewID(), PublishedAt: time.Now(), PublishedBy: identity.UserID,
+			ID: previousDocument.Revision, PublishedAt: previousPoint.Time, PublishedBy: previousPoint.Origin,
 			Document: previousDocument,
+		}
+		if version.ID == "" {
+			version.ID = data.NewID()
 		}
 		versionText, _ := json.Marshal(version)
 		history = data.NewPointString("history", version.ID, string(versionText))
@@ -109,19 +129,14 @@ func (h *Handler) publishDocument(w http.ResponseWriter, identity Identity, rule
 		writeError(w, http.StatusBadRequest, "save_failed")
 		return
 	}
-	draft := data.NewPointString("draft", "", string(encoded))
-	draft.Origin = identity.UserID
-	if err := client.SendNodePoint(h.nc, rule.ID, draft, true); err != nil {
-		writeError(w, http.StatusInternalServerError, "draft_sync_failed")
-		return
-	}
-	writeJSON(w, map[string]any{"saved": true})
+	writeJSON(w, map[string]any{"saved": true, "revision": document.Revision})
 }
 
 // runScenarios evaluates every saved scenario of the submitted document. It is
 // pure simulation and never sends points.
 func (h *Handler) runScenarios(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
-	if _, ok := h.rule(w, identity, id); !ok {
+	rule, ok := h.rule(w, identity, id)
+	if !ok {
 		return
 	}
 	var input struct {
@@ -134,6 +149,9 @@ func (h *Handler) runScenarios(w http.ResponseWriter, r *http.Request, identity 
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if !h.checkedRuleDocument(w, identity, rule, input.Document) {
+		return
+	}
 	writeJSON(w, map[string]any{"results": input.Document.RunScenarios(time.Now())})
 }
 
@@ -144,6 +162,7 @@ func (h *Handler) restoreRule(w http.ResponseWriter, r *http.Request, identity I
 	}
 	var input struct {
 		VersionID string `json:"version_id"`
+		Revision  string `json:"revision"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
@@ -158,7 +177,24 @@ func (h *Handler) restoreRule(w http.ResponseWriter, r *http.Request, identity I
 		writeError(w, http.StatusConflict, "invalid_history_version")
 		return
 	}
-	h.publishDocument(w, identity, rule, version.Document)
+	if !h.checkedRuleDocument(w, identity, rule, version.Document) {
+		return
+	}
+	current, err := documentSource(rule, "draft")
+	if err != nil || input.Revision == "" || current.Revision != input.Revision {
+		writeError(w, http.StatusConflict, "rule_revision_conflict")
+		return
+	}
+	version.Document.Revision = data.NewID()
+	version.Document.Simulation = nil
+	encoded, _ := json.Marshal(version.Document)
+	draft := data.NewPointString("draft", "", string(encoded))
+	draft.Origin = identity.UserID
+	if err := client.SendNodePoint(h.nc, id, draft, true); err != nil {
+		writeError(w, http.StatusInternalServerError, "save_failed")
+		return
+	}
+	writeJSON(w, map[string]any{"saved": true, "revision": version.Document.Revision, "published": false})
 }
 
 // documentSource resolves "draft", "applied" or a history version id to its
@@ -217,6 +253,9 @@ func (h *Handler) diffRule(w http.ResponseWriter, r *http.Request, identity Iden
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if !h.checkedRuleDocument(w, identity, rule, from) || !h.checkedRuleDocument(w, identity, rule, to) {
+		return
+	}
 	writeJSON(w, map[string]any{"diffs": decision.DiffDocuments(from, to)})
 }
 
@@ -228,10 +267,10 @@ func (h *Handler) replayRule(w http.ResponseWriter, r *http.Request, identity Id
 		return
 	}
 	var input struct {
-		VersionID  string             `json:"version_id"`
-		Inputs     map[string]float64 `json:"inputs"`
-		TextInputs map[string]string  `json:"text_inputs"`
-		At         string             `json:"at"`
+		VersionID  string                    `json:"version_id"`
+		Inputs     decision.SimulationInputs `json:"inputs"`
+		TextInputs map[string]string         `json:"text_inputs"`
+		At         string                    `json:"at"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
@@ -243,6 +282,9 @@ func (h *Handler) replayRule(w http.ResponseWriter, r *http.Request, identity Id
 	}
 	if err := document.Validate(); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !h.checkedRuleDocument(w, identity, rule, document) {
 		return
 	}
 	for _, value := range input.Inputs {
@@ -266,13 +308,17 @@ func (h *Handler) replayRule(w http.ResponseWriter, r *http.Request, identity Id
 
 // ruleDeps returns the input/output/row dependency graph of a document.
 func (h *Handler) ruleDeps(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
-	if _, ok := h.rule(w, identity, id); !ok {
+	rule, ok := h.rule(w, identity, id)
+	if !ok {
 		return
 	}
 	var input struct {
 		Document decision.Document `json:"document"`
 	}
 	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if !h.checkedRuleDocument(w, identity, rule, input.Document) {
 		return
 	}
 	writeJSON(w, decision.BuildDependencyGraph(input.Document))

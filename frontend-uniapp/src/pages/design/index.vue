@@ -103,7 +103,7 @@
         <AccessStep v-else-if="current === 'access'" :snapshot="session.snapshot" :values="session.values" :selected-node-id="session.layer" :batch-node-ids="activeBatchSelection"
           @refresh="refreshDesign" @status="accessSummary = $event" @navigate="current = $event" @tool="activeTool = $event" />
 
-        <StrategyStep v-else-if="current === 'strategy'" :snapshot="session.snapshot" :rules="rules" :selected-node-id="session.layer" :read-only="!canConfigure" @refresh="refreshDesign" @navigate="current = $event" @tool="activeTool = $event" />
+        <StrategyStep v-else-if="current === 'strategy'" :snapshot="session.snapshot" :values="session.values" :rules="rules" :selected-node-id="session.layer" :read-only="!canConfigure" @refresh="refreshDesign" @navigate="current = $event" @tool="activeTool = $event" />
 
         <UiStep v-else-if="current === 'ui'" :snapshot="session.snapshot" :values="session.values" :alarms="session.alarms"
           :quality="session.quality" :screen="screen" :selected-node-id="session.layer" :last-sync="session.lastSync" :layer-screens="layerScreens"

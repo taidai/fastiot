@@ -113,7 +113,7 @@ func TestProductAPIVerticalSlice(t *testing.T) {
 		value, _ := node.Points.Text("businessId", "")
 		return value
 	}
-	document := decision.Document{Table: decision.Table{Rows: []decision.Row{{
+	document := decision.Document{Scope: "descendants", Table: decision.Table{Rows: []decision.Row{{
 		ID: "hot-occupied",
 		Conditions: []decision.Condition{
 			{PointID: businessID("温度"), Operator: "gt", Value: 30},
@@ -134,7 +134,8 @@ func TestProductAPIVerticalSlice(t *testing.T) {
 		},
 	}}
 	var created struct {
-		ID string `json:"id"`
+		ID       string `json:"id"`
+		Revision string `json:"revision"`
 	}
 	status, _ = call(t, http.MethodPost, base+"/rules", token, map[string]any{
 		"parent": groupID, "description": "舒适控制", "document": document,
@@ -142,6 +143,7 @@ func TestProductAPIVerticalSlice(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("create rule: %d", status)
 	}
+	document.Revision = created.Revision
 	var evaluation decision.Result
 	status, _ = call(t, http.MethodPost, base+"/rules/"+created.ID+"/test", token, map[string]any{
 		"document": document, "inputs": map[string]float64{businessID("温度"): 35, businessID("有人"): 1},
@@ -287,9 +289,28 @@ func testRuleManagement(t *testing.T, base, token, groupID, ruleID string, docum
 			document.Table.Rows[0].Actions[i].Value = 20
 		}
 	}
+	status, _ = call(t, http.MethodPost, base+"/rules/"+ruleID+"/enable", token, map[string]bool{"enabled": false}, nil)
+	if status != http.StatusOK {
+		t.Fatal("disable before publication failed")
+	}
+	var saved struct {
+		Revision string `json:"revision"`
+	}
+	status, _ = call(t, http.MethodPut, base+"/rules/"+ruleID+"/draft", token, document, &saved)
+	if status != http.StatusOK {
+		t.Fatal("save changed rule failed")
+	}
+	document.Revision = saved.Revision
 	status, _ = call(t, http.MethodPost, base+"/rules/"+ruleID+"/publish", token, document, nil)
 	if status != http.StatusOK {
 		t.Fatal("publish changed rule failed")
+	}
+	if valueOf(t, nc, fan.ID) != 1 || valueOf(t, nc, damper.ID) != 80 {
+		t.Fatal("publication implicitly controlled software outputs")
+	}
+	status, _ = call(t, http.MethodPost, base+"/rules/"+ruleID+"/enable", token, map[string]bool{"enabled": true}, nil)
+	if status != http.StatusOK {
+		t.Fatal("explicit enable failed")
 	}
 	waitFor(t, func() bool { return valueOf(t, nc, fan.ID) == 0 && valueOf(t, nc, damper.ID) == 20 }, "changed outputs")
 	nodes, _ := client.GetNodes(nc, "all", ruleID, "", false)
@@ -304,9 +325,26 @@ func testRuleManagement(t *testing.T, base, token, groupID, ruleID string, docum
 	if !found || version.ID == "" {
 		t.Fatal("publication history not saved")
 	}
-	status, _ = call(t, http.MethodPost, base+"/rules/"+ruleID+"/restore", token, map[string]string{"version_id": version.ID}, nil)
+	status, _ = call(t, http.MethodPost, base+"/rules/"+ruleID+"/restore", token, map[string]string{"version_id": version.ID, "revision": document.Revision}, &saved)
 	if status != http.StatusOK {
 		t.Fatal("restore rule version failed")
+	}
+	if valueOf(t, nc, fan.ID) != 0 || valueOf(t, nc, damper.ID) != 20 {
+		t.Fatal("history restore implicitly controlled software outputs")
+	}
+	status, _ = call(t, http.MethodPost, base+"/rules/"+ruleID+"/enable", token, map[string]bool{"enabled": false}, nil)
+	if status != http.StatusOK {
+		t.Fatal("disable before restored publication failed")
+	}
+	restored := version.Document
+	restored.Revision = saved.Revision
+	status, _ = call(t, http.MethodPost, base+"/rules/"+ruleID+"/publish", token, restored, nil)
+	if status != http.StatusOK {
+		t.Fatal("publish restored draft failed")
+	}
+	status, _ = call(t, http.MethodPost, base+"/rules/"+ruleID+"/enable", token, map[string]bool{"enabled": true}, nil)
+	if status != http.StatusOK {
+		t.Fatal("enable restored publication failed")
 	}
 	waitFor(t, func() bool { return valueOf(t, nc, fan.ID) == 1 && valueOf(t, nc, damper.ID) == 80 }, "restored outputs")
 	status, _ = call(t, http.MethodDelete, base+"/nodes/"+copied.ID, token, map[string]string{"parent": groupID}, nil)
@@ -509,7 +547,7 @@ func testModbusTCP(t *testing.T, base, token, groupID string, nc *nats.Conn) {
 		return value && currentValueOf(nc, coilID) == 1
 	}, "Modbus coil write and readback")
 
-	document := decision.Document{Table: decision.Table{Rows: []decision.Row{{
+	document := decision.Document{Scope: "descendants", Table: decision.Table{Rows: []decision.Row{{
 		ID:         "hot-modbus",
 		Conditions: []decision.Condition{{PointID: temperatureBusinessID, Operator: "gt", Value: 30}},
 		Actions:    []decision.Action{{ActionID: coilBusinessID, Value: 1}},
@@ -518,12 +556,14 @@ func testModbusTCP(t *testing.T, base, token, groupID string, nc *nats.Conn) {
 		Actions: map[string]decision.Target{coilBusinessID: {NodeID: coilID, PointType: "valueSet"}},
 	}}
 	var rule struct {
-		ID string `json:"id"`
+		ID       string `json:"id"`
+		Revision string `json:"revision"`
 	}
 	status, _ = call(t, http.MethodPost, base+"/rules", token, map[string]any{"parent": groupID, "description": "Modbus 温控", "document": document}, &rule)
 	if status != http.StatusOK {
 		t.Fatal("create Modbus rule failed")
 	}
+	document.Revision = rule.Revision
 	status, _ = call(t, http.MethodPost, base+"/rules/"+rule.ID+"/publish", token, document, nil)
 	if status != http.StatusOK {
 		t.Fatal("publish Modbus rule failed")
