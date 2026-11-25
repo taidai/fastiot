@@ -66,7 +66,7 @@ export function screenMetricTarget(screen: OverviewScreen | null, pointID: strin
   return typeof target === "string" ? target.trim() : ""
 }
 
-const businessTypes = new Set(["site", "group", "area", "plant", "energyUnit", "energy_unit", "unit", "device", "modbus_device"])
+const businessTypes = new Set(["siteRoot", "site", "group", "area", "plant", "energyUnit", "energy_unit", "unit", "device", "modbus_device"])
 
 export function isBusinessLayer(node: ApiNode) {
   return businessTypes.has(node.type)
@@ -117,9 +117,9 @@ export function metricForPoint(pointId: string, snapshot: Snapshot | null, value
     id: pointId,
     label,
     unit: unitOf(node),
-    value: displaySample(sample, label),
-    quality: qualityLabel(sample?.quality),
-    time: shortTime(sample?.source_time || sample?.received_time),
+    value: sample?.quality === "good" ? displaySample(sample, label) : "—",
+    quality: sample ? qualityLabel(sample.quality) : "无数据",
+    time: shortTime(sample?.source_time),
   }
 }
 
@@ -137,15 +137,24 @@ export function descendantNodeIds(layerId: string, nodes: ApiNode[]) {
   return scope
 }
 
-export function boundDevicesForLayer<T extends Pick<LedgerDevice, "business_node_id">>(layerId: string, nodes: ApiNode[], devices: T[]) {
+export function boundDevicesForLayer<T extends Pick<LedgerDevice, "business_node_id">>(layerId: string, nodes: ApiNode[], devices: T[], memberIds: string[] = []) {
   const scope = descendantNodeIds(layerId, nodes)
+  for (const id of memberIds) {
+    if (nodes.some(node => node.id === id)) for (const child of descendantNodeIds(id, nodes)) scope.add(child)
+  }
   return devices.filter(device => !!device.business_node_id && scope.has(device.business_node_id))
+}
+
+export function devicePointIds(nodes: ApiNode[], devices: LedgerDevice[]) {
+  return nodes.filter(node => node.type === "modbusIo" && devices.some(device =>
+    node.parent === device.channel_id && point(node, "id")?.value === device.server_id,
+  )).map(node => node.id)
 }
 
 export function valueInLayer(value: Pick<StateValue, "device_id" | "point_id">, nodeIds: Set<string>, deviceIds: Set<string>, knownDeviceIds: Set<string>) {
   if (deviceIds.has(value.device_id)) return true
   if (knownDeviceIds.has(value.device_id)) return false
-  return nodeIds.has(value.point_id)
+  return nodeIds.has(value.point_id) && nodeIds.has(value.device_id)
 }
 
 export function alarmInLayer(alarm: Pick<EmsAlarm, "device_id" | "point_id">, nodeIds: Set<string>, deviceIds: Set<string>) {

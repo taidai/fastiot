@@ -1,10 +1,17 @@
 <template>
   <section class="flow glass">
     <view class="flow-head">
-      <view><strong>站点能源流 · 三维视图</strong><text class="flow-sub">{{ layerName }}</text></view>
-      <view class="flow-tools"><text>能流图</text><text class="on">三维</text><text>俯视</text><text>全屏</text></view>
+      <view><strong>{{ prototype ? '站点能源流 · 三维视图' : '本层拓扑 · 绑定关系' }}</strong><text class="flow-sub">{{ layerName }}</text></view>
+      <view v-if="prototype" class="flow-tools"><text>能流图</text><text class="on">三维</text><text>俯视</text><text>全屏</text></view>
     </view>
-    <view class="scene">
+    <view v-if="!prototype" class="scene topology" aria-label="当前层声明的设备与成员关系">
+      <view v-for="item in topology" :key="item.id" class="topology-node">
+        <view class="label-name">{{ item.relation }}</view><strong>{{ item.label }}</strong><view class="label-name">{{ item.detail }}</view>
+      </view>
+      <view v-if="!topology?.length" class="empty">本层没有已绑定的拓扑对象。</view>
+      <view class="topology-note">组织归属与成员引用；未声明的工艺连线不推定为能流。</view>
+    </view>
+    <view v-else class="scene">
       <svg class="station" viewBox="0 0 800 300" preserveAspectRatio="xMidYMid meet" role="img" aria-label="浅色等距厂区工艺示意图">
         <defs>
           <linearGradient id="flow-roof" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f7fbfd"/><stop offset="1" stop-color="#d4e2e9"/></linearGradient>
@@ -84,6 +91,7 @@ const props = defineProps<{
   layerName: string
   metrics: { label: string; value: string; unit?: string; detail?: string; quality?: string; time?: string }[]
   prototype?: boolean
+  topology?: { id: string; label: string; relation: string; detail: string }[]
 }>()
 const labels = computed(() => Array.from({ length: 3 }, (_, index) => props.metrics[index] || { label: "未映射点位", value: "—", unit: "" }))
 const trees = [[66,214,.8],[96,176,.7],[125,122,.75],[176,85,.65],[252,70,.7],[352,72,.65],[422,90,.8],[514,78,.7],[598,120,.85],[690,163,.8],[732,218,.85],[660,251,.75],[548,260,.65],[475,270,.7],[342,260,.8],[225,250,.65],[124,244,.8],[72,244,.75]]
@@ -103,6 +111,11 @@ const containers = [0, 1, 2]
 .flow-tools text { padding: 4px 9px; border: 1px solid rgba(255,255,255,.9); border-radius: 8px; background: rgba(255,255,255,.55); color: #426c86; }
 .flow-tools .on { background: rgba(255,255,255,.95); color: #1b536f; }
 .scene { position: relative; height: 280px; overflow: hidden; border-radius: 0 0 20px 20px; }
+.topology { display: flex; flex-wrap: wrap; align-content: center; justify-content: center; gap: 16px; padding: 16px; overflow: auto; }
+.topology-node { max-width: 260px; padding: 12px 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--glass); color: var(--ink); }
+.topology-node strong { display: block; margin: 8px 0; }
+.topology .label-name { color: var(--muted); white-space: normal; overflow-wrap: anywhere; }
+.topology-note { flex-basis: 100%; text-align: center; color: var(--muted); font-size: 10px; }
 .station { display: block; width: 100%; height: 100%; }
 .scene-label { position: absolute; z-index: 2; padding: 8px 12px; border: 1.5px solid rgba(255,255,255,.88); border-radius: 12px; background: linear-gradient(135deg,rgba(255,255,255,.32),rgba(255,255,255,.08)),rgba(255,255,255,.56); backdrop-filter: blur(18px) saturate(1.3); box-shadow: 0 8px 22px rgba(54,92,120,.1), inset 0 1px 0 rgba(255,255,255,.85), inset 0 0 10px rgba(255,255,255,.3); color: #23465a; font-size: 11px; }
 .label-name { color: #426174; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
