@@ -61,6 +61,8 @@ type Request struct {
 	// NoReadback opts a point write out of device confirmation: the outcome
 	// stops at Submitted. Use it only when no truthful readback is mapped.
 	NoReadback bool
+	// ExactWrites rejects safety clamping instead of changing declared fixed values.
+	ExactWrites bool
 }
 
 // Observed is one readback sample seen when a request confirmed.
@@ -184,6 +186,9 @@ func (m *Manager) existing(request Request) (Outcome, bool, error) {
 		return Outcome{}, false, err
 	}
 	if !strings.HasPrefix(existing.Fingerprint, "v2:") {
+		if request.ExactWrites {
+			return Outcome{}, false, errors.New("legacy request has no exact-write identity")
+		}
 		// Old outcomes stay immutable. Ambiguous legacy parameter encodings
 		// fail closed instead of claiming that two different requests match.
 		for name := range request.Parameters {
@@ -301,6 +306,10 @@ func (m *Manager) submitLocked(now time.Time, request Request) (Outcome, error) 
 				DeviceID: request.DeviceID, Point: writes[i].Point, Writes: []device.Write{writes[i]},
 				Automatic: request.Source != "" && request.Source != "manual",
 			}).Effective()
+			if request.ExactWrites && verdict.Decision == safety.DecisionClamped {
+				verdict.Decision = safety.DecisionRefused
+				verdict.Reason = "exact_write_required: " + verdict.Reason
+			}
 			if verdict.Decision == safety.DecisionRefused {
 				outcome.State = Failed
 				if request.CommandID != "" {
@@ -431,7 +440,8 @@ func fingerprintOf(request Request) (string, error) {
 		Point                    string
 		Value                    signal.Value
 		NoReadback, SafeFallback bool
-	}{request.CommandID, request.Parameters, request.Point, request.Value, request.NoReadback, request.SafeFallback})
+		ExactWrites              bool `json:",omitempty"`
+	}{request.CommandID, request.Parameters, request.Point, request.Value, request.NoReadback, request.SafeFallback, request.ExactWrites})
 	if err != nil {
 		return "", fmt.Errorf("invalid command identity: %w", err)
 	}

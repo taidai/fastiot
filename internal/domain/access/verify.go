@@ -3,7 +3,10 @@ package access
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
+
+	"fastiot/internal/ems/channel"
 
 	"fastiot/internal/ems/profile"
 )
@@ -34,9 +37,33 @@ func SafeCommand(prof profile.Profile, commandID string) (profile.CommandSpec, e
 		if command.Readback == "" {
 			return profile.CommandSpec{}, fmt.Errorf("L3 安全命令必须声明回读点")
 		}
+		for _, target := range []struct {
+			name  string
+			value float64
+		}{{command.Point, command.Value}, {command.Readback, command.ReadbackValue}} {
+			declared := false
+			for _, spec := range prof.PointSpecs {
+				if spec.Name != target.name {
+					continue
+				}
+				declared = true
+				if math.IsNaN(target.value) || math.IsInf(target.value, 0) ||
+					((spec.Function == channel.Coil || spec.Function == channel.DiscreteInput) && target.value != 0 && target.value != 1) {
+					return profile.CommandSpec{}, fmt.Errorf("L3 点位 %s 的固定值无效", target.name)
+				}
+				if len(spec.Enum) > 0 {
+					if _, ok := spec.Enum[strconv.FormatFloat(target.value, 'g', -1, 64)]; !ok {
+						return profile.CommandSpec{}, fmt.Errorf("L3 点位 %s 的固定值不在 Profile 枚举中", target.name)
+					}
+				}
+			}
+			if !declared {
+				return profile.CommandSpec{}, fmt.Errorf("L3 点位 %s 未在 Profile 声明", target.name)
+			}
+		}
 		for _, spec := range prof.PointSpecs {
 			if spec.Name == command.Point {
-				if spec.ReadOnly || !profileMarker(spec.Note, "L3_SAFE") {
+				if spec.ReadOnly || (spec.Function != channel.Coil && spec.Function != channel.HoldingRegister) || !profileMarker(spec.Note, "L3_SAFE") {
 					return profile.CommandSpec{}, fmt.Errorf("点位 %s 未声明 L3_SAFE", command.Point)
 				}
 				return command, nil
@@ -78,6 +105,11 @@ type VerificationRecord struct {
 	Reasons        []string `json:"reasons,omitempty"`
 	Basis          string   `json:"basis,omitempty"`
 	ProfileVersion string   `json:"profile_version,omitempty"`
+	MappingVersion string   `json:"mapping_version,omitempty"`
+	RequestID      string   `json:"request_id,omitempty"`
+	DeviceID       string   `json:"device_id,omitempty"`
+	CommandID      string   `json:"command_id,omitempty"`
+	CommandState   string   `json:"command_state,omitempty"`
 	Current        bool     `json:"current"`
 }
 

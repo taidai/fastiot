@@ -190,16 +190,19 @@
             <view><strong>{{ verificationResult.level }}：{{ verificationResult.passed ? "通过" : "未通过" }}</strong></view>
             <view v-if="verificationResult.record">{{ verificationResult.record.actor }} · {{ verificationResult.record.at }} · Profile {{ verificationResult.record.profile_version }}</view>
             <view v-for="reason in verificationResult.reasons" :key="reason">{{ reason }}</view>
-            <view v-if="verificationResult.command">命令状态：{{ verificationResult.command.state }}{{ verificationResult.command.reason ? ` · ${verificationResult.command.reason}` : "" }}</view>
+            <view v-if="verificationResult.command">命令状态：{{ commandStateText(verificationResult.command.state) }}{{ verificationResult.command.reason ? ` · ${verificationResult.command.reason}` : "" }}</view>
             <view v-if="verificationResult.record_error" class="warn-text">验证已执行，但历史记录保存失败。</view>
           </view>
           <view class="warning-box l3-box">
             <strong>L3 安全点写回读</strong>
             <p>只提交 Profile 显式标记 L3_SAFE 的固定值、无参数且有回读的命令。普通启停与功率命令不会出现在这里。</p>
-            <label>安全命令<select v-model="l3CommandID" :disabled="!canCommand || busy !== '' || !safeCommands.length"><option v-for="command in safeCommands" :key="command.id" :value="command.id">{{ command.name }}</option></select></label>
-            <label class="check-label"><checkbox :checked="l3Confirmed" :disabled="!canCommand || busy !== '' || !safeCommands.length" @click="l3Confirmed = !l3Confirmed" /> 我确认本次允许向所选安全点写入 Profile 固定值并等待回读</label>
-            <button class="ghost" :disabled="!canCommand || !l3Confirmed || !l3CommandID || busy !== ''" @click="runVerification('L3')">{{ busy === 'verify-L3' ? '写回读中…' : '执行一次 L3 写回读' }}</button>
-            <p v-if="!safeCommands.length">当前 Profile 没有声明可安全写回读的命令，L3 不可执行。</p><p v-else-if="!canCommand">当前账号没有 Command 权限。</p>
+            <label>安全命令<select v-model="l3CommandID" :disabled="!canConfigure || !canCommand || busy !== '' || !safeCommands.length"><option v-for="command in safeCommands" :key="command.id" :value="command.id">{{ command.name }}</option></select></label>
+            <p v-if="l3Command">{{ activeDeviceName }} · {{ l3Command.point }} → {{ l3Command.value }}；回读 {{ l3Command.readback }} = {{ l3Command.readback_value ?? 0 }}，容差 {{ l3Command.readback_tolerance ?? 0 }}，截止 {{ l3Command.timeout_ms || 5000 }} ms。</p>
+            <label class="check-label"><checkbox :checked="l3Confirmed" :disabled="!canConfigure || !canCommand || !verificationBasis || busy !== '' || !safeCommands.length" @click="l3Confirmed = !l3Confirmed" /> 我确认本次允许向所选安全点写入 Profile 固定值并等待回读</label>
+            <button class="ghost" :disabled="!canConfigure || !canCommand || !verificationBasis || !l3Confirmed || !l3CommandID || busy !== ''" @click="runVerification('L3')">{{ busy === 'verify-L3' ? '写回读中…' : '执行一次 L3 写回读' }}</button>
+            <p v-if="!safeCommands.length">当前 Profile 没有声明可安全写回读的命令，L3 不可执行。</p><p v-else-if="!canConfigure || !canCommand">L3 需要配置及额外 Command 权限。</p>
+            <p v-if="l3RequestID" class="l3-request">请求：{{ l3RequestID }} <button class="ghost" :disabled="busy !== ''" @click="queryL3">查询 L3 结果（不重发）</button></p>
+            <p>每次确认只执行声明的单次写回读；结果未知时不自动重试或回退。刷新后可用原请求身份查询。</p>
           </view>
         </view>
         <view class="acc-card">
@@ -238,7 +241,8 @@
 import { computed, onMounted, ref, watch } from "vue"
 import MemberRoles from "./MemberRoles.vue"
 import BatchAccess from "./BatchAccess.vue"
-import { request } from "../../api/client"
+import { ApiError, request } from "../../api/client"
+import { commandStateText } from "../../pages/overview/overview"
 import { nameOf, point, valueText } from "../../types/api"
 import type { Snapshot, StateValue, Node } from "../../types/api"
 import { automaticPointMap, requiredProfilePoints, canCommandAccess, canConfigureAccess, prepareModelSave, safeVerificationCommands, verificationError } from "./access"
@@ -265,9 +269,9 @@ type VerificationResult = {
   record?: VerificationRecord
   line?: { connected: boolean; stations: { server_id: number; responded: boolean; error: string }[] }
   points?: { name: string; point_id?: string; passed: boolean; quality?: string; source_time?: string; reason?: string }[]
-  command?: { state: string; reason?: string }
+  command?: { request_id: string; state: string; reason?: string }
 }
-type VerificationRecord = { at: string; actor: string; level: string; passed: boolean; reasons?: string[]; current?: boolean; profile_version?: string }
+type VerificationRecord = { at: string; actor: string; level: string; passed: boolean; reasons?: string[]; current?: boolean; profile_version?: string; basis?: string; request_id?: string }
 type ScopeRow = { id: string; name: string; bound: boolean; device?: LedgerDevice }
 
 const stages: { key: Stage; label: string }[] = [{ key: "profile", label: "选型号" }, { key: "channel", label: "选通道" }, { key: "points", label: "核对点位" }, { key: "verify", label: "验证" }]
@@ -304,6 +308,10 @@ const verificationResult = ref<VerificationResult | null>(null)
 const verificationHistory = ref<VerificationRecord[]>([])
 const l3CommandID = ref("")
 const l3Confirmed = ref(false)
+const verificationBasis = ref("")
+const l3RequestID = ref("")
+const l3RequestKey = computed(() => `l3-request:${props.snapshot?.user.user_id || ''}:${selectedKey.value}`)
+const l3Command = computed(() => safeCommands.value.find(command => command.id === l3CommandID.value))
 let modelRequest = 0
 let previewRequest = 0
 let verificationRequest = 0
@@ -740,17 +748,38 @@ async function loadVerificationHistory() {
   const channelID = selectedChannelID.value
   const serverID = selectedServerID.value
   try {
-    const result = await request<{ records: VerificationRecord[] }>(`/modbus/${encodeURIComponent(channelID)}/units/${serverID}/verify`)
-    if (channelID === selectedChannelID.value && serverID === selectedServerID.value) verificationHistory.value = result.records || []
-  } catch { /* A missing history must not hide the current model or live quality. */ }
+    const result = await request<{ records: VerificationRecord[]; basis: string }>(`/modbus/${encodeURIComponent(channelID)}/units/${serverID}/verify`)
+    if (channelID === selectedChannelID.value && serverID === selectedServerID.value) {
+      verificationHistory.value = result.records || []
+      verificationBasis.value = result.basis || ""
+    }
+  } catch {
+    if (channelID === selectedChannelID.value && serverID === selectedServerID.value) verificationBasis.value = ""
+  }
+}
+
+async function queryL3() {
+  const channelID = selectedChannelID.value, serverID = selectedServerID.value, id = l3RequestID.value
+  if (!id || !channelID) return
+  const sequence = ++verificationRequest
+  busy.value = "query-L3"
+  error.value = ""
+  try {
+    const command = await request<NonNullable<VerificationResult['command']>>(`/modbus/${encodeURIComponent(channelID)}/units/${serverID}/commands/${encodeURIComponent(id)}`)
+    await loadVerificationHistory()
+    if (sequence !== verificationRequest || channelID !== selectedChannelID.value || serverID !== selectedServerID.value) return
+    const record = verificationHistory.value.find(record => record.request_id === id)
+    verificationResult.value = { level: 'L3', passed: command.state === 'confirmed' && !!record?.current, reasons: record?.current ? record.reasons || [] : ['历史命令结果不代表当前配置验证通过'], recorded: !!record, record, command }
+  } catch (cause) { if (sequence === verificationRequest) error.value = `L3 结果查询不可用：${messageOf(cause)}。未重发操作。` }
+  finally { if (sequence === verificationRequest) busy.value = "" }
 }
 
 async function runVerification(level: "L1" | "L2" | "L3") {
   if (requireChannel() || blockStationChange()) return
   if (profileDirty.value || mappingDirty.value) { error.value = "先应用 Profile 并保存点位映射，再验证当前配置"; return }
   if (level === "L3") {
-    if (!canCommand.value) { error.value = "当前账号没有 Command 权限"; return }
-    if (!l3Confirmed.value || !l3CommandID.value) { error.value = "L3 必须选择安全命令并明确确认"; return }
+    if (!canConfigure.value || !canCommand.value) { error.value = "L3 需要配置及额外 Command 权限"; return }
+    if (!verificationBasis.value || !l3Confirmed.value || !l3CommandID.value) { error.value = "L3 必须读取当前配置依据、选择安全命令并明确确认"; return }
   }
   const requestID = ++verificationRequest
   const channelID = selectedChannelID.value
@@ -759,11 +788,20 @@ async function runVerification(level: "L1" | "L2" | "L3") {
   error.value = ""
   verificationResult.value = null
   try {
-    const result = await request<VerificationResult>(`/modbus/${encodeURIComponent(channelID)}/units/${serverID}/verify`, "POST", { level, command_id: level === "L3" ? l3CommandID.value : "", confirm: level === "L3" ? l3Confirmed.value : false })
+    let input: Record<string, unknown> = { level }
+    if (level === 'L3') {
+      l3RequestID.value = crypto.randomUUID()
+      sessionStorage.setItem(l3RequestKey.value, l3RequestID.value)
+      input = { level, command_id: l3CommandID.value, confirm: true, request_id: l3RequestID.value, basis: verificationBasis.value }
+    }
+    const result = await request<VerificationResult>(`/modbus/${encodeURIComponent(channelID)}/units/${serverID}/verify`, "POST", input)
     if (requestID === verificationRequest && channelID === selectedChannelID.value && serverID === selectedServerID.value) verificationResult.value = result
     await loadVerificationHistory()
   } catch (cause) {
-    if (requestID === verificationRequest) error.value = `${level} 验证失败：${messageOf(cause)}`
+    if (requestID === verificationRequest) {
+      const uncertain = level === 'L3' && !(cause instanceof ApiError && cause.status >= 400 && cause.status < 500)
+      error.value = uncertain ? `L3 未取得确认，结果未知：${messageOf(cause)}。请用原请求查询，不会自动重发。` : `${level} 验证被拒绝：${messageOf(cause)}`
+    }
   } finally {
     if (requestID === verificationRequest) busy.value = ""
     if (level === "L3") l3Confirmed.value = false
@@ -784,6 +822,12 @@ async function saveVerification() {
   } catch (cause) { error.value = `验证记录保存失败：${messageOf(cause)}` } finally { busy.value = "" }
 }
 
+watch(l3RequestKey, key => {
+  l3RequestID.value = sessionStorage.getItem(key) || ''
+  verificationBasis.value = ''
+  l3Confirmed.value = false
+}, { immediate: true })
+watch([l3CommandID, verificationBasis], () => { l3Confirmed.value = false })
 watch(safeCommands, commands => {
   if (!commands.some(command => command.id === l3CommandID.value)) l3CommandID.value = commands[0]?.id || ""
   l3Confirmed.value = false
