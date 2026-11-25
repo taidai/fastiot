@@ -2,6 +2,27 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { bindStateMachineDefinition, createStateMachineDefinition, executionStatusText, stateMachineSimulationPayload, stateMachineInputNumber, stateMachineCommandText } from "./state-machine.ts"
 
+test("legal Go null arrays become editable only in a detached definition copy", () => {
+  const wire = {
+    initial_state: "idle", scope: "self", states: ["idle"],
+    transitions: [
+      { transition_id: "no-actions", from: "idle", event: "tick", to: "idle", conditions: [], actions: null },
+      { transition_id: "no-guards", from: "idle", event: "start", to: "idle", conditions: null, actions: [] },
+    ],
+    bindings: { points: null, actions: null },
+  }
+  const record = { draft: wire, applied: structuredClone(wire), versions: { 1: structuredClone(wire) } }
+  const before = JSON.stringify(record)
+  const editable = bindStateMachineDefinition(record.draft, [])
+  assert.deepEqual(editable.transitions.map(t => [t.conditions, t.actions]), [[[], []], [[], []]])
+  assert.deepEqual(editable.bindings, { points: {}, actions: {} })
+  editable.transitions[0].conditions.push({ point_id: "new-input", operator: "eq", value: 0 })
+  assert.equal(JSON.stringify(record), before, "draft/applied/version wire must not be normalized in place")
+  const empty = { ...wire, transitions: null }
+  assert.deepEqual(bindStateMachineDefinition(empty, []).transitions, [])
+  assert.equal(empty.transitions, null)
+})
+
 test("uni numeric input preserves the explicit command parameter instead of substituting zero", () => {
   assert.equal(stateMachineInputNumber({ detail: { value: "20" }, target: {} }), 20)
   assert.equal(stateMachineInputNumber({ target: { value: "0" } }), 0)

@@ -93,6 +93,15 @@ export function bindStateMachineDefinition(definition: StateMachineDefinition, n
     if (typeof value === "number" && !Number.isFinite(value)) throw new Error("请输入有效数字，不能把空输入当作 0。")
     return value
   })) as StateMachineDefinition
+  // Go nil slices/maps are legal wire values. Normalize only this editor copy;
+  // the record's draft, applied definition and published versions stay exact.
+  result.transitions ??= []
+  for (const transition of result.transitions) {
+    transition.conditions ??= []
+    transition.actions ??= []
+  }
+  result.bindings.points ??= {}
+  result.bindings.actions ??= {}
   for (const [state, actions] of Object.entries(result.state_actions || {})) {
     if (!result.states.includes(state) && !actions.entry?.length && !actions.exit?.length) delete result.state_actions![state]
   }
