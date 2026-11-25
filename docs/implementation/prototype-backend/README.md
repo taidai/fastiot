@@ -18,14 +18,14 @@ The worktree starts at the current committed source plus only task-related pendi
 |---|---|---|---|
 | 01 | [真实登录与预览隔离](01.md) | None (can start immediately) | integrated — 3374d57 |
 | 02 | [项目选择与三工作台上下文统一](02.md) | 01 | integrated — 8106978 |
-| 03 | [从模板建立并维护真实台账](03.md) | 02 | in progress — isolated worktree |
-| 04 | [行业包依赖门禁](04.md) | 02 | in progress — isolated worktree |
-| 05 | [单设备 Profile 接入与只读验证](05.md) | 03 | pending |
+| 03 | [从模板建立并维护真实台账](03.md) | 02 | integrated — 3dceb63 |
+| 04 | [行业包依赖门禁](04.md) | 02 | delivered — e90bd7e; integration pending |
+| 05 | [单设备 Profile 接入与只读验证](05.md) | 03 | in progress — isolated worktree |
 | 06 | [批量接入与 CSV 逐台结果](06.md) | 05 | pending |
 | 07 | [操作抽屉与命令回读闭环](07.md) | 05 | pending |
 | 08 | [L3 安全写回读验证](08.md) | 07 | pending |
-| 09 | [按层总览与可信实时数据](09.md) | 02 | in progress — isolated worktree |
-| 10 | [历史查询、断线曲线与 CSV](10.md) | 02 | in progress — isolated worktree |
+| 09 | [按层总览与可信实时数据](09.md) | 02 | delivered — 16105ee; integration pending |
+| 10 | [历史查询、断线曲线与 CSV](10.md) | 02 | delivered — 1d398b0; integration pending |
 | 11 | [告警生命周期与交接持久化](11.md) | 09, 10 | pending |
 | 12 | [今日电量、运行时长与健康统计](12.md) | 09, 10 | pending |
 | 13 | [四段式规则与显式作用范围](13.md) | 07 | pending |
@@ -34,7 +34,7 @@ The worktree starts at the current committed source plus only task-related pendi
 | 16 | [今日执行统一查询](16.md) | 13, 14 | pending |
 | 17 | [配界面保存到客户总览](17.md) | 09 | pending |
 | 18 | [派生输入与已配置画面的联动验收](18.md) | 13, 14, 15, 17 | pending |
-| 19 | [账号、对象范围与只读权限演练](19.md) | 02 | in progress — isolated worktree |
+| 19 | [账号、对象范围与只读权限演练](19.md) | 02 | delivered — 853d5a7; integration pending |
 | 20 | [真实预检、不可变发布与包导出](20.md) | 06, 13, 14, 17 | pending |
 | 21 | [跨实例导入与现场重绑](21.md) | 20 | pending |
 | 22 | [真实部署记录与运行检查](22.md) | 21 | pending |
@@ -52,4 +52,7 @@ The worktree starts at the current committed source plus only task-related pendi
 - Frontier is now 03, 04, 09, 10 and 19; each receives an isolated worktree from the same integrated baseline.
 - Fresh integrated Go regression failed `TestProjectUpgradeRefusesUnresolvedConflictUntilSomeoneChooses`: expected the chosen template asset code but immediately read the old value. Authz, decision and domain/access passed. Ten unchanged isolated repetitions passed, so retry success is not treated as a fix.
 - Root cause: upgrade used fire-and-forget configuration point writes before freezing its after-version. A deterministic NATS acknowledgement regression failed before the fix; the implementation now requests store acknowledgement and the test also checks frozen-version contents. All `TestProjectUpgrade*` tests passed ten repetitions (34.2s). Fresh integrated authz, decision, appapi and domain/access suites then passed (`appapi` 96.7s).
+- Ticket 03 integrated and independently verified on `3dceb63`: 121 frontend tests/types/build, Go appapi/authz/domain-access, real-Go ledger browser and auth/preview regressions passed. Members and their edit version are separate acknowledged writes; crash-atomicity between them is not established.
+- The integration tip was held at `3dceb63` while 04/09/10/19 finished, avoiding repeated rebases of their final verification. All four commits are now delivered and queued; ticket 05 is running separately.
+- Ticket 09 exposed an existing intermittent `TestCalculationProjectCopyRemapsDraftReferences` failure (only two copied definitions visible immediately). Its unchanged three-repeat rerun passed but was not treated as a fix. Parent traced the same unacknowledged rewrite pattern in project reuse; deterministic acknowledgement assertion failed, then passed with a one-line store-ACK fix. Ten repetitions passed, followed by full appapi/authz/domain-access (`appapi` 76.8s).
 - Local baseline and per-ticket verification must be recorded before marking a ticket complete.
