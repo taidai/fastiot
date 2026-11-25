@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +19,8 @@ import (
 	"github.com/simpleiot/simpleiot/data"
 )
 
+var todayFixtureStarts atomic.Uint32
+
 // Private, opt-in fixture. No bus, external service, or physical writer is started.
 func TestTodayExecutionsBrowserBackend(t *testing.T) {
 	if os.Getenv("FASTIOT_TODAY_BROWSER") != "1" {
@@ -25,6 +29,22 @@ func TestTodayExecutionsBrowserBackend(t *testing.T) {
 	dir := os.Getenv("FASTIOT_TODAY_STORE")
 	if dir == "" {
 		t.Fatal("isolated store required")
+	}
+	entries, entryErr := os.ReadDir(dir)
+	names := []string{}
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	invocation := fmt.Sprintf("fixture invocation=%s pid=%d in_process_start=%d at=%s args=%q store=%q before=%v read_error=%v", data.NewID(), os.Getpid(), todayFixtureStarts.Add(1), time.Now().UTC().Format(time.RFC3339Nano), os.Args, dir, names, entryErr)
+	t.Log(invocation)
+	trace, err := os.OpenFile(filepath.Join(filepath.Dir(dir), "ticket16-fixture-invocations.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, traceErr := fmt.Fprintln(trace, invocation)
+	closeErr := trace.Close()
+	if traceErr != nil || closeErr != nil {
+		t.Fatalf("fixture invocation trace: %v %v", traceErr, closeErr)
 	}
 	base, token, h, stop := startInputServer(t, dir, "ticket16-private-only")
 	defer func() { stop() }()
@@ -78,18 +98,40 @@ func TestTodayExecutionsBrowserBackend(t *testing.T) {
 		t.Fatalf("software fixture not confirmed: %+v", machine.Execution)
 	}
 	notice := decision.Document{Scope: "self", Table: decision.Table{Rows: []decision.Row{{ID: "notice", Actions: []decision.Action{{ActionID: "notify", Notification: &decision.RuleNotification{RecipientIDs: []string{recipient}, Title: "Today private notification"}}}}}}}
-	var rule struct {
-		ID       string `json:"id"`
-		Revision string `json:"revision"`
+	terminalMode := os.Getenv("FASTIOT_TODAY_TERMINAL_BROWSER") == "1"
+	if terminalMode {
+		// Test-only declarations keep both real producers waiting while the UI
+		// is inspected; no production timer or guard is changed.
+		notice.Table.Rows[0].Actions[0].DelayMS = 600000
 	}
-	status, text := call(t, "POST", base+"/rules", token, map[string]any{"parent": scope, "description": "Today notification rule", "document": notice}, &rule)
-	if status != 200 {
-		t.Fatal(text)
+	createEnabledRule := func(name string, doc decision.Document) string {
+		t.Helper()
+		var rule struct {
+			ID       string `json:"id"`
+			Revision string `json:"revision"`
+		}
+		status, text := call(t, "POST", base+"/rules", token, map[string]any{"parent": scope, "description": name, "document": doc}, &rule)
+		if status != 200 {
+			t.Fatal(text)
+		}
+		doc.Revision = rule.Revision
+		status, text = call(t, "POST", base+"/rules/"+rule.ID+"/publish", token, doc, nil)
+		if status != 200 {
+			t.Fatal(text)
+		}
+		status, text = call(t, "POST", base+"/rules/"+rule.ID+"/enable", token, map[string]bool{"enabled": true}, nil)
+		if status != 200 {
+			t.Fatal(text)
+		}
+		return rule.ID
 	}
-	notice.Revision = rule.Revision
-	status, text = call(t, "POST", base+"/rules/"+rule.ID+"/publish", token, notice, nil)
-	if status != 200 {
-		t.Fatal(text)
+	noticeID := createEnabledRule("Today notification rule", notice)
+	expected := map[string]string{noticeID: "created"}
+	if terminalMode {
+		expected[noticeID] = "waiting-delay"
+		target := createNodeAPI(t, base, token, "variable", scope, "Unacknowledged software target", 0)
+		doc := decision.Document{Scope: "self", Table: decision.Table{Rows: []decision.Row{{ID: "software", Actions: []decision.Action{{ActionID: "pending", Value: 4, Readback: &decision.Readback{TimeoutMS: 120000}}}}}}, Bindings: decision.BindingSet{Actions: map[string]decision.Target{"pending": {NodeID: target}}}}
+		expected[createEnabledRule("Waiting software rule", doc)] = "waiting-readback"
 	}
 	startRules := func() func() {
 		m := client.NewManager(h.nc, func(nc *nats.Conn, c decision.DecisionTable) client.Client { return h.NewRuleClient(nc, c) }, RuleParentTypes())
@@ -99,20 +141,22 @@ func TestTodayExecutionsBrowserBackend(t *testing.T) {
 	}
 	stopRules := startRules()
 	defer func() { stopRules() }()
-	status, text = call(t, "POST", base+"/rules/"+rule.ID+"/enable", token, map[string]bool{"enabled": true}, nil)
-	if status != 200 {
-		t.Fatal(text)
+	for id, state := range expected {
+		waitFor(t, func() bool {
+			nodes, _ := client.GetNodes(h.nc, "all", id, "", false)
+			if len(nodes) == 0 {
+				return false
+			}
+			raw, _ := nodes[0].Points.Text("lastCheck", "")
+			var report decision.CheckReport
+			_ = json.Unmarshal([]byte(raw), &report)
+			return len(report.Actions) == 1 && report.Actions[0].Status == state
+		}, "private rule producer "+state)
 	}
-	waitFor(t, func() bool {
-		nodes, _ := client.GetNodes(h.nc, "all", rule.ID, "", false)
-		if len(nodes) == 0 {
-			return false
-		}
-		raw, _ := nodes[0].Points.Text("lastCheck", "")
-		var report decision.CheckReport
-		_ = json.Unmarshal([]byte(raw), &report)
-		return len(report.Actions) == 1 && report.Actions[0].Status == "created"
-	}, "private rule notification")
+	if os.Getenv("FASTIOT_TODAY_SETUP_ONLY") == "1" {
+		t.Log("bounded fixture setup complete; no preview listener started")
+		return
+	}
 	var mu sync.RWMutex
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
@@ -125,6 +169,20 @@ func TestTodayExecutionsBrowserBackend(t *testing.T) {
 	mux.HandleFunc("GET /__fixture", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]string{"fixture": "ticket16-private", "root": root, "scope": scope, "empty": empty, "child": child, "sibling": sibling, "machine": machine.ID, "input": input})
 	})
+	if terminalMode {
+		mux.HandleFunc("POST /__disable_rules", func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			defer mu.Unlock()
+			for id := range expected {
+				status, body := call(t, "POST", base+"/rules/"+id+"/enable", token, map[string]bool{"enabled": false}, nil)
+				if status != 200 {
+					http.Error(w, body, status)
+					return
+				}
+			}
+			w.WriteHeader(204)
+		})
+	}
 	mux.HandleFunc("POST /__restart", func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()

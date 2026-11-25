@@ -11,5 +11,5 @@ export function actionStatus(action: ExecutionAction): string {
   if (action.confirmation === 'device_readback' || action.confirmation === 'device') return '设备回读确认'
   return '已确认（确认类型未提供）'
  }
- return ({ 'waiting-hold': '持续计时中（尚未执行）', cooldown: '冷却中（尚未执行）', pending: '进行中', executing: '进行中', accepted: '已接受', submitted: '已提交（未确认）', skipped: '跳过', rejected: '已拒绝', failed: '失败', unknown: '结果未知' } as Record<string, string>)[action.status] || '结果未知'
+ return ({ 'waiting-hold': '持续计时中（尚未执行）', cooldown: '冷却中（尚未执行）', pending: '进行中', 'waiting-delay': '进行中（等待延时）', 'waiting-readback': '进行中（等待回读）', executing: '进行中', accepted: '已接受', submitted: '已提交（未确认）', skipped: '跳过', rejected: '已拒绝', failed: '失败', unknown: '结果未知' } as Record<string, string>)[action.status] || '结果未知'
 }
