@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { createRequire } from "node:module"
 
-const require = createRequire(new URL("../../../../frontend/package.json", import.meta.url))
+const require = createRequire(new URL("../../../package.json", import.meta.url))
 const { chromium } = require("playwright-core")
 const base = process.env.DELIVERY_PREVIEW_URL || "http://127.0.0.1:5174/uniapp/pages/delivery/index"
 let browser
@@ -17,7 +17,9 @@ try {
   const page = await context.newPage()
   const errors = []
   page.on("pageerror", error => errors.push(error.message))
-  await page.goto(base, { waitUntil: "domcontentloaded" })
+  const previewURL = new URL(base)
+  previewURL.searchParams.set('preview', '1')
+  await page.goto(previewURL.href, { waitUntil: "domcontentloaded" })
   await page.locator(".variant-head").first().waitFor().catch(error => { console.error({ url: page.url(), errors, apiRequests }); throw error })
   await page.locator(".version-id").first().waitFor()
   assert.match(await page.locator(".stage").innerText(), /v2026\.11\.21-1/)

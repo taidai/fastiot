@@ -79,7 +79,7 @@ const themeOptions = [
   { key: "dark" as const, label: "夜间" },
   { key: "tint" as const, label: "青玻璃" },
 ]
-const activeLabel = computed(() => props.active === "overview" ? "总览" : "原型")
+const activeLabel = computed(() => PREVIEW_MODE ? "原型预览" : tabs.find(tab => tab.key === props.active)?.label || "工作台")
 </script>
 
 <style scoped>

@@ -1,3 +1,5 @@
+import { PREVIEW_MODE } from "./source"
+
 export class ApiError extends Error {
   constructor(message: string, public status: number, public code = "") {
     super(message)
@@ -16,8 +18,9 @@ const ERROR_TEXTS: Record<string, string> = {
   history_export_limit_exceeded: "导出超过上限，请缩小点位或时间范围",
 }
 
+let redirectingToLogin = false
+
 export async function request<T>(path: string, method = "GET", body?: unknown): Promise<T> {
-  const { PREVIEW_MODE } = await import("./source")
   if (PREVIEW_MODE) {
     const { resolvePreview } = await import("./preview")
     const preview = await resolvePreview(path, method, body)
@@ -28,7 +31,7 @@ export async function request<T>(path: string, method = "GET", body?: unknown): 
     const message = preview.handled ? ERROR_TEXTS[backendCode] || backendCode || `预览操作失败：${method} ${path}` : `预览接口未实现：${method} ${path}`
     throw new ApiError(message, preview.status || 501, code)
   }
-  const token = uni.getStorageSync("fastems-token") as string
+  const token = path === "/login" ? "" : (uni.getStorageSync("fastems-token") || "") as string
   const response = await new Promise<UniApp.RequestSuccessCallbackResult>((resolve, reject) => {
     uni.request({
       url: `/api${path}`,
@@ -44,24 +47,30 @@ export async function request<T>(path: string, method = "GET", body?: unknown): 
   })
   const result = response.data as { error?: string }
   if (response.statusCode < 200 || response.statusCode >= 300) {
-    if (response.statusCode === 401) {
-      uni.removeStorageSync("fastems-token")
-      uni.redirectTo({ url: "/pages/login/index" })
+    if (response.statusCode === 401 && path !== "/login" && token === (uni.getStorageSync("fastems-token") || "") && !redirectingToLogin) {
+      logout()
     }
     const code = result?.error || ""
     throw new ApiError(ERROR_TEXTS[code] || code || `请求失败（${response.statusCode}）`, response.statusCode, code)
+  }
+  if (path !== "/login" && token !== (uni.getStorageSync("fastems-token") || "")) {
+    throw new ApiError("会话已改变，请重新读取", 401, "session_changed")
   }
   return response.data as T
 }
 
 export async function login(email: string, password: string) {
   const result = await request<{ token: string }>("/login", "POST", { email, password })
-  uni.setStorageSync("fastems-token", result.token)
+  if (!PREVIEW_MODE) uni.setStorageSync("fastems-token", result.token)
+  redirectingToLogin = false
   return result.token
 }
 
 export function logout() {
-  uni.removeStorageSync("fastems-token")
+  if (!PREVIEW_MODE) uni.removeStorageSync("fastems-token")
+  uni.$emit("session-ended")
+  if (redirectingToLogin) return
+  redirectingToLogin = true
   uni.redirectTo({ url: "/pages/login/index" })
 }
 

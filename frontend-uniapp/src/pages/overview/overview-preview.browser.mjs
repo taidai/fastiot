@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { createRequire } from "node:module"
 
-const require = createRequire(new URL("../../../../frontend/package.json", import.meta.url))
+const require = createRequire(new URL("../../../package.json", import.meta.url))
 const { chromium } = require("playwright-core")
 const base = process.env.PREVIEW_BASE_URL || "http://127.0.0.1:5174/uniapp/pages/overview/index"
 let browser
@@ -9,11 +9,14 @@ try {
   try { browser = await chromium.launch({ channel: "chrome", headless: true }) }
   catch { browser = await chromium.launch({ channel: "msedge", headless: true }) }
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } })
-  await context.addInitScript(() => localStorage.setItem("fastems-token", "prototype-preview"))
+  const apiRequests = []
+  await context.route('**/api/**', route => { apiRequests.push(route.request().url()); return route.abort() })
   const page = await context.newPage()
   const errors = []
   page.on("pageerror", error => errors.push(error.message))
-  await page.goto(base, { waitUntil: "domcontentloaded" })
+  const previewURL = new URL(base)
+  previewURL.searchParams.set('preview', '1')
+  await page.goto(previewURL.href, { waitUntil: "domcontentloaded" })
   await page.locator(".preview-page .hero h1").waitFor()
   assert.equal(await page.locator(".preview-page .hero h1").innerText(), "泵房")
   assert.equal(await page.locator(".preview-page .metric").count(), 6)
@@ -56,6 +59,8 @@ try {
   await page.locator(".topbar .workbench uni-button").filter({ hasText: "总览" }).click()
   await page.locator(".preview-page .hero h1").waitFor()
   assert.equal((await page.locator('.preview-page .bell .badge').innerText()).trim(), '1', 'alarm lifecycle survives a workbench roundtrip')
+  assert.deepEqual(apiRequests, [])
+  assert.equal(await page.evaluate(() => localStorage.getItem('fastems-token')), null)
   assert.deepEqual(errors, [])
   console.log(JSON.stringify({ ok: true, checks: ["full preview content", "glass backdrop", "history overlay", "operation scenarios"] }))
 } finally {

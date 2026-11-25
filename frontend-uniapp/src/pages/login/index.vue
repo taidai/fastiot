@@ -3,11 +3,12 @@
     <view class="login glass">
       <view class="brand">FastIOT</view>
       <view class="subtitle">可重复交付的 IoT / SCADA 工作台</view>
-      <label>账号<input v-model="email" type="text" placeholder="邮箱或账号" @confirm="submit" /></label>
-      <label>密码<input v-model="password" type="password" placeholder="密码" @confirm="submit" /></label>
+      <label>账号<input v-model="email" type="text" placeholder="邮箱或账号" @blur="email = inputValue($event)" @confirm="email = inputValue($event); submit()" /></label>
+      <label>密码<input v-model="password" type="password" placeholder="密码" @blur="password = inputValue($event)" @confirm="password = inputValue($event); submit()" /></label>
       <button class="primary" :disabled="busy" @click="submit">{{ busy ? "登录中…" : "登录" }}</button>
       <view v-if="error" class="error">{{ error }}</view>
       <view class="note">{{ PREVIEW_MODE ? "当前为原型预览模式；使用预览数据，不连接真实业务操作。" : "使用本实例账号；角色和对象范围由服务端决定。" }}</view>
+      <a :href="modeEntry.href">{{ PREVIEW_MODE ? "返回真实登录" : "进入隔离原型预览" }}</a>
     </view>
   </view>
 </template>
@@ -18,11 +19,22 @@ import { login } from "../../api/client"
 import { startPolling, session } from "../../stores/session"
 import { PREVIEW_MODE } from "../../api/source"
 
+const modeEntry = new URL(location.href)
+modeEntry.searchParams.delete("live")
+modeEntry.searchParams.delete("preview")
+if (!PREVIEW_MODE) modeEntry.searchParams.set("preview", "1")
+modeEntry.hash = PREVIEW_MODE ? "/pages/login/index" : "/pages/overview/index"
+
 const email = ref("")
 const password = ref("")
 const busy = ref(false)
 const error = ref("")
+// uni input model updates are throttled; blur/confirm carry the current value.
+function inputValue(event: unknown) {
+  return (event as { detail: { value: string } }).detail.value
+}
 async function submit() {
+  if (busy.value) return
   if (!email.value || !password.value) { error.value = "请输入账号和密码"; return }
   busy.value = true; error.value = ""
   try {

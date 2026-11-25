@@ -19,6 +19,28 @@ import (
 	"github.com/simpleiot/simpleiot/data"
 )
 
+// Uses the real Go HTTP/auth boundary and temporary storage. No device clients
+// are started: rejected preview identities must never reach a business handler.
+func TestPreviewIdentityCannotAccessRealAPI(t *testing.T) {
+	base, admin, _, _ := startInputServer(t, t.TempDir(), data.NewID())
+	status, body := call(t, http.MethodGet, base+"/snapshot", admin, nil, nil)
+	if status != http.StatusOK {
+		t.Fatalf("real login token rejected: %d %s", status, body)
+	}
+	for _, token := range []string{"", "prototype-preview", "preview-admin", "invalid.jwt.token"} {
+		for _, route := range []struct{ method, path string }{
+			{http.MethodGet, "/snapshot"},
+			{http.MethodPost, "/nodes"},
+			{http.MethodPost, "/modbus/preview-channel/units/1/commands/start"},
+		} {
+			status, body := call(t, route.method, base+route.path, token, map[string]any{}, nil)
+			if status != http.StatusUnauthorized {
+				t.Errorf("%s %s with %q: got %d %s, want 401", route.method, route.path, token, status, body)
+			}
+		}
+	}
+}
+
 func TestChannelRoutesUseConfigureAndDeleteActions(t *testing.T) {
 	base, admin, h, _ := startInputServer(t, t.TempDir(), data.NewID())
 	service := runtime.NewService(nil, time.Minute, time.Second, 100)

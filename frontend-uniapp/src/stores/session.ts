@@ -1,11 +1,11 @@
 import { computed, reactive } from "vue"
-import { request } from "../api/client"
+import { logout, request } from "../api/client"
 import { PREVIEW_MODE } from '../api/source'
 import { kindOf, nameOf } from "../types/api"
 import type { EmsAlarm, HistoryQueryResponse, Node, ScreenConfig, Snapshot, StateValue } from "../types/api"
 
 export const session = reactive({
-  token: uni.getStorageSync("fastems-token") as string,
+  token: PREVIEW_MODE ? "" : uni.getStorageSync("fastems-token") as string,
   snapshot: null as Snapshot | null,
   values: [] as StateValue[],
   alarms: [] as EmsAlarm[],
@@ -17,6 +17,17 @@ export const session = reactive({
 })
 
 let timer: ReturnType<typeof setInterval> | undefined
+
+uni.$on("session-ended", () => {
+  stopPolling()
+  session.token = ""
+  session.snapshot = null
+  session.values = []
+  session.alarms = []
+  session.quality = { channels: [], devices: [] }
+  session.layer = ""
+  session.lastSync = ""
+})
 
 export const pendingAlarms = computed(() => session.alarms.filter(alarm => alarm.active))
 export const currentLayer = computed(() => {
@@ -98,7 +109,11 @@ export async function refreshAll() {
 export function startPolling() {
   stopPolling()
   void refreshAll()
-  timer = setInterval(() => { void refreshRuntime() }, 2000)
+  timer = setInterval(() => {
+    void refreshRuntime().catch(error => {
+      session.error = error instanceof Error ? error.message : String(error)
+    })
+  }, 2000)
 }
 
 export function stopPolling() {
@@ -109,7 +124,7 @@ export function stopPolling() {
 export function requireAuth() {
   if (PREVIEW_MODE) return true
   if (!session.token) {
-    uni.redirectTo({ url: "/pages/login/index" })
+    logout()
     return false
   }
   return true
