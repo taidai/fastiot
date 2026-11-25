@@ -851,7 +851,7 @@ func (h *Handler) createNode(w http.ResponseWriter, r *http.Request, identity Id
 		writeError(w, http.StatusBadRequest, "unsupported_node_type")
 		return
 	}
-	if !legacy {
+	if !legacy || input.Type == data.NodeTypeGroup {
 		parent, ok := h.routeNode(w, input.Parent)
 		if !ok {
 			return
