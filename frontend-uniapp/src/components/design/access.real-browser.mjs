@@ -18,6 +18,9 @@ try {
   page.setDefaultTimeout(12000)
   const errors = [], writes = []
   page.on('pageerror', error => errors.push(error.message))
+  page.on('response', async response => {
+    if (response.url().endsWith('/verify') && response.request().method() === 'POST') console.log('verification', response.status(), await response.text())
+  })
   page.on('request', request => { if (request.url().includes('/api/') && request.method() !== 'GET') writes.push(request.url()) })
   await page.addInitScript(token => localStorage.setItem('fastems-token', token), fixture.token)
   await page.goto(base + '/uniapp/#/pages/design/index')
@@ -46,6 +49,7 @@ try {
   assert.equal(model.points.length, 0)
   await button('应用 Profile').click()
   await access.locator('.notice').filter({ hasText: 'Profile 已应用' }).waitFor()
+  assert.equal(await access.locator('.pipeline uni-button').filter({ hasText: /^验证$/ }).evaluate(node => node.classList.contains('ok')), false, 'mapping is not verification')
   await access.locator('.pipeline uni-button').filter({ hasText: '核对点位' }).click()
   const table = access.locator('.mini-table')
   assert.match(await table.innerText(), /100/)
@@ -57,6 +61,8 @@ try {
   await button('下一步：验证 →').click()
   await button('L1 连通验证（只读）').click()
   await access.locator('.line-result').filter({ hasText: 'L1：通过' }).waitFor()
+  // Wait on the real observation shown by the UI, not an arbitrary delay.
+  await access.locator('.quality-panel tbody tr').filter({ has: page.locator('td:first-child', { hasText: '水箱液位' }) }).locator('.chip').filter({ hasText: '有效' }).waitFor()
   await button('L2 必需点验证（只读）').click()
   await access.locator('.line-result').filter({ hasText: 'L2：通过' }).waitFor()
   model = await api(modelPath)
@@ -68,6 +74,7 @@ try {
   await access.locator('.pipeline uni-button').filter({ hasText: /^验证$/ }).click()
   await access.getByText('自动验证历史', { exact: false }).waitFor()
   assert.match(await access.innerText(), /L2/)
+  assert.equal(await access.locator('.pipeline uni-button').filter({ hasText: /^验证$/ }).evaluate(node => node.classList.contains('ok')), true, 'reload restores current L2 evidence')
   await access.locator('.pipeline uni-button').filter({ hasText: '核对点位' }).click()
   await access.locator('tbody tr').filter({ has: page.locator('td:first-child', { hasText: '水箱液位' }) }).locator('select').selectOption('')
   await button('保存点位映射').click()

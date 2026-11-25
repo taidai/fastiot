@@ -329,14 +329,14 @@ const scopeRows = computed<ScopeRow[]>(() => {
   if (selectedBusinessNode.value?.id === props.snapshot?.roots[0]) {
     for (const device of devices.value) {
       if (device.business_node_id && businessIDs.has(device.business_node_id)) continue
-      rows.push({ id: deviceKey(device), name: device.business_node_name || device.name, bound: !!device.profile_id, device })
+      rows.push({ id: deviceKey(device), name: device.business_node_name || device.name, bound: device.bound ?? !!device.profile_id, device })
     }
   }
   return rows
 })
 const scopeBoundCount = computed(() => scopeRows.value.filter(row => row.bound).length)
 const activeDeviceName = computed(() => selectedBusinessDevice.value ? nameOf(selectedBusinessDevice.value) : selectedDevice.value?.business_node_name || config.value.name || `站号 ${selectedServerID.value}`)
-const activeDeviceBound = computed(() => selectedBusinessDevice.value ? isBusinessBound(selectedBusinessDevice.value.id) : !!selectedDevice.value?.profile_id)
+const activeDeviceBound = computed(() => selectedBusinessDevice.value ? isBusinessBound(selectedBusinessDevice.value.id) : selectedDevice.value?.bound ?? !!selectedDevice.value?.profile_id)
 const selectedChannel = computed(() => channels.value.find(channel => channel.id === selectedChannelID.value) || null)
 const selectedDevice = computed(() => devices.value.find(device => device.channel_id === selectedChannelID.value && device.server_id === selectedServerID.value && (!selectedBusinessDevice.value || device.business_node_id === selectedBusinessDevice.value.id)) || null)
 const selectedKey = computed(() => selectedChannelID.value ? `${selectedChannelID.value}/${selectedServerID.value}` : "")
@@ -380,7 +380,8 @@ function stageComplete(key: Stage) {
   if (key === "profile") return !!profileID.value
   if (key === "channel") return !!selectedChannelID.value
   if (key === "points") return profilePoints.value.length > 0 && mappedCount.value === profilePoints.value.length
-  return activeDeviceBound.value
+  const latest = verificationHistory.value.filter(record => record.level === 'L2').slice(-1)[0]
+  return !mappingDirty.value && !profileDirty.value && !!latest?.passed && !!latest?.current
 }
 function isBusinessBound(id: string) {
   const device = devices.value.find(device => device.business_node_id === id)
@@ -429,7 +430,10 @@ async function openBusinessBinding(id: string) {
   }
 }
 function autoMatchAndNext() { autoMatch(); stage.value = "points" }
-function messageOf(cause: unknown) { return cause instanceof Error ? cause.message : "操作失败" }
+function messageOf(cause: unknown) {
+  const message = cause instanceof Error ? cause.message : "操作失败"
+  return ({ profile_preview_required: "先重新预览并应用 Profile，再保存映射或验证记录", profile_preview_changed: "Profile、通道或映射已改变，请重新预览后应用", mapping_version_conflict: "映射已被其他编辑修改，请刷新后重新核对；当前草稿未覆盖后端", profile_points_differ: "已有物理点与 Profile 不一致，请先修正预览差异", station_already_bound: "此站号已有设备绑定，请选择空闲站号", device_already_bound: "此设备已有绑定，请打开原绑定修改" } as Record<string, string>)[message] || message
+}
 function blockStationChange() {
   if (!stationDirty.value) return false
   error.value = "站号已修改，请先读取此站号"
@@ -480,7 +484,7 @@ async function loadDirectory() {
   }
   directoryError.value = errors.join("；")
   directoryLoading.value = false
-  emit("status", { channels: channels.value.length, devices: devices.value.length, bound: devices.value.filter(device => !!device.profile_id).length, verified: devices.value.filter(device => device.verified).length })
+  emit("status", { channels: channels.value.length, devices: devices.value.length, bound: devices.value.filter(device => device.bound ?? !!device.profile_id).length, verified: devices.value.filter(device => device.verified).length })
 }
 
 async function readStation() {
@@ -659,6 +663,7 @@ function autoMatch() {
 async function saveMapping() {
   if (requireChannel() || blockStationChange()) return
   if (!profileID.value) { error.value = "先选择设备 Profile"; return }
+  if (selectedBusinessDevice.value && (!model.value?.model || profileDirty.value)) { error.value = "先预览并应用 Profile，再保存点位映射"; return }
   busy.value = "mapping"
   error.value = ""
   notice.value = ""

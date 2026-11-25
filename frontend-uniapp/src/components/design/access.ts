@@ -104,6 +104,7 @@ export type UnitModelConfig = {
   name: string
   profile_id: string
   profile_version?: string
+  mapping_version?: string
   business_node_id?: string
   point_map: Record<string, string>
   verified: boolean

@@ -155,6 +155,10 @@ func (h *Handler) unitModel(w http.ResponseWriter, r *http.Request, identity Ide
 		if !decodeJSON(w, r, &input) {
 			return
 		}
+		if hasModel && model.BusinessNodeID != "" && input.BusinessNodeID != model.BusinessNodeID {
+			writeError(w, http.StatusConflict, "business_binding_conflict")
+			return
+		}
 		if input.BusinessNodeID != "" {
 			if !h.allows(identity, input.BusinessNodeID) {
 				writeError(w, http.StatusForbidden, "out_of_scope")
@@ -168,8 +172,13 @@ func (h *Handler) unitModel(w http.ResponseWriter, r *http.Request, identity Ide
 				writeError(w, http.StatusBadRequest, "business_device_required")
 				return
 			}
+			version, _ := h.ems.Profiles.Fingerprint(input.ProfileID)
+			if !hasModel || model.ProfileID != input.ProfileID || model.ProfileVersion != version {
+				writeError(w, http.StatusConflict, "profile_preview_required")
+				return
+			}
 		}
-		if input.MappingVersion != "" && hasModel && input.MappingVersion != model.MappingVersion {
+		if hasModel && model.MappingVersion != "" && (model.BusinessNodeID != "" || input.MappingVersion != "") && input.MappingVersion != model.MappingVersion {
 			writeError(w, http.StatusConflict, "mapping_version_conflict")
 			return
 		}

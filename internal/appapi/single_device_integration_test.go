@@ -122,10 +122,43 @@ func bindSingleDevice(t *testing.T, f *pointConfigFixture, bus, device string) {
 	}
 }
 
+func waitAccessSample(t *testing.T, f *pointConfigFixture, bus, name, quality string) {
+	t.Helper()
+	var model unitModelView
+	call(t, http.MethodGet, f.base+"/modbus/"+bus+"/units/1/model", f.token, nil, &model)
+	id := model.Model.PointMap[name]
+	waitFor(t, func() bool {
+		var state struct {
+			Values []struct {
+				PointID string `json:"point_id"`
+				Quality string `json:"quality"`
+			} `json:"values"`
+		}
+		status, _ := call(t, http.MethodGet, f.base+"/ems/state", f.token, nil, &state)
+		if status != 200 {
+			return false
+		}
+		for _, value := range state.Values {
+			if value.PointID == id && value.Quality == quality {
+				return true
+			}
+		}
+		return false
+	}, "real observation quality "+quality+" for "+name)
+}
+
 func TestSingleDeviceReadOnlyEvidenceTracksProfileAndMapping(t *testing.T) {
 	f, bus, device, offline := singleDeviceFixture(t)
 	bindSingleDevice(t, f, bus, device)
+	var initial struct {
+		Passed bool `json:"passed"`
+	}
+	status, body := call(t, http.MethodPost, f.base+"/modbus/"+bus+"/units/1/verify", f.token, map[string]any{"level": "L2"}, &initial)
+	if status != 200 || initial.Passed || !strings.Contains(body, "无实时值") {
+		t.Fatalf("L2 before first sample: %d %s", status, body)
+	}
 	f.cycle(t)
+	waitAccessSample(t, f, bus, "水箱液位", "good")
 	url := f.base + "/modbus/" + bus + "/units/1"
 	var result struct {
 		Passed  bool             `json:"passed"`
@@ -148,11 +181,17 @@ func TestSingleDeviceReadOnlyEvidenceTracksProfileAndMapping(t *testing.T) {
 			t.Fatalf("missing versioned actor/time evidence: %s", body)
 		}
 	}
+	offline()
+	waitAccessSample(t, f, bus, "水箱液位", "invalid")
+	status, body = call(t, http.MethodPost, url+"/verify", f.token, map[string]any{"level": "L2"}, &result)
+	if status != 200 || result.Passed || result.Points[0]["quality"] == "good" {
+		t.Fatalf("failed read passed: %d %s", status, body)
+	}
 	var view unitModelView
 	call(t, http.MethodGet, url+"/model", f.token, nil, &view)
 	input := *view.Model
 	delete(input.PointMap, "水箱液位")
-	status, body := call(t, http.MethodPut, url+"/model", f.token, input, nil)
+	status, body = call(t, http.MethodPut, url+"/model", f.token, input, nil)
 	if status != 200 {
 		t.Fatalf("save gap: %d %s", status, body)
 	}
@@ -199,6 +238,7 @@ func TestSingleDeviceRejectsChangedProfileAndAddress(t *testing.T) {
 	f, bus, device, _ := singleDeviceFixture(t)
 	bindSingleDevice(t, f, bus, device)
 	f.cycle(t)
+	waitAccessSample(t, f, bus, "水箱液位", "good")
 	url := f.base + "/modbus/" + bus + "/units/1"
 	var result struct {
 		Passed bool `json:"passed"`
@@ -308,12 +348,66 @@ func TestSingleDeviceProfileDefaultsReadOnlyAndValidatesEnums(t *testing.T) {
 	loadSingleDeviceProfile(t, f.handler, definition)
 	bindSingleDevice(t, f, bus, device)
 	f.cycle(t)
+	waitAccessSample(t, f, bus, "远程模式", "good")
 	var result struct {
 		Passed bool `json:"passed"`
 	}
 	status, body = call(t, http.MethodPost, f.base+"/modbus/"+bus+"/units/1/verify", f.token, map[string]any{"level": "L2"}, &result)
 	if status != 200 || result.Passed || !strings.Contains(body, "枚举") {
 		t.Fatalf("out-of-enum quality accepted: %d %s", status, body)
+	}
+}
+
+func TestSingleDeviceRejectsStaleMappingAndForeignBinding(t *testing.T) {
+	f, bus, device, _ := singleDeviceFixture(t)
+	bindSingleDevice(t, f, bus, device)
+	url := f.base + "/modbus/" + bus + "/units/1/model"
+	var first, stale unitModelView
+	call(t, http.MethodGet, url, f.token, nil, &first)
+	call(t, http.MethodGet, url, f.token, nil, &stale)
+	delete(first.Model.PointMap, "远程模式")
+	status, body := call(t, http.MethodPut, url, f.token, first.Model, nil)
+	if status != 200 {
+		t.Fatalf("first edit: %d %s", status, body)
+	}
+	status, body = call(t, http.MethodPut, url, f.token, stale.Model, nil)
+	if status != 409 || !strings.Contains(body, "mapping_version_conflict") {
+		t.Fatalf("stale mapping overwrite: %d %s", status, body)
+	}
+	stale.Model.MappingVersion = ""
+	status, body = call(t, http.MethodPut, url, f.token, stale.Model, nil)
+	if status != 409 {
+		t.Fatalf("unversioned bound mapping overwrite: %d %s", status, body)
+	}
+	scoped := inputAccount(t, f, bus, "implementer", []string{"configure"})
+	payload := map[string]any{"profile_id": "access-sim", "servers": []int{2}, "business_node_id": device, "create_points": true, "dry_run": true}
+	status, body = call(t, http.MethodPost, f.base+"/modbus/"+bus+"/units/apply", scoped, payload, nil)
+	if status != 403 {
+		t.Fatalf("foreign business reference accepted: %d %s", status, body)
+	}
+	status, body = call(t, http.MethodPost, f.base+"/modbus/"+bus+"/units/apply", f.token, payload, nil)
+	if status != 409 {
+		t.Fatalf("device bound twice: %d %s", status, body)
+	}
+}
+
+func TestSingleDeviceRejectsExpiredRequiredObservations(t *testing.T) {
+	f, bus, device, _ := singleDeviceFixture(t)
+	// Configure freshness before any acquisition runner starts.
+	f.runtime.MaxAge = time.Nanosecond
+	f.handler.ems.MaxAge = time.Nanosecond
+	bindSingleDevice(t, f, bus, device)
+	f.cycle(t)
+	waitAccessSample(t, f, bus, "水箱液位", "stale")
+	var result struct {
+		Passed bool `json:"passed"`
+		Points []struct {
+			Quality string `json:"quality"`
+		} `json:"points"`
+	}
+	status, body := call(t, http.MethodPost, f.base+"/modbus/"+bus+"/units/1/verify", f.token, map[string]any{"level": "L2"}, &result)
+	if status != 200 || result.Passed || len(result.Points) != 1 || result.Points[0].Quality != "stale" {
+		t.Fatalf("stale required point passed: %d %s", status, body)
 	}
 }
 
@@ -355,6 +449,10 @@ func TestSingleDeviceProfileCreatesPointsOnlyAfterPreview(t *testing.T) {
 	call(t, http.MethodGet, modelURL, f.token, nil, &view)
 	if view.Model != nil || len(view.Points) != 0 {
 		t.Fatal("dry-run persisted configuration")
+	}
+	status, body = call(t, http.MethodPut, modelURL, f.token, unitModelConfig{ProfileID: "access-sim", BusinessNodeID: device, PointMap: map[string]string{}}, nil)
+	if status != 409 {
+		t.Fatalf("model save bypassed Profile preview: %d %s", status, body)
 	}
 	input["dry_run"] = false
 	status, _ = call(t, http.MethodPost, url, f.token, input, nil)
