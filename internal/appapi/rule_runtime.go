@@ -3,12 +3,15 @@ package appapi
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"reflect"
 	"strconv"
 	"time"
 
 	"fastiot/internal/decision"
 	"fastiot/internal/ems/command"
+	"fastiot/internal/ems/device"
+	"fastiot/internal/ems/safety"
 	"fastiot/internal/ems/signal"
 	"github.com/nats-io/nats.go"
 	"github.com/simpleiot/simpleiot/client"
@@ -25,6 +28,41 @@ type ruleAuthorization struct {
 	GrantedAt time.Time `json:"granted_at"`
 }
 
+// ruleWriteTargets resolves every fixed write and parameter-default write of a
+// declared command, not merely the representative point selected by the editor.
+func (h *Handler) ruleWriteTargets(document decision.Document) ([]decision.Target, error) {
+	targets := []decision.Target{}
+	for _, row := range document.Table.Rows {
+		for _, action := range row.Actions {
+			target := document.Bindings.Actions[action.ActionID]
+			if target.CommandID == "" {
+				targets = append(targets, target)
+				continue
+			}
+			nodes, err := client.GetNodes(h.nc, "all", target.NodeID, "", false)
+			if err != nil || len(nodes) == 0 {
+				return nil, fmt.Errorf("command target unavailable")
+			}
+			server, _ := nodes[0].Points.ValueInt(data.PointTypeID, "")
+			profile, ok := h.commandProfile(nodes[0].Parent + "/" + strconv.Itoa(server))
+			if !ok {
+				return nil, fmt.Errorf("command profile unavailable")
+			}
+			declared, ok := profile.Command(target.CommandID)
+			if !ok {
+				return nil, fmt.Errorf("declared command unavailable")
+			}
+			for _, write := range declared.Writes {
+				targets = append(targets, decision.Target{NodeID: write.Point, PointType: data.PointTypeValueSet})
+			}
+			for _, parameter := range declared.Parameters {
+				targets = append(targets, decision.Target{NodeID: parameter.Point, PointType: data.PointTypeValueSet})
+			}
+		}
+	}
+	return targets, nil
+}
+
 // ruleExecutionSupport fails before publication/enable rather than accepting a
 // rule whose legacy variable/allocator/ramp transport would bypass commands.
 func (h *Handler) ruleExecutionSupport(identity Identity, parent string, document decision.Document) error {
@@ -36,7 +74,7 @@ func (h *Handler) ruleExecutionSupport(identity Identity, parent string, documen
 				return fmt.Errorf("rule_target_unavailable:%s", target.NodeID)
 			}
 			node := nodes[0]
-			if node.Type != data.NodeTypeModbusIO {
+			if node.Type != data.NodeTypeModbusIO && node.Type != data.NodeTypeVariable {
 				return fmt.Errorf("unsupported_rule_adapter:%s:%s", target.NodeID, node.Type)
 			}
 			safety, present, err := decision.LoadOutputSafety(h.nc, target.NodeID)
@@ -45,6 +83,18 @@ func (h *Handler) ruleExecutionSupport(identity Identity, parent string, documen
 			}
 			if present && safety.RampPerSecond != nil && *safety.RampPerSecond > 0 {
 				return fmt.Errorf("unsupported_rule_ramp:%s", target.NodeID)
+			}
+			if node.Type == data.NodeTypeVariable {
+				if target.CommandID != "" || target.Parameter != "" {
+					return fmt.Errorf("software_variable_has_no_device_command:%s", target.NodeID)
+				}
+				if action.Readback != nil && action.Readback.Target.NodeID != "" {
+					feedback, err := client.GetNodes(h.nc, "all", action.Readback.Target.NodeID, "", false)
+					if err != nil || len(feedback) == 0 || feedback[0].Type != data.NodeTypeVariable {
+						return fmt.Errorf("software_readback_requires_variable:%s", target.NodeID)
+					}
+				}
+				continue
 			}
 			channels, err := client.GetNodes(h.nc, "all", node.Parent, "", false)
 			if err != nil || len(channels) == 0 {
@@ -67,6 +117,9 @@ func (h *Handler) ruleExecutionSupport(identity Identity, parent string, documen
 				if !ok {
 					return fmt.Errorf("command_points_not_mapped:%s", target.NodeID)
 				}
+				if err := profile.Validate(); err != nil {
+					return err
+				}
 				if _, ok := profile.Command(target.CommandID); !ok {
 					return fmt.Errorf("command_not_available:%s", target.CommandID)
 				}
@@ -76,6 +129,99 @@ func (h *Handler) ruleExecutionSupport(identity Identity, parent string, documen
 		}
 	}
 	return nil
+}
+
+// Software variables use the same caller-advanced canonical seam as ticket14.
+// Authorization and the durable execution reservation are checked by the caller.
+// An existing identity, including an unfinished/unknown one, is never written again.
+func (h *Handler) submitRuleSoftware(input decision.RuleCommand) (command.Outcome, error) {
+	h.commandMu.Lock()
+	defer h.commandMu.Unlock()
+	manager := h.commands()
+	request := command.Request{ID: input.RequestID, DeviceID: input.Target.NodeID, Point: input.Target.NodeID, Value: signal.Num(input.Action.Value), Actor: "rule:" + input.RuleID, Source: "rule:" + input.RuleID + ":" + input.Revision, DispatchID: input.ExecutionID, Stage: "software:" + input.RowID}
+	verdict := h.commandGuard(command.GuardRequest{Point: input.Target.NodeID, Automatic: true, Writes: []device.Write{{Point: input.Target.NodeID, Value: request.Value}}}).Effective()
+	if verdict.Decision == safety.DecisionClamped {
+		request.Value = signal.Num(verdict.Value)
+	}
+	if old, found, err := manager.Existing(request); err != nil || found {
+		return old, err
+	}
+	outcome, err := manager.Track(time.Now(), request)
+	if err != nil {
+		return outcome, err
+	}
+	if verdict.Decision == safety.DecisionRefused {
+		updated, ok := manager.SetState(time.Now(), request.ID, command.Rejected, verdict.Reason)
+		if !ok || updated.State != command.Rejected {
+			return updated, fmt.Errorf("command_state_unavailable")
+		}
+		return updated, nil
+	}
+	point := data.NewPointFloat(data.PointTypeValueSet, input.Target.Key, request.Value.Num)
+	point.Origin = request.Actor
+	if err := client.SendNodePoint(h.nc, input.Target.NodeID, point, true); err != nil {
+		updated, _ := manager.SetState(time.Now(), request.ID, command.Unknown, "software write result unknown; not retried")
+		return updated, err
+	}
+	return outcome, nil
+}
+
+// Only a fresh software-value acknowledgment advances an External outcome.
+// This is not physical feedback: Observed remains empty and the sequence labels
+// the confirmation as software. Terminal outcomes are immutable at this seam.
+func (h *Handler) observeRuleSoftware(id string, target decision.Target, timeoutMS int, tolerance float64) (command.Outcome, bool) {
+	h.commandMu.Lock()
+	defer h.commandMu.Unlock()
+	manager := h.commands()
+	if manager == nil {
+		return command.Outcome{}, false
+	}
+	outcome, found, err := manager.Find(id)
+	if err != nil || !found {
+		return outcome, false
+	}
+	if !outcome.External || outcome.State != command.Accepted {
+		return outcome, true
+	}
+	now := time.Now()
+	deadline := outcome.StartedAt.Add(time.Duration(timeoutMS) * time.Millisecond)
+	state, reason := command.Accepted, ""
+	nodes, err := client.GetNodes(h.nc, "all", target.NodeID, "", false)
+	if err == nil && len(nodes) > 0 && nodes[0].Type == data.NodeTypeVariable && len(outcome.Writes) == 1 {
+		quality, hasQuality := nodes[0].Points.Text("quality", "")
+		point, ok := nodes[0].Points.Find(target.PointType, target.Key)
+		if ok && point.Tombstone%2 == 0 && (!hasQuality || quality == "good") && point.Time.After(outcome.StartedAt) && !point.Time.After(now) && !point.Time.After(deadline) {
+			value, valueErr := point.ValueFloat()
+			if valueErr == nil && finite(value) {
+				state, reason = command.Confirmed, "software value acknowledged; not device feedback"
+				if math.Abs(value-outcome.Writes[0].Value.Num) > tolerance {
+					state, reason = command.Failed, "software value mismatch"
+				}
+			}
+		}
+	}
+	if state == command.Accepted && !now.Before(deadline) {
+		state, reason = command.Unknown, "software acknowledgment timeout; result unknown"
+	}
+	if state != command.Accepted {
+		if updated, ok := manager.SetState(now, id, state, reason); ok {
+			return updated, true
+		}
+	}
+	return outcome, true
+}
+
+func (h *Handler) stopRuleSoftware(id string) {
+	h.commandMu.Lock()
+	defer h.commandMu.Unlock()
+	manager := h.commands()
+	if manager == nil {
+		return
+	}
+	outcome, found, err := manager.Find(id)
+	if err == nil && found && outcome.External && outcome.State == command.Accepted {
+		manager.SetState(time.Now(), id, command.Unknown, "rule stopped before software acknowledgment")
+	}
 }
 
 // NewRuleClient is the sole production decision runtime adapter. Saving,
@@ -92,8 +238,10 @@ func (h *Handler) NewRuleClient(nc *nats.Conn, config decision.DecisionTable) cl
 		return samples
 	}
 	return decision.NewDecisionTableClientWithCommands(nc, config, observations, decision.RuleCommands{
-		Validate: func(id string, doc decision.Document) error { _, err := h.ruleRuntimeAuthority(id, doc); return err },
-		Submit:   h.submitRuleCommand,
+		Validate:         func(id string, doc decision.Document) error { _, err := h.ruleRuntimeAuthority(id, doc); return err },
+		Submit:           h.submitRuleCommand,
+		SoftwareFeedback: h.observeRuleSoftware,
+		StopSoftware:     h.stopRuleSoftware,
 		Get: func(id string) (command.Outcome, bool) {
 			manager := h.commands()
 			if manager == nil {
@@ -132,6 +280,10 @@ func (h *Handler) ruleRuntimeAuthority(id string, document decision.Document) (I
 }
 
 func (h *Handler) submitRuleCommand(input decision.RuleCommand) (command.Outcome, error) {
+	h.virtualInputMu.Lock()
+	defer h.virtualInputMu.Unlock()
+	h.ownershipMu.Lock()
+	defer h.ownershipMu.Unlock()
 	manager := h.commands()
 	if manager == nil || manager.Persist == nil || manager.Lookup == nil {
 		return command.Outcome{}, fmt.Errorf("durable command runtime unavailable")
@@ -148,6 +300,9 @@ func (h *Handler) submitRuleCommand(input decision.RuleCommand) (command.Outcome
 	if err != nil {
 		return command.Outcome{}, err
 	}
+	if err := decision.ValidateResolvedOutputOwnership(h.nc, input.RuleID, document, h.ruleWriteTargets); err != nil {
+		return command.Outcome{}, err
+	}
 	var reservation decision.ExecutionReservation
 	reserved, _ := nodes[0].Points.Text("lastExecution", "")
 	if json.Unmarshal([]byte(reserved), &reservation) != nil || reservation.ID != input.ExecutionID || reservation.Row != input.RowID || reservation.Revision != input.Revision {
@@ -160,7 +315,7 @@ func (h *Handler) submitRuleCommand(input decision.RuleCommand) (command.Outcome
 			valid = reflect.DeepEqual(action, input.Action) && document.Bindings.Actions[action.ActionID] == input.Target
 		}
 	}
-	if !valid || input.ExecutionID == "" || input.RequestID != fmt.Sprintf("%s/%d", input.ExecutionID, input.Step) {
+	if !valid || input.ExecutionID == "" || input.RequestID != fmt.Sprintf("%s-%d", input.ExecutionID, input.Step) {
 		return command.Outcome{}, fmt.Errorf("invalid rule action identity")
 	}
 	points, err := client.GetNodes(h.nc, "all", input.Target.NodeID, "", false)
@@ -168,6 +323,9 @@ func (h *Handler) submitRuleCommand(input decision.RuleCommand) (command.Outcome
 		return command.Outcome{}, fmt.Errorf("target unavailable")
 	}
 	point := points[0]
+	if point.Type == data.NodeTypeVariable {
+		return h.submitRuleSoftware(input)
+	}
 	if point.Type != data.NodeTypeModbusIO {
 		return command.Outcome{}, fmt.Errorf("rule action requires a canonical device adapter")
 	}

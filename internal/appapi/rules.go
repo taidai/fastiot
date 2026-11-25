@@ -267,10 +267,10 @@ func (h *Handler) replayRule(w http.ResponseWriter, r *http.Request, identity Id
 		return
 	}
 	var input struct {
-		VersionID  string             `json:"version_id"`
-		Inputs     map[string]float64 `json:"inputs"`
-		TextInputs map[string]string  `json:"text_inputs"`
-		At         string             `json:"at"`
+		VersionID  string                    `json:"version_id"`
+		Inputs     decision.SimulationInputs `json:"inputs"`
+		TextInputs map[string]string         `json:"text_inputs"`
+		At         string                    `json:"at"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return

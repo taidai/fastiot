@@ -34,6 +34,9 @@ func readbackTarget(action Action, binding Target) Target {
 	}
 	if target.NodeID == "" {
 		target.NodeID = binding.NodeID
+		if target.Key == "" {
+			target.Key = binding.Key
+		}
 	}
 	if target.PointType == "" {
 		target.PointType = data.PointTypeValue
@@ -106,6 +109,31 @@ func (c *Client) checkRuleReadback(s *actionSequence, action Action, binding Tar
 	}
 	deadline := s.started.Add(time.Duration(readback.TimeoutMS) * time.Millisecond)
 	target := readbackTarget(action, binding)
+	if outcome.External {
+		if c.commands.SoftwareFeedback == nil {
+			s.fail("unknown", "software feedback adapter unavailable")
+			return true
+		}
+		outcome, ok = c.commands.SoftwareFeedback(check.CommandID, target, readback.TimeoutMS, readback.Tolerance)
+		if !ok {
+			s.fail("unknown", "software command unavailable")
+			return true
+		}
+		if outcome.State == command.Confirmed {
+			s.confirm()
+			check.Confirmation = "software"
+			return true
+		}
+		if outcome.State != command.Accepted {
+			s.fail(string(outcome.State), outcome.Reason)
+			return true
+		}
+		if !now.Before(deadline) {
+			s.fail("unknown", "software acknowledgment result could not be persisted")
+			return true
+		}
+		return false
+	}
 	if c.observations != nil {
 		sample, present := c.observations(now)[target.NodeID]
 		value := sample.Value.Num
@@ -125,6 +153,7 @@ func (c *Client) checkRuleReadback(s *actionSequence, action Action, binding Tar
 			}
 			if outcome.State == command.Confirmed {
 				s.confirm()
+				check.Confirmation = "device"
 				return true
 			}
 		}

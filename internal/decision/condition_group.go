@@ -9,6 +9,7 @@ import (
 )
 
 func conditionGroupInput(rowID string) string { return "__decision_condition_group__" + rowID }
+func timeWindowInput(rowID string) string     { return "__decision_time_window__" + rowID }
 
 func conditionValue(condition Condition) signal.Value {
 	switch condition.Kind {
@@ -23,7 +24,22 @@ func conditionValue(condition Condition) signal.Value {
 
 func ruleConditions(row Row) []rule.Condition {
 	if row.Match == "any" && len(row.Conditions) > 0 {
-		return []rule.Condition{{Input: conditionGroupInput(row.ID), Op: "eq", Value: signal.Flag(true)}}
+		points, windows := false, false
+		for _, condition := range row.Conditions {
+			if condition.Kind == "time" {
+				windows = true
+			} else {
+				points = true
+			}
+		}
+		conditions := []rule.Condition{}
+		if points {
+			conditions = append(conditions, rule.Condition{Input: conditionGroupInput(row.ID), Op: "eq", Value: signal.Flag(true)})
+		}
+		if windows {
+			conditions = append(conditions, rule.Condition{Input: timeWindowInput(row.ID), Op: "eq", Value: signal.Flag(true)})
+		}
+		return conditions
 	}
 	conditions := make([]rule.Condition, 0, len(row.Conditions))
 	for _, condition := range row.Conditions {
@@ -80,14 +96,19 @@ func conditionGroupSamples(table Table, now time.Time, samples map[string]signal
 				result[id] = sample
 			}
 		}
-		matched := false
+		groups := map[string]bool{}
 		for _, condition := range row.Conditions {
+			input := conditionGroupInput(row.ID)
+			if condition.Kind == "time" {
+				input = timeWindowInput(row.ID)
+			}
 			ok, _ := conditionMatches(condition, samples, now)
-			matched = matched || ok
+			groups[input] = groups[input] || ok
 		}
-		result[conditionGroupInput(row.ID)] = signal.Sample{
-			Input: conditionGroupInput(row.ID), Value: signal.Flag(matched), Quality: signal.Good,
-			SourceTime: now, ReceivedTime: now,
+		// The point OR group and the time-window clause are separate constraints.
+		// Multiple OR windows remain a union, but cannot replace point conditions.
+		for input, matched := range groups {
+			result[input] = signal.Sample{Input: input, Value: signal.Flag(matched), Quality: signal.Good, SourceTime: now, ReceivedTime: now}
 		}
 	}
 	return result

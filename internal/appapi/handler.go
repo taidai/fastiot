@@ -804,7 +804,7 @@ func (h *Handler) snapshot(w http.ResponseWriter, identity Identity) {
 		return
 	}
 	writeJSON(w, map[string]any{
-		"user": identity, "roots": identity.Anchors, "nodes": data.RedactNodes(publicInputNodes(markSiteRoot(nodes))),
+		"user": identity, "roots": identity.Anchors, "nodes": data.RedactNodes(h.publicRuleNodes(identity, publicInputNodes(markSiteRoot(nodes)))),
 		"industry":                h.projectIndustry(required),
 		"session_timeout_seconds": int(h.sessionTimeout / time.Second),
 	})
@@ -1182,7 +1182,7 @@ func (h *Handler) enableRule(w http.ResponseWriter, r *http.Request, identity Id
 		}
 		var document decision.Document
 		applied, _ := rule.Points.Text("applied", "")
-		if applied == "" || json.Unmarshal([]byte(applied), &document) != nil || document.Validate() != nil {
+		if applied == "" || json.Unmarshal([]byte(applied), &document) != nil || document.Revision == "" || document.Validate() != nil {
 			writeError(w, http.StatusBadRequest, "publish_required")
 			return
 		}
@@ -1195,7 +1195,7 @@ func (h *Handler) enableRule(w http.ResponseWriter, r *http.Request, identity Id
 		}
 		h.ownershipMu.Lock()
 		defer h.ownershipMu.Unlock()
-		if err := decision.ValidateOutputOwnership(h.nc, id, document); err != nil {
+		if err := decision.ValidateResolvedOutputOwnership(h.nc, id, document, h.ruleWriteTargets); err != nil {
 			writeError(w, http.StatusConflict, "output_owned")
 			return
 		}
@@ -1243,10 +1243,10 @@ func (h *Handler) testRule(w http.ResponseWriter, r *http.Request, identity Iden
 		return
 	}
 	var input struct {
-		Document   decision.Document  `json:"document"`
-		Inputs     map[string]float64 `json:"inputs"`
-		TextInputs map[string]string  `json:"text_inputs"`
-		At         string             `json:"at"`
+		Document   decision.Document         `json:"document"`
+		Inputs     decision.SimulationInputs `json:"inputs"`
+		TextInputs map[string]string         `json:"text_inputs"`
+		At         string                    `json:"at"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return

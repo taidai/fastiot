@@ -31,9 +31,11 @@ type RuleCommand struct {
 // Legacy standalone clients keep their old transport; the application always
 // constructs its clients with this boundary and never falls back from it.
 type RuleCommands struct {
-	Validate func(string, Document) error
-	Submit   func(RuleCommand) (command.Outcome, error)
-	Get      func(string) (command.Outcome, bool)
+	Validate         func(string, Document) error
+	Submit           func(RuleCommand) (command.Outcome, error)
+	Get              func(string) (command.Outcome, bool)
+	SoftwareFeedback func(string, Target, int, float64) (command.Outcome, bool)
+	StopSoftware     func(string)
 }
 
 func NewDecisionTableClientWithCommands(nc *nats.Conn, config DecisionTable, observations Observations, commands RuleCommands) client.Client {
@@ -83,6 +85,13 @@ func (c *Client) abandonSequence(active *activeTable) {
 	if c.commands == nil || active == nil || active.sequence == nil || active.sequence.done {
 		return
 	}
+	if c.commands.StopSoftware != nil {
+		for _, check := range active.sequence.checks {
+			if check.CommandID != "" {
+				c.commands.StopSoftware(check.CommandID)
+			}
+		}
+	}
 	active.sequence.fail("unknown", "rule stopped before sequence completion; device commands retain canonical outcomes")
 	var report CheckReport
 	if json.Unmarshal([]byte(c.lastCheck), &report) == nil {
@@ -101,7 +110,7 @@ func (c *Client) abandonSequence(active *activeTable) {
 
 func (c *Client) submitRuleStep(active *activeTable, action Action, target Target) error {
 	s := active.sequence
-	id := fmt.Sprintf("%s/%d", s.executionID, s.next)
+	id := fmt.Sprintf("%s-%d", s.executionID, s.next)
 	s.checks[s.next].CommandID = id
 	outcome, err := c.commands.Submit(RuleCommand{RuleID: c.config.ID, Revision: c.documentRevision(), ExecutionID: s.executionID, RequestID: id, RowID: s.rowID, Step: s.next, Target: target, Action: action})
 	if err != nil {

@@ -241,7 +241,7 @@ func TestRoleDefaultsForEveryActionOverHTTP(t *testing.T) {
 	var rule struct {
 		ID string `json:"id"`
 	}
-	status, body = call(t, http.MethodPost, base+"/rules", admin, map[string]any{"parent": root, "description": "empty", "document": map[string]any{"table": map[string]any{"rows": []any{}}}}, &rule)
+	status, body = call(t, http.MethodPost, base+"/rules", admin, map[string]any{"parent": root, "description": "empty", "document": map[string]any{"scope": "self", "table": map[string]any{"rows": []any{}}}}, &rule)
 	if status != http.StatusOK {
 		t.Fatalf("create rule: %d %s", status, body)
 	}

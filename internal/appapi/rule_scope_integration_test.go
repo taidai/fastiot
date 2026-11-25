@@ -4,16 +4,90 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 
 	"fastiot/internal/decision"
+	"fastiot/internal/emsapi"
 	"github.com/simpleiot/simpleiot/client"
 	"github.com/simpleiot/simpleiot/data"
 )
 
-func TestRulePublicationRefusesUnsupportedExecutionAdapter(t *testing.T) {
+func TestRuleOwnershipIncludesEveryDeclaredCommandWrite(t *testing.T) {
+	f := newPointConfigFixture(t)
+	f.handler.SetDataDir(f.dir)
+	f.handler.SetEMS(emsapi.New(f.runtime, time.Second))
+	loadSingleDeviceProfile(t, f.handler, `{"id":"rule-multi","vendor":"Private fixture","model":"Multi write","protocol":"modbus","point_specs":[{"name":"A","function":"holdingRegister","address":10,"format":"uint16","scale":1,"read_only":false},{"name":"B","function":"holdingRegister","address":11,"format":"uint16","scale":1,"read_only":false}],"command_specs":[{"id":"both","name":"Both","parameters":[{"name":"a","point":"A","kind":"number","default":1},{"name":"b","point":"B","kind":"number","default":2}]},{"id":"only-b","name":"B","parameters":[{"name":"b","point":"B","kind":"number","default":2}]}]}`)
+	root := snapshotRoot(t, f.base, f.token)
+	bus := f.createBus(t, "Multi write declaration")
+	a := f.createPoint(t, bus, ModbusIOInput{Description: "A", ServerID: 1, Address: 10, IOType: "modbusHoldingRegister", DataFormat: "uint16", Scale: 1})
+	b := f.createPoint(t, bus, ModbusIOInput{Description: "B", ServerID: 1, Address: 11, IOType: "modbusHoldingRegister", DataFormat: "uint16", Scale: 1})
+	status, body := call(t, http.MethodPut, f.base+"/modbus/"+bus+"/units/1/model", f.token, unitModelConfig{ProfileID: "rule-multi", PointMap: map[string]string{"A": a, "B": b}}, nil)
+	if status != 200 {
+		t.Fatalf("model: %d %s", status, body)
+	}
+	for i, target := range []decision.Target{{NodeID: a, CommandID: "both", Parameter: "a"}, {NodeID: b, CommandID: "only-b", Parameter: "b"}} {
+		doc := decision.Document{Scope: "descendants", Table: decision.Table{Rows: []decision.Row{{ID: "r", Actions: []decision.Action{{ActionID: "a", Value: 1}}}}}, Bindings: decision.BindingSet{Actions: map[string]decision.Target{"a": target}}}
+		var created struct {
+			ID       string `json:"id"`
+			Revision string `json:"revision"`
+		}
+		status, body = call(t, http.MethodPost, f.base+"/rules", f.token, map[string]any{"parent": root, "description": "Complete command footprint", "document": doc}, &created)
+		if status != 200 {
+			t.Fatalf("draft: %d %s", status, body)
+		}
+		doc.Revision = created.Revision
+		status, body = call(t, http.MethodPost, f.base+"/rules/"+created.ID+"/publish", f.token, doc, nil)
+		if status != 200 {
+			t.Fatalf("publish: %d %s", status, body)
+		}
+		status, body = call(t, http.MethodPost, f.base+"/rules/"+created.ID+"/enable", f.token, map[string]bool{"enabled": true}, nil)
+		want := 200
+		if i == 1 {
+			want = 409
+		}
+		if status != want {
+			t.Fatalf("command footprint owner %d: %d %s want %d", i, status, body, want)
+		}
+	}
+}
+
+func TestRuleOwnershipNormalizesDefaultOutput(t *testing.T) {
 	base, token, _, _ := startInputServer(t, t.TempDir(), data.NewID())
 	root := snapshotRoot(t, base, token)
-	target := createNodeAPI(t, base, token, "variable", root, "legacy output", 0)
+	target := createNodeAPI(t, base, token, "variable", root, "one automatic owner", 0)
+	for i, pointType := range []string{"", "valueSet"} {
+		doc := decision.Document{Scope: "self", Table: decision.Table{Rows: []decision.Row{{ID: "r", Actions: []decision.Action{{ActionID: "a", Value: 1}}}}}, Bindings: decision.BindingSet{Actions: map[string]decision.Target{"a": {NodeID: target, PointType: pointType}}}}
+		var created struct {
+			ID       string `json:"id"`
+			Revision string `json:"revision"`
+		}
+		status, body := call(t, http.MethodPost, base+"/rules", token, map[string]any{"parent": root, "description": "owner", "document": doc}, &created)
+		if status != 200 {
+			t.Fatalf("draft: %d %s", status, body)
+		}
+		doc.Revision = created.Revision
+		status, body = call(t, http.MethodPost, base+"/rules/"+created.ID+"/publish", token, doc, nil)
+		if status != 200 {
+			t.Fatalf("publish: %d %s", status, body)
+		}
+		status, body = call(t, http.MethodPost, base+"/rules/"+created.ID+"/enable", token, map[string]bool{"enabled": true}, nil)
+		want := 200
+		if i == 1 {
+			want = 409
+		}
+		if status != want {
+			t.Fatalf("owner %d got %d %s want %d", i, status, body, want)
+		}
+	}
+}
+
+func TestRulePublicationRefusesUnsupportedExecutionAdapter(t *testing.T) {
+	base, token, h, _ := startInputServer(t, t.TempDir(), data.NewID())
+	root := snapshotRoot(t, base, token)
+	target := data.NewID()
+	if err := client.SendNode(h.nc, data.NodeEdge{ID: target, Parent: root, Type: "opcuaPoint"}, "fixture"); err != nil {
+		t.Fatal(err)
+	}
 	doc := decision.Document{Scope: "self", Table: decision.Table{Rows: []decision.Row{{ID: "r", Actions: []decision.Action{{ActionID: "a", Value: 1}}}}}, Bindings: decision.BindingSet{Actions: map[string]decision.Target{"a": {NodeID: target}}}}
 	var created struct {
 		ID       string `json:"id"`

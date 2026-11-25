@@ -35,6 +35,11 @@ func (d Document) RuleTable() (rule.Table, error) {
 			Hold:     time.Duration(row.HoldMS) * time.Millisecond,
 			Cooldown: time.Duration(row.CooldownMS) * time.Millisecond,
 		})
+		// Later authored rows are unreachable after an unconditional first match.
+		// Keep them in the document/traces, not in the runtime's default-last table.
+		if len(row.Conditions) == 0 {
+			break
+		}
 	}
 	return rule.Table{ID: "decision", Version: 1, Rows: rows}, nil
 }
@@ -145,15 +150,16 @@ type CheckInput struct {
 }
 
 type CheckAction struct {
-	CommandID string        `json:"command_id,omitempty"`
-	Target    Target        `json:"target,omitempty"`
-	Output    string        `json:"output"`
-	Requested float64       `json:"requested"`
-	Applied   float64       `json:"applied"`
-	Blocked   bool          `json:"blocked"`
-	Reason    string        `json:"reason"`
-	Status    string        `json:"status,omitempty"`
-	Shares    []alloc.Share `json:"shares,omitempty"`
+	CommandID    string        `json:"command_id,omitempty"`
+	Confirmation string        `json:"confirmation,omitempty"`
+	Target       Target        `json:"target,omitempty"`
+	Output       string        `json:"output"`
+	Requested    float64       `json:"requested"`
+	Applied      float64       `json:"applied"`
+	Blocked      bool          `json:"blocked"`
+	Reason       string        `json:"reason"`
+	Status       string        `json:"status,omitempty"`
+	Shares       []alloc.Share `json:"shares,omitempty"`
 }
 
 type CheckReport struct {
@@ -293,6 +299,13 @@ func (d Document) Simulate(inputs map[string]float64, texts map[string]string, n
 			trace.State = "no-match"
 			if row.Match == "any" {
 				for _, condition := range row.Conditions {
+					group := conditionGroupInput(row.ID)
+					if condition.Kind == "time" {
+						group = timeWindowInput(row.ID)
+					}
+					if samples[group].Value.Bool {
+						continue
+					}
 					if _, reason := conditionMatches(condition, samples, now); reason != "" {
 						trace.Reasons = append(trace.Reasons, reason)
 					}

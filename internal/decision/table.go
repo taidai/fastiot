@@ -116,6 +116,10 @@ func (t Table) Validate() error {
 		if row.HoldMS < 0 || row.CooldownMS < 0 {
 			return fmt.Errorf("row %s: hold and cooldown must not be negative", row.ID)
 		}
+		const maxMilliseconds = int64(1<<63-1) / int64(time.Millisecond)
+		if int64(row.HoldMS) > maxMilliseconds || int64(row.CooldownMS) > maxMilliseconds {
+			return fmt.Errorf("row %s: timing overflows runtime duration", row.ID)
+		}
 		for _, condition := range row.Conditions {
 			if condition.Kind == "time" {
 				if err := validateTimeCondition(condition); err != nil {
@@ -168,6 +172,9 @@ func (t Table) Validate() error {
 			}
 			if action.DelayMS < 0 {
 				return fmt.Errorf("row %s: action delay must not be negative", row.ID)
+			}
+			if int64(action.DelayMS) > maxMilliseconds {
+				return fmt.Errorf("row %s: action delay overflows runtime duration", row.ID)
 			}
 			if action.Readback != nil {
 				if action.Readback.TimeoutMS <= 0 || action.Readback.TimeoutMS > 120000 {

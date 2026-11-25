@@ -223,6 +223,9 @@ function initialDocument(rule: Node, nodes: Node[]): Document {
 }
 
 export default function DecisionEditor({ token, rule, nodes, onRefresh, onError, onSelect, readOnly }: Props) {
+  const ruleAccess = useMemo<Record<string, boolean>>(() => {
+    try { return JSON.parse(point(rule, "ruleAccess")?.text || "{}") } catch { return { draft_restricted: true } }
+  }, [rule])
   const available = useMemo(
     () => nodes.filter((node) => node.type === "variable" || node.type === "modbusIo"),
     [nodes],
@@ -510,6 +513,7 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
     }
   }
 
+  if (ruleAccess.draft_restricted) return <section className="rule-editor" role="alert"><h2>{nameOf(rule)}</h2><p>规则定义的引用超出当前范围或来源不可确认，内容受限；不会把不可见内容当作空草稿。</p></section>
   return <section className="rule-editor">
     <div className="editor-heading">
       <div>
@@ -524,6 +528,7 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
       </div>
     </div>
 
+    {(ruleAccess.history_restricted || ruleAccess.trace_restricted || ruleAccess.applied_restricted || ruleAccess.diagnostics_restricted) && <p role="status">部分发布版本或运行记录受限；当前可见草稿保持原样。</p>}
     {!readOnly && <div className="rule-management">
       {showRename && <form onSubmit={(event) => { event.preventDefault(); void manage("rename") }}><input autoFocus aria-label="规则名称" value={newName} onChange={(event) => setNewName(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") setShowRename(false) }} required /><button className="secondary-button" disabled={busy !== ""}>保存名称</button></form>}
       <button className="text-button" onClick={() => { setNewName(nameOf(rule)); setShowRename(!showRename) }}>{showRename ? "取消重命名" : "重命名"}</button>

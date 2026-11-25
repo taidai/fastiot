@@ -5,6 +5,27 @@ import * as strategy from './strategy.ts'
 const node = (id, parent, type = 'group', points = []) => ({ id, parent, type, points })
 const rule = (id, parent, scope) => node(id, parent, 'decisionTable', [{ type: 'applied', text: JSON.stringify({ scope, table: { rows: [] } }) }])
 
+test('restricted historical data does not mark an allowed current draft restricted', () => {
+ const current = node('r', 'site', 'decisionTable', [{ type: 'ruleAccess', key: '0', text: '{"history_restricted":true,"trace_restricted":true}' }])
+ assert.equal(strategy.getRuleAccess(current).history_restricted, true)
+ assert.equal(strategy.getRuleAccess(current).draft_restricted, undefined)
+ assert.deepEqual(strategy.getRuleAccess(), {})
+})
+
+test('invalid rule numeric input stays invalid rather than becoming zero', () => {
+ assert.equal(strategy.ruleInputNumber({ detail: { value: '0' } }), 0)
+ assert.equal(Number.isNaN(strategy.ruleInputNumber({ detail: { value: '' } })), true)
+ assert.equal(Number.isNaN(strategy.ruleInputNumber({ detail: { value: 'NaN' } })), true)
+ assert.equal(Number.isNaN(strategy.ruleInputNumber({ detail: { value: null } })), true)
+ assert.throws(() => strategy.createSimulationPayload(strategy.parseDocument(), {}, {}, '', Number.NaN), /模拟/)
+})
+
+test('rule fields accept both UniApp detail and native select event values', () => {
+ assert.equal(strategy.ruleInputValue({ detail: { value: '1.2' }, target: {} }), '1.2')
+ assert.equal(strategy.ruleInputValue({ target: { value: 'descendants' } }), 'descendants')
+ assert.equal(strategy.ruleInputValue({ detail: { value: 0 } }), '0')
+})
+
 test('current-value simulation never invents zero or relabels invalid data as good', () => {
  const document = { table: { rows: [] }, bindings: { points: { zero: { node_id: 'p0' }, bad: { node_id: 'p1' }, absent: { node_id: 'p2' } }, actions: {} } }
  const values = [{ point_id: 'p0', quality: 'good', source_time: '2026-11-25T00:00:00Z', value: { kind: 'number', number: 0 } }, { point_id: 'p1', quality: 'invalid', value: { kind: 'number', number: 9 } }]

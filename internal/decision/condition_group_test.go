@@ -25,6 +25,82 @@ func conditionGroupDocument(match string, holdMS int) Document {
 	}
 }
 
+func TestFourPartTimeWindowCannotBeBypassedByOR(t *testing.T) {
+	document := conditionGroupDocument("any", 0)
+	document.Table.Rows[0].Conditions = append(document.Table.Rows[0].Conditions, Condition{Kind: "time", Start: "08:00", End: "09:00"})
+	for _, tc := range []struct {
+		name       string
+		hour       int
+		level      float64
+		matched    bool
+		hold, held int
+		missing    bool
+	}{
+		{name: "true point outside window", hour: 12, level: 60, matched: false},
+		{name: "window does not replace point group", hour: 8, level: 40, matched: false},
+		{name: "both point group and window", hour: 8, level: 60, matched: true},
+		{name: "hold does not bypass window", hour: 12, level: 60, hold: 2000, held: 3000},
+		{name: "point and window wait for hold", hour: 8, level: 60, matched: true, hold: 2000},
+		{name: "unknown inputs stay unsatisfied", hour: 8, missing: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			document.Table.Rows[0].HoldMS = tc.hold
+			document.Simulation = &SimulationOptions{HeldMS: tc.held}
+			inputs := map[string]float64{"pressure": 0.5, "level": tc.level}
+			if tc.missing {
+				inputs = map[string]float64{}
+			}
+			result, err := document.Simulate(inputs, nil, time.Date(2026, 11, 25, tc.hour, 30, 0, 0, time.UTC))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (result.RowID == "or-row") != tc.matched {
+				t.Fatalf("four-part window mismatch: %+v", result)
+			}
+			if tc.matched && tc.hold > tc.held && result.State != "waiting-hold" {
+				t.Fatalf("hold bypassed: %+v", result)
+			}
+		})
+	}
+}
+
+func TestTimeOnlyRowIsNotAnUnconditionalDefault(t *testing.T) {
+	document := Document{Table: Table{Rows: []Row{{ID: "window", Conditions: []Condition{{Kind: "time", Start: "08:00", End: "09:00"}}}, {ID: "fallback"}}}}
+	converted, err := document.RuleTable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, hour := range []int{8, 12} {
+		now := time.Date(2026, 11, 25, hour, 30, 0, 0, time.UTC)
+		engine, err := rule.New(converted, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		actual, err := engine.Evaluate(now, TimeSamples(document.Table, now))
+		if err != nil {
+			t.Fatal(err)
+		}
+		simulated, err := document.Simulate(nil, nil, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "window"
+		if hour == 12 {
+			want = "fallback"
+		}
+		if actual.MatchedRow != want || simulated.RowID != want {
+			t.Fatalf("time-only row lost parity: actual=%+v simulation=%+v", actual, simulated)
+		}
+	}
+	// Existing time-only OR windows remain a union within the separate window clause.
+	document.Table.Rows[0].Match = "any"
+	document.Table.Rows[0].Conditions = append(document.Table.Rows[0].Conditions, Condition{Kind: "time", Start: "16:00", End: "17:00"})
+	simulated, err := document.Simulate(nil, nil, time.Date(2026, 11, 25, 8, 30, 0, 0, time.UTC))
+	if err != nil || simulated.RowID != "window" {
+		t.Fatalf("time-only OR windows changed: %+v %v", simulated, err)
+	}
+}
+
 func TestConditionGroupORUsesAnyUsableCondition(t *testing.T) {
 	document := conditionGroupDocument("any", 0)
 	result, err := document.Simulate(map[string]float64{"level": 60}, nil, time.Now())

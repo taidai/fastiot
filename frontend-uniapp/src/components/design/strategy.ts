@@ -4,6 +4,12 @@ function activePoint(node: Node, type: string): Point | undefined {
   return node.points.find(item => item.type === type && (item.tombstone || 0) % 2 === 0)
 }
 
+export type RuleAccess = { draft_restricted?: boolean; applied_restricted?: boolean; history_restricted?: boolean; trace_restricted?: boolean; diagnostics_restricted?: boolean }
+export function getRuleAccess(node?: Node | null): RuleAccess {
+  try { return JSON.parse(node ? activePoint(node, 'ruleAccess')?.text || '{}' : '{}') }
+  catch { return { draft_restricted: true, applied_restricted: true } }
+}
+
 export type Condition = {
   point_id: string
   operator: string
@@ -148,6 +154,17 @@ export function moveRows<T>(rows: T[], index: number, direction: -1 | 1): T[] {
   return result
 }
 
+export function ruleInputValue(event: unknown): string {
+  const input = event as { detail?: { value?: unknown }; target?: { value?: unknown } }
+  return String(input.detail?.value ?? input.target?.value ?? '')
+}
+
+export function ruleInputNumber(event: unknown): number {
+  const raw = ruleInputValue(event).trim()
+  const value = Number(raw)
+  return raw && Number.isFinite(value) ? value : Number.NaN
+}
+
 export function liveSimulationInputs(document: DecisionDocument, values: StateValue[]) {
   const inputs: Record<string, number> = {}
   const textInputs: Record<string, string> = {}
@@ -169,6 +186,7 @@ export function createSimulationPayload(
   at: string,
   heldMS = 0,
 ) {
+  if (!Number.isFinite(heldMS) || heldMS < 0 || Object.values(inputs).some(value => !Number.isFinite(value))) throw new Error('模拟数值无效，不会提交请求')
   const simulationDocument = heldMS > 0 ? { ...document, simulation: { held_ms: heldMS } } : document
   return {
     document: simulationDocument,

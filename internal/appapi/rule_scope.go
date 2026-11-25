@@ -21,6 +21,9 @@ func (h *Handler) ruleTargetAllowed(identity Identity, parent, scope string, tar
 		return false
 	}
 	node := nodes[0]
+	if node.Type != data.NodeTypeVariable && target.Key != "" && target.Key != "0" {
+		return false
+	}
 	if decision.ValidateTarget(h.nc, node.Parent, target, output, nil) != nil {
 		return false
 	}
@@ -103,6 +106,15 @@ func (h *Handler) ruleReferencesAllowed(identity Identity, parent string, docume
 			if action.Readback != nil && action.Readback.Target.NodeID != "" && !check(action.Readback.Target, false) {
 				return false
 			}
+		}
+	}
+	writes, err := h.ruleWriteTargets(document)
+	if err != nil {
+		return false
+	}
+	for _, target := range writes {
+		if !check(target, true) {
+			return false
 		}
 	}
 	return true

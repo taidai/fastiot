@@ -101,24 +101,46 @@ func TestRuleSimulationZeroWritesAndCanonicalSequence(t *testing.T) {
 		t.Fatalf("create: %d %s", status, body)
 	}
 	doc.Revision = created.Revision
-	for _, payload := range []any{map[string]any{"document": doc}, map[string]any{"document": doc, "inputs": map[string]any{"bad": "NaN"}}, map[string]any{"document": doc, "at": "not-a-time"}} {
-		call(t, http.MethodPost, f.base+"/rules/"+created.ID+"/test", f.token, payload, nil)
-	}
-	if len(sim.written()) != 0 || len(f.runtime.Commands().List()) != 0 {
-		t.Fatal("simulation wrote or issued a real command")
-	}
 	manager := client.NewManager(f.handler.nc, func(nc *nats.Conn, config decision.DecisionTable) client.Client {
 		return f.handler.NewRuleClient(nc, config)
 	}, nil)
 	managerDone := make(chan error, 1)
 	go func() { managerDone <- manager.Run() }()
 	t.Cleanup(func() { manager.Stop(nil); <-managerDone })
+	for i, payload := range []any{map[string]any{"document": doc}, map[string]any{"document": doc, "inputs": map[string]any{"bad": "NaN"}}, map[string]any{"document": doc, "at": "not-a-time"}, map[string]any{"document": doc, "inputs": map[string]any{"bad": nil}}} {
+		var result decision.SimulationResult
+		status, body := call(t, http.MethodPost, f.base+"/rules/"+created.ID+"/test", f.token, payload, &result)
+		want := 400
+		if i == 0 {
+			want = 200
+		}
+		if status != want {
+			t.Fatalf("simulation case %d: %d %s", i, status, body)
+		}
+		if i == 0 && (result.RowID != "first" || len(result.Actions) != 2) {
+			t.Fatalf("simulation did not evaluate the actual rule: %+v", result)
+		}
+	}
+	ruleNodes, _ := client.GetNodes(f.handler.nc, "all", created.ID, "", false)
+	published, _ := ruleNodes[0].Points.Text("applied", "")
+	enabled, _ := ruleNodes[0].Points.Value("enabled", "")
+	if published != "" || enabled != 0 {
+		t.Fatal("simulation changed publication or authorization")
+	}
+	if len(sim.written()) != 0 || len(f.runtime.Commands().List()) != 0 {
+		t.Fatal("simulation wrote or issued a real command")
+	}
 	status, body = call(t, http.MethodPost, f.base+"/rules/"+created.ID+"/publish", f.token, doc, nil)
 	if status != 200 {
 		t.Fatalf("publish: %d %s", status, body)
 	}
 	if len(sim.written()) != 0 {
 		t.Fatal("publication wrote simulator")
+	}
+	if os.Getenv("FASTIOT_RULE_BROWSER") == "1" {
+		t.Log("browser fixture setup only: no enable/run assertions; normal test separately covers canonical commands")
+		serveRuleBrowser(t, f, sim, created.ID, root)
+		return
 	}
 	status, body = call(t, http.MethodPost, f.base+"/rules/"+created.ID+"/enable", f.token, map[string]bool{"enabled": true}, nil)
 	if status != 200 {
@@ -151,7 +173,7 @@ func TestRuleSimulationZeroWritesAndCanonicalSequence(t *testing.T) {
 		if err := client.SendNodePoint(f.handler.nc, created.ID, data.NewPointString("lastExecution", "", string(encoded)), true); err != nil {
 			t.Fatal(err)
 		}
-		return decision.RuleCommand{RuleID: created.ID, Revision: doc.Revision, ExecutionID: id, RequestID: id + "/0", RowID: "first", Step: 0, Target: doc.Bindings.Actions["target"], Action: doc.Table.Rows[0].Actions[0]}
+		return decision.RuleCommand{RuleID: created.ID, Revision: doc.Revision, ExecutionID: id, RequestID: id + "-0", RowID: "first", Step: 0, Target: doc.Bindings.Actions["target"], Action: doc.Table.Rows[0].Actions[0]}
 	}
 	sim.mu.Lock()
 	sim.readFailure = true
@@ -194,9 +216,6 @@ func TestRuleSimulationZeroWritesAndCanonicalSequence(t *testing.T) {
 	rejected, err := f.handler.submitRuleCommand(manual)
 	if err != nil || rejected.State != command.Rejected || len(sim.written()) != 3 {
 		t.Fatalf("automatic actor bypassed takeover: %+v %v writes=%v", rejected, err, sim.written())
-	}
-	if os.Getenv("FASTIOT_RULE_BROWSER") == "1" {
-		serveRuleBrowser(t, f, sim, created.ID, root)
 	}
 }
 
