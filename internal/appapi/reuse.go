@@ -62,6 +62,7 @@ var reuseRuntimePoints = map[string]bool{
 	"tombstone": true, "nodeType": true,
 	// 运行状态与调度历史不属于工程资产：新站必须从待机开始，也不带入旧站的调度记录。
 	PointTypeCabinetState: true, PointTypeDispatchLog: true,
+	aggregateValuePoint: true, aggregateResultPoint: true,
 }
 
 var reuseSecretTokens = []string{"password", "pass", "token", "secret", "credential", "nkey", "apikey"}

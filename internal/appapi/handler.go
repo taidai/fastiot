@@ -40,6 +40,7 @@ type Handler struct {
 	accessMu           sync.Mutex
 	accountMu          sync.Mutex
 	virtualInputMu     sync.Mutex
+	aggregateMu        sync.Mutex
 	calculationRuntime *calculation.Runtime
 	inputEpoch         string
 	inputStart         time.Time
@@ -855,7 +856,7 @@ func (h *Handler) visibleNodes(identity Identity) ([]data.NodeEdge, error) {
 			}
 		}
 	}
-	return nodes, nil
+	return h.publicAggregateNodes(identity, nodes), nil
 }
 
 func (h *Handler) createNode(w http.ResponseWriter, r *http.Request, identity Identity) {

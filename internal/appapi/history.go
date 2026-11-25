@@ -48,6 +48,11 @@ func (r historyResolver) Resolve(id string) (historyquery.Node, error) {
 		return historyquery.Node{}, historyquery.ErrForbidden
 	}
 	node := nodes[0]
+	if node.Type == data.NodeTypeGroup || node.Parent == "root" {
+		if definition, ok := node.Points.Find(aggregatePoint, ""); ok && definition.Tombstone%2 == 0 {
+			return historyquery.Node{ID: node.ID, Type: node.Type, Aggregate: true}, nil
+		}
+	}
 	switch node.Type {
 	case data.NodeTypeVariable, data.NodeTypeModbusIO, NodeTypeOpcuaPoint, "mqttSub":
 	default:
@@ -171,7 +176,7 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request, identity Ident
 	if typ == "" {
 		typ = data.PointTypeValue
 	}
-	if typ != data.PointTypeValue && typ != data.PointTypeValueSet {
+	if typ != data.PointTypeValue && typ != data.PointTypeValueSet && typ != historyquery.AggregateValuePoint {
 		writeError(w, 403, "history_type_not_allowed")
 		return
 	}
@@ -184,7 +189,17 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request, identity Ident
 		}
 	}
 	ids := r.URL.Query()["node_id"]
-	results, matched, err := h.historyQuery().Execute(historyquery.Request{
+	query := h.historyQuery()
+	memberAccess := map[string]bool{}
+	query.AggregateMemberAllowed = func(id string) bool {
+		allowed, checked := memberAccess[id]
+		if !checked {
+			allowed = h.allows(identity, id)
+			memberAccess[id] = allowed
+		}
+		return allowed
+	}
+	results, matched, err := query.Execute(historyquery.Request{
 		NodeIDs: ids, Type: typ, Key: r.URL.Query().Get("key"),
 		Start: start, End: end, Cursor: cursor, Aggregate: aggregate, Limit: limit, Export: export,
 	})

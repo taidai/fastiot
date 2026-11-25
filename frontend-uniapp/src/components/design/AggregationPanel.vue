@@ -14,7 +14,7 @@
             <view class="card-title">成员</view>
             <div v-if="available.length" class="table-wrap"><table class="mini-table aggregate-members"><thead><tr><th>成员</th><th>值</th><th>质量</th></tr></thead><tbody><tr v-for="node in available" :key="node.id"><td><label class="member-check"><input type="checkbox" :checked="members.includes(node.id)" @change="toggleMember(node.id)"> {{ nameOf(node) }}</label></td><td>{{ memberValue(node.id) }}</td><td>{{ memberResult(node.id)?.quality || '—' }}</td></tr></tbody></table></div>
             <view v-else class="empty">当前作用域没有可聚合的数值点。</view>
-            <div class="actions"><button class="primary" :disabled="readOnly || busy || !members.length" @click="save">保存并计算</button></div>
+            <div class="actions"><button class="primary" :disabled="readOnly || busy || !members.length" @click="save">保存定义</button></div>
           </fieldset>
         </view>
         <view class="acc-card aggregate-result">
@@ -22,12 +22,14 @@
           <template v-if="result?.configured">
             <view class="row"><span>当前值</span><span class="src"><b>{{ aggregateValueText(result.value, result.config.units) }}</b></span></view>
             <view class="row"><span>质量</span><span><span class="chip" :class="result.quality === 'good' ? 'ok' : 'warn'">{{ result.quality }}</span><span v-if="result.partial" class="chip warn">部分有效</span></span></view>
-            <view class="row"><span>窗口</span><span class="src">{{ result.window ? `${result.window.start} 至 ${result.window.end} · ${result.window.members} 个成员有样本` : '瞬时 · 随采集周期' }}</span></view>
+            <view class="row"><span>窗口</span><span class="src">{{ aggregateWindowText(result) }}</span></view>
+            <view class="row"><span>观测时间</span><span class="src">{{ result.time || '—' }} · {{ result.time_source || '尚无观测' }}</span></view>
+            <view class="row"><span>后台计算时间</span><span class="src">{{ result.evaluated_at || '等待采样' }}</span></view>
             <view class="row"><span>有效成员</span><span class="src">{{ result.valid ?? 0 }} / {{ result.total ?? 0 }}</span></view>
             <view class="row"><span>成员</span><span class="src">{{ (result.members || []).map(member => member.name || displayName(member.node_id)).join('、') || '—' }}</span></view>
             <p class="note">窗口值可参与规则，但必须标明滞后；联锁与保护只使用瞬时点。失效成员按质量策略处理，不补零。</p>
           </template>
-          <p v-else class="note">先选算子、窗口与质量策略，再计算；这里展示的是节点上的只读聚合点，不是临时统计数字。</p>
+          <p v-else class="note">先选算子、窗口与质量策略，再保存定义；这里展示后台生成的只读聚合点，刷新页面不会触发计算。</p>
         </view>
       </view>
       <p v-if="error" class="error" role="alert">{{ error }}</p><p v-if="notice" class="notice" role="status">{{ notice }}</p>
@@ -50,7 +52,7 @@ import { computed, onMounted, ref, watch } from "vue"
 import { request } from "../../api/client"
 import { nameOf } from "../../types/api"
 import type { Node, Snapshot } from "../../types/api"
-import { aggregateValueText, createAggregateConfig } from "./aggregate"
+import { aggregateValueText, aggregateWindowText, createAggregateConfig } from "./aggregate"
 import type { AggregateConfig, AggregateResult } from "./aggregate"
 
 const props = withDefaults(defineProps<{ snapshot: Snapshot | null; parent: string; readOnly?: boolean }>(), { readOnly: false })
@@ -111,7 +113,7 @@ async function save() {
   busy.value = true; error.value = ""; notice.value = ""
   try {
     result.value = await request<AggregateResult>("/aggregate", "PUT", createAggregateConfig(props.parent, op.value, members.value, window.value, quality.value, units.value))
-    notice.value = "聚合定义已保存；结果为本次真实计算。"
+    notice.value = "聚合定义已保存；后台持续采样，窗口值在窗口关闭后产生。"
   } catch (cause) { error.value = cause instanceof Error ? cause.message : "聚合保存失败" }
   finally { busy.value = false }
 }
