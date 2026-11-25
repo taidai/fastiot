@@ -634,6 +634,8 @@ func profilePointInputs(channelID string, server int, prof profile.Profile) []Mo
 }
 
 func (h *Handler) verifyUnit(w http.ResponseWriter, r *http.Request, identity Identity, channelID string, server int) {
+	h.accessMu.Lock()
+	defer h.accessMu.Unlock()
 	channel, ok := h.routeNode(w, channelID)
 	if !ok {
 		return
@@ -643,7 +645,12 @@ func (h *Handler) verifyUnit(w http.ResponseWriter, r *http.Request, identity Id
 		return
 	}
 	if r.Method == http.MethodGet {
-		writeJSON(w, map[string]any{"records": accessVerificationHistory(channel, server)})
+		records := accessVerificationHistory(channel, server)
+		basis := h.accessBasis(channel, server)
+		for i := range records {
+			records[i].Current = basis != "" && records[i].Basis == basis
+		}
+		writeJSON(w, map[string]any{"records": records})
 		return
 	}
 	var input struct {
@@ -658,6 +665,7 @@ func (h *Handler) verifyUnit(w http.ResponseWriter, r *http.Request, identity Id
 		writeError(w, http.StatusForbidden, "admin_required")
 		return
 	}
+	basis := h.accessBasis(channel, server)
 	switch input.Level {
 	case "L1":
 		connection, valid := modbusConnectionFromNode(channel)
@@ -665,7 +673,17 @@ func (h *Handler) verifyUnit(w http.ResponseWriter, r *http.Request, identity Id
 			writeError(w, http.StatusBadRequest, "invalid_modbus_connection")
 			return
 		}
-		line := probeLine(connection, server, server)
+		model, configured := unitModelFor(channel, server)
+		if !configured || h.ems == nil || h.ems.Profiles == nil {
+			writeError(w, http.StatusConflict, "unit_model_not_configured")
+			return
+		}
+		prof, found := h.ems.Profiles.Get(model.ProfileID)
+		if !found || len(prof.PointSpecs) == 0 {
+			writeError(w, http.StatusConflict, "profile_points_required")
+			return
+		}
+		line := probeProfileUnit(connection, server, prof.PointSpecs[0])
 		passed := line.Connected && len(line.Stations) == 1 && line.Stations[0].Responded
 		reasons := []string{}
 		if !passed {
@@ -674,7 +692,7 @@ func (h *Handler) verifyUnit(w http.ResponseWriter, r *http.Request, identity Id
 				reasons = append(reasons, line.Stations[0].Error)
 			}
 		}
-		h.finishAccessVerification(w, channel, server, identity, input.Level, passed, reasons, map[string]any{"line": line})
+		h.finishAccessVerification(w, channel, server, identity, input.Level, passed, reasons, basis, map[string]any{"line": line})
 	case "L2":
 		model, configured := unitModelFor(channel, server)
 		if !configured || h.ems == nil || h.ems.Profiles == nil {
@@ -690,6 +708,11 @@ func (h *Handler) verifyUnit(w http.ResponseWriter, r *http.Request, identity Id
 		pointResults := []domainaccess.PointVerification{}
 		reasons := []string{}
 		passed := len(required) > 0
+		version, _ := h.ems.Profiles.Fingerprint(model.ProfileID)
+		if model.ProfileVersion != version {
+			passed = false
+			reasons = append(reasons, "Profile 版本已改变，请重新预览并应用")
+		}
 		if len(required) == 0 {
 			reasons = append(reasons, "Profile 没有必需点位")
 		}
@@ -700,6 +723,10 @@ func (h *Handler) verifyUnit(w http.ResponseWriter, r *http.Request, identity Id
 			point, mapped := findPoint(points, result.PointID)
 			if result.PointID == "" || !mapped || point.ServerID != server {
 				result.Reason = "必需点未映射"
+			} else if differences := pointDifferences(spec, point); len(differences) > 0 {
+				result.Reason = "Profile 映射不一致：" + describeDifferences(differences)
+			} else if point.Disabled || numberPoint(channel.Points, data.PointTypeDisabled) != 0 {
+				result.Reason = "通道或点位已停用"
 			} else if h.ems.Service == nil {
 				result.Reason = "运行时不可用"
 			} else if sample, exists := h.ems.Service.State.Get(time.Now(), deviceID, result.PointID, h.ems.Service.MaxAge); !exists {
@@ -715,6 +742,22 @@ func (h *Handler) verifyUnit(w http.ResponseWriter, r *http.Request, identity Id
 					}
 				} else if !sample.Value.Valid() {
 					result.Reason = "无效值"
+				} else if sample.ConfigStamp != point.ConfigStamp {
+					result.Reason = "采集配置已改变，等待新观测"
+				} else if sample.SourceTime.IsZero() || sample.SourceTime.After(time.Now()) {
+					result.Reason = "观测时间无效"
+				} else if len(spec.Enum) > 0 {
+					key := sample.Value.String()
+					if sample.Value.Kind == signal.Bool {
+						if sample.Value.Bool {
+							key = "1"
+						} else {
+							key = "0"
+						}
+					}
+					if _, declared := spec.Enum[key]; !declared {
+						result.Reason = "值不在 Profile 枚举中"
+					}
 				}
 			}
 			result.Passed = result.Reason == ""
@@ -724,7 +767,7 @@ func (h *Handler) verifyUnit(w http.ResponseWriter, r *http.Request, identity Id
 			}
 			pointResults = append(pointResults, result)
 		}
-		h.finishAccessVerification(w, channel, server, identity, input.Level, passed, reasons, map[string]any{"points": pointResults})
+		h.finishAccessVerification(w, channel, server, identity, input.Level, passed, reasons, basis, map[string]any{"points": pointResults})
 	case "L3":
 		if !input.Confirm {
 			writeError(w, http.StatusBadRequest, "l3_confirmation_required")
@@ -793,15 +836,27 @@ func (h *Handler) verifyUnit(w http.ResponseWriter, r *http.Request, identity Id
 		} else if !passed {
 			reasons = append(reasons, "命令尚未确认")
 		}
-		h.finishAccessVerification(w, channel, server, identity, input.Level, passed, reasons, map[string]any{"command": commandOutcome(outcome)})
+		h.finishAccessVerification(w, channel, server, identity, input.Level, passed, reasons, basis, map[string]any{"command": commandOutcome(outcome)})
 	default:
 		writeError(w, http.StatusBadRequest, "invalid_verification_level")
 	}
 }
 
-func (h *Handler) finishAccessVerification(w http.ResponseWriter, channel data.NodeEdge, server int, identity Identity, level string, passed bool, reasons []string, response map[string]any) {
-	record := domainaccess.VerificationRecord{At: time.Now().UTC().Format(time.RFC3339), Actor: identity.UserID, Level: level, Passed: passed, Reasons: reasons}
-	err := h.appendAccessVerification(channel, server, record, identity.UserID)
+func (h *Handler) finishAccessVerification(w http.ResponseWriter, channel data.NodeEdge, server int, identity Identity, level string, passed bool, reasons []string, basis string, response map[string]any) {
+	latest, err := client.GetNodes(h.nc, "all", channel.ID, "", false)
+	current := err == nil && len(latest) > 0 && basis != "" && h.accessBasis(latest[0], server) == basis
+	if !current {
+		passed = false
+		reasons = append(reasons, "验证期间配置改变或不可用，请重新验证")
+	}
+	record := domainaccess.VerificationRecord{At: time.Now().UTC().Format(time.RFC3339Nano), Actor: identity.UserID, Level: level, Passed: passed, Reasons: reasons}
+	record.Basis = basis
+	if model, configured := unitModelFor(channel, server); configured && h.ems != nil && h.ems.Profiles != nil {
+		record.ProfileVersion, _ = h.ems.Profiles.Fingerprint(model.ProfileID)
+	}
+	record.Current = current
+	err = h.appendAccessVerification(channel, server, record, identity.UserID)
+	response["record"] = record
 	response["level"] = level
 	response["passed"] = passed
 	response["reasons"] = reasons

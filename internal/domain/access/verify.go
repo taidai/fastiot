@@ -13,7 +13,7 @@ import (
 func RequiredPointSpecs(prof profile.Profile) []profile.PointSpec {
 	required := make([]profile.PointSpec, 0, len(prof.PointSpecs))
 	for _, spec := range prof.PointSpecs {
-		if !profileMarker(spec.Note, "OPTIONAL") {
+		if spec.RequiredPoint() {
 			required = append(required, spec)
 		}
 	}
@@ -71,11 +71,14 @@ func CommandOutcomePassed(state string) bool { return state == "confirmed" }
 // UnitModel verification fields, so automated evidence cannot be mistaken for
 // a person signing off the device.
 type VerificationRecord struct {
-	At      string   `json:"at"`
-	Actor   string   `json:"actor"`
-	Level   string   `json:"level"`
-	Passed  bool     `json:"passed"`
-	Reasons []string `json:"reasons,omitempty"`
+	At             string   `json:"at"`
+	Actor          string   `json:"actor"`
+	Level          string   `json:"level"`
+	Passed         bool     `json:"passed"`
+	Reasons        []string `json:"reasons,omitempty"`
+	Basis          string   `json:"basis,omitempty"`
+	ProfileVersion string   `json:"profile_version,omitempty"`
+	Current        bool     `json:"current"`
 }
 
 type PointVerification struct {

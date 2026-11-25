@@ -33,6 +33,8 @@ export type ProfilePointSpec = {
   read_only?: boolean
   role?: string
   note?: string
+  required?: boolean
+  enum?: Record<string, string>
 }
 
 export type Profile = {
@@ -79,6 +81,7 @@ export type LedgerDevice = {
   success_rate: number
   avg_latency_ms: number
   verified: boolean
+  bound?: boolean
   verifier?: string
   verified_at?: string
   device_serial?: string
@@ -100,6 +103,8 @@ export type UnitPoint = {
 export type UnitModelConfig = {
   name: string
   profile_id: string
+  profile_version?: string
+  mapping_version?: string
   business_node_id?: string
   point_map: Record<string, string>
   verified: boolean
@@ -148,6 +153,12 @@ export type ProfileApplyResponse = {
   dry_run: boolean
   results: ProfileApplyResult[]
   applied: number
+  preview_version?: string
+  create_points?: { description: string; address: number; data_format: string; scale: number; units?: string; read_only: boolean }[]
+}
+
+export function requiredProfilePoints(profile: Pick<Profile, "point_specs"> | null) {
+  return new Set((profile?.point_specs || []).filter(point => point.required ?? !point.note?.split(/\s+/).includes("OPTIONAL")).map(point => point.name))
 }
 
 export type BatchBindingRow = {

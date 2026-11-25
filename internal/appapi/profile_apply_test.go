@@ -39,7 +39,7 @@ func TestApplyProfileVerdicts(t *testing.T) {
 			scale = spec.Scale * 10
 		}
 		points = append(points, unitModelPointView{
-			ID: "p-" + string(rune('a'+index)), Name: spec.Name, ServerID: 1, Scale: scale,
+			ID: "p-" + string(rune('a'+index)), Name: spec.Name, ServerID: 1, Scale: scale, Address: int(spec.Address),
 			IOType: profile.IOTypeFor(spec.Function), DataFormat: spec.Format,
 			Offset: spec.Offset, Unit: spec.Unit,
 			ReadOnly: spec.ReadOnly || spec.Name == "开机/关机指令",
