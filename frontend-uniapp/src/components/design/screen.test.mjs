@@ -32,14 +32,14 @@ test("makeScreenDraft saves an inherited document as a new own version", () => {
   assert.equal(draft.blocks.length, inherited.blocks.length)
 })
 
-test("inherited point references outside the child scope become explicit unbound defaults", () => {
+test("inherited point references remain explicit and cannot silently become other metrics", () => {
   const inherited = { ...defaultScreen("area-parent", "父区域", "区域", points), version: 3, inherited_from: "area-parent" }
   const draft = makeScreenDraft(inherited, "area-child", "子区域", "区域", [])
-  assert.deepEqual(draft.point_ids, [])
-  assert.deepEqual(draft.blocks.find(block => block.type === "recent").binding.point_ids, [])
-  assert.equal(draft.blocks.find(block => block.type === "trend").binding.point_id, "")
-  assert.equal(draft.blocks.find(block => block.type === "kpi").binding.metrics.length, 6)
-  assert(draft.blocks.find(block => block.type === "kpi").binding.metrics.every(metric => !metric.point_id))
+  assert.deepEqual(draft.point_ids, ["power", "pressure"])
+  assert.deepEqual(draft.blocks.find(block => block.type === "recent").binding.point_ids, ["power", "pressure"])
+  assert.equal(draft.blocks.find(block => block.type === "trend").binding.point_id, "power")
+  assert.equal(draft.blocks.find(block => block.type === "kpi").binding.metrics[0].point_id, "power")
+  assert.equal(inherited.layer, "area-parent", "editing never mutates saved parent")
 })
 
 test("moveScreenBlock reorders only inside its slot", () => {

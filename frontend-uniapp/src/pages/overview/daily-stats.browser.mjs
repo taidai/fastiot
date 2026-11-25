@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdir } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright-core'
-const origin = 'http://127.0.0.1:18102'
+const origin = process.env.FASTIOT_GO_API || 'http://127.0.0.1:18102'
 let fixture
 const deadline = Date.now() + 90000
 for (;;) {
