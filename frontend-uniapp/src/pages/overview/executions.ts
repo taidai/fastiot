@@ -1,6 +1,6 @@
-export type ExecutionAction = { id?: string; output?: string; target?: string; command_id?: string; canonical_status?: string; notification_id?: string; kind?: string; status: string; confirmation?: string; reason?: string }
+export type ExecutionAction = { id?: string; output?: string; target?: string; targets?: string[]; command_id?: string; canonical_status?: string; notification_id?: string; kind?: string; status: string; confirmation?: string; reason?: string }
 export type Execution = { id: string; source_id: string; source_type: string; source_name: string; source_revision: string; execution_id: string; at: string; status: string; reason: string; counted: boolean; actions: ExecutionAction[] }
-export type ExecutionPage = { items: Execution[]; total: number; execution_count: number; offset: number; limit: number; coverage: { complete: boolean; rules: string; machines: string }; restricted: boolean }
+export type ExecutionPage = { items: Execution[]; total: number; execution_count: number; offset: number; limit: number; coverage: { complete: boolean; rules: string; machines: string; target_scope?: string }; restricted: boolean }
 export function executionStatus(status: string): string {
  return ({ confirmed: '过程已确认（非设备完成）', fired: '已触发', 'already-fired': '本轮已申请', held: '跳过', skipped: '跳过', rejected: '已拒绝', failed: '失败', unknown: '结果未知', pending: '进行中', 'waiting-hold': '持续计时中', cooldown: '冷却中（跳过）', 'no-match': '未命中' } as Record<string, string>)[status] || '结果未知'
 }

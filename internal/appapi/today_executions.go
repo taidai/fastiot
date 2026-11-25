@@ -15,16 +15,19 @@ import (
 )
 
 type executionActionView struct {
-	ID              string `json:"id"`
-	Output          string `json:"output"`
-	Target          string `json:"target,omitempty"`
-	Kind            string `json:"kind,omitempty"`
-	Status          string `json:"status"`
-	Reason          string `json:"reason,omitempty"`
-	Confirmation    string `json:"confirmation,omitempty"`
-	CommandID       string `json:"command_id,omitempty"`
-	NotificationID  string `json:"notification_id,omitempty"`
-	CanonicalStatus string `json:"canonical_status,omitempty"`
+	ID              string   `json:"id"`
+	Output          string   `json:"output"`
+	Target          string   `json:"target,omitempty"`
+	Kind            string   `json:"kind,omitempty"`
+	Status          string   `json:"status"`
+	Reason          string   `json:"reason,omitempty"`
+	Confirmation    string   `json:"confirmation,omitempty"`
+	CommandID       string   `json:"command_id,omitempty"`
+	NotificationID  string   `json:"notification_id,omitempty"`
+	CanonicalStatus string   `json:"canonical_status,omitempty"`
+	Targets         []string `json:"targets,omitempty"`
+	recordedTargets []string
+	receiptScope    string
 }
 type executionView struct {
 	ID             string                `json:"id"`
@@ -48,9 +51,10 @@ type executionPage struct {
 	Window         dailystats.Window `json:"window"`
 	Restricted     bool              `json:"restricted"`
 	Coverage       struct {
-		Complete bool   `json:"complete"`
-		Rules    string `json:"rules"`
-		Machines string `json:"machines"`
+		Complete    bool   `json:"complete"`
+		Rules       string `json:"rules"`
+		Machines    string `json:"machines"`
+		TargetScope string `json:"target_scope"`
 	} `json:"coverage"`
 }
 
@@ -75,6 +79,7 @@ func (h *Handler) executionCommand(identity Identity, id string, action *executi
 		return true
 	}
 	for _, write := range outcome.Writes {
+		action.recordedTargets = append(action.recordedTargets, write.Point)
 		if !h.allows(identity, write.Point) {
 			return false
 		}
@@ -100,6 +105,44 @@ func (h *Handler) executionCommand(identity Identity, id string, action *executi
 	return true
 }
 
+// Ancestor sources qualify only through recorded action targets. Reuse the
+// screen's tree/member scope resolver, but never today's transport/Profile
+// binding to invent a historical business owner for an old raw point.
+func (h *Handler) executionLayer(identity Identity, layer string, row executionView, local bool) (executionView, bool) {
+	actions := []executionActionView{}
+	hidden := false
+	for _, action := range row.Actions {
+		targets := append([]string{action.Target}, action.recordedTargets...)
+		matches := map[string]bool{}
+		for _, id := range targets {
+			if id != "" && !matches[id] && h.allows(identity, id) && h.screenReferenceInLayer(identity, layer, id) {
+				action.Targets = append(action.Targets, id)
+				matches[id] = true
+			}
+		}
+		receiptInLayer := action.receiptScope != "" && h.screenReferenceInLayer(identity, layer, action.receiptScope)
+		if len(action.Targets) == 0 && !receiptInLayer && !(local && action.Target == "" && len(action.recordedTargets) == 0 && action.Kind != "notify") {
+			hidden = true
+			continue
+		}
+		if !matches[action.Target] {
+			action.Target = ""
+		}
+		if !local && action.Reason != "" {
+			action.Reason = "跨层执行诊断未包含在本层投影"
+		}
+		actions = append(actions, action)
+	}
+	if !local && len(actions) == 0 {
+		return row, false
+	}
+	row.Actions = actions
+	if !local || hidden {
+		row.Reason = "跨层来源；仅展示记录目标属于本层的动作"
+	}
+	return row, true
+}
+
 func (h *Handler) ruleExecutionViews(identity Identity, node data.NodeEdge, fullScope bool) ([]executionView, bool, error) {
 	facts := map[string]decision.RuleExecutionFact{}
 	denied := map[string]bool{}
@@ -122,7 +165,7 @@ func (h *Handler) ruleExecutionViews(identity Identity, node data.NodeEdge, full
 		}
 	}
 	rows := []executionView{}
-	build := func(report decision.CheckReport, at time.Time, counted bool) {
+	build := func(report decision.CheckReport, at time.Time, counted bool, scope string) {
 		key := report.ExecutionID
 		if key == "" {
 			key = report.At.String()
@@ -134,6 +177,12 @@ func (h *Handler) ruleExecutionViews(identity Identity, node data.NodeEdge, full
 		}
 		for i, check := range report.Actions {
 			a := executionActionView{Output: check.Output, Target: check.Target.NodeID, Kind: check.Kind, Status: check.Status, Reason: check.Reason, Confirmation: check.Confirmation, NotificationID: check.NotificationID}
+			if a.Kind == "notify" {
+				a.receiptScope = scope
+			}
+			for _, share := range check.Shares {
+				a.recordedTargets = append(a.recordedTargets, share.MemberID)
+			}
 			if report.ExecutionID != "" {
 				a.ID = fmt.Sprintf("%s-%d", report.ExecutionID, i)
 			}
@@ -156,7 +205,7 @@ func (h *Handler) ruleExecutionViews(identity Identity, node data.NodeEdge, full
 	}
 	for id, fact := range facts {
 		if !denied[id] {
-			build(fact.Report, fact.StartedAt, true)
+			build(fact.Report, fact.StartedAt, true, fact.ScopeNodeID)
 		}
 	}
 	// Legacy/no-execution checks are explicitly uncounted. Use the established
@@ -173,7 +222,7 @@ func (h *Handler) ruleExecutionViews(identity Identity, node data.NodeEdge, full
 		if _, captured := facts[report.ExecutionID]; captured {
 			continue
 		}
-		build(report, report.At, false)
+		build(report, report.At, false, node.Parent)
 	}
 	return rows, restricted, nil
 }
@@ -226,9 +275,14 @@ func (h *Handler) todayExecutions(w http.ResponseWriter, r *http.Request, identi
 	page := executionPage{Items: []executionView{}, Limit: limit, Offset: offset, Window: window}
 	page.Coverage.Rules = "immutable execution captures since instrumentation; older checks latest-only and uncounted; retained until source deletion; pre-capture gaps unknown"
 	page.Coverage.Machines = "durable_event_keys; retained until source deletion; legacy history may be absent"
+	page.Coverage.TargetScope = "ancestor sources require recorded target association; unassociated legacy transport points are not remapped through current Profile bindings"
 	items := map[string]executionView{}
 	for _, node := range nodes {
-		if node.ID != layer && !h.users.IsUnder(node.ID, layer) {
+		if node.Type != stateMachineType && node.Type != "decisionTable" {
+			continue
+		}
+		local := node.ID == layer || h.users.IsUnder(node.ID, layer)
+		if !local && !h.users.IsUnder(layer, node.Parent) {
 			continue
 		}
 		if node.Type == stateMachineType && (source == "" || source == "machine") {
@@ -273,7 +327,9 @@ func (h *Handler) todayExecutions(w http.ResponseWriter, r *http.Request, identi
 				if !fullScope && row.Reason != "" {
 					row.Reason = "运行诊断详情受限"
 				}
-				items[row.ID] = row
+				if scoped, include := h.executionLayer(identity, layer, row, local); include {
+					items[scoped.ID] = scoped
+				}
 			}
 		}
 		if node.Type == "decisionTable" && (source == "" || source == "rule") {
@@ -284,7 +340,9 @@ func (h *Handler) todayExecutions(w http.ResponseWriter, r *http.Request, identi
 			}
 			page.Restricted = page.Restricted || restricted
 			for _, row := range rows {
-				items[row.ID] = row
+				if scoped, include := h.executionLayer(identity, layer, row, local); include {
+					items[scoped.ID] = scoped
+				}
 			}
 		}
 	}

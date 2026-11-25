@@ -40,7 +40,9 @@ func TestTodayExecutionsBrowserBackend(t *testing.T) {
 	scope := createNodeAPI(t, base, token, "site", root, "Today private site", 0)
 	empty := createNodeAPI(t, base, token, "site", root, "No retained executions", 0)
 	input := createNodeAPI(t, base, token, "variable", scope, "Historical guard", 7)
-	output := createNodeAPI(t, base, token, "variable", scope, "Explicit software acknowledgment", 0)
+	child := createNodeAPI(t, base, token, "area", scope, "Recorded target child", 0)
+	sibling := createNodeAPI(t, base, token, "area", scope, "No target sibling", 0)
+	output := createNodeAPI(t, base, token, "variable", child, "Explicit software acknowledgment", 0)
 	stopFeedback, err := client.SubscribePoints(h.nc, output, func(points []data.Point) {
 		for _, point := range points {
 			if point.Type == data.PointTypeValueSet {
@@ -54,7 +56,7 @@ func TestTodayExecutionsBrowserBackend(t *testing.T) {
 	}
 	defer stopFeedback()
 	recipient := inboxAccount(t, base, token, scope, "today-viewer@fixture.local", "ticket16-private-only")
-	definition := decision.StateMachineDefinition{InitialState: "idle", States: []string{"idle"}, Transitions: []decision.StateTransition{{ID: "guarded", From: "idle", To: "idle", Event: "tick", Conditions: []decision.Condition{{PointID: "guard", Operator: "eq", Value: 99}}}}, Bindings: decision.BindingSet{Points: map[string]decision.Target{"guard": {NodeID: input}}}}
+	definition := decision.StateMachineDefinition{Scope: "subtree", InitialState: "idle", States: []string{"idle"}, Transitions: []decision.StateTransition{{ID: "guarded", From: "idle", To: "idle", Event: "tick", Conditions: []decision.Condition{{PointID: "guard", Operator: "eq", Value: 99}}}}, Bindings: decision.BindingSet{Points: map[string]decision.Target{"guard": {NodeID: input}}}}
 	definition.Transitions = append(definition.Transitions, decision.StateTransition{ID: "software", From: "idle", To: "idle", Event: "software", Actions: []decision.Action{{ActionID: "set", Value: 1, Readback: &decision.Readback{TimeoutMS: 1000}}}})
 	definition.Bindings.Actions = map[string]decision.Target{"set": {NodeID: output}}
 	var machine stateMachineResponse
@@ -121,7 +123,7 @@ func TestTodayExecutionsBrowserBackend(t *testing.T) {
 	mux.Handle("/uniapp/", http.StripPrefix("/uniapp/", http.FileServer(http.Dir("../web/dist/uniapp"))))
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/uniapp/", 302) })
 	mux.HandleFunc("GET /__fixture", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]string{"fixture": "ticket16-private", "root": root, "scope": scope, "empty": empty, "machine": machine.ID, "input": input})
+		writeJSON(w, map[string]string{"fixture": "ticket16-private", "root": root, "scope": scope, "empty": empty, "child": child, "sibling": sibling, "machine": machine.ID, "input": input})
 	})
 	mux.HandleFunc("POST /__restart", func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
