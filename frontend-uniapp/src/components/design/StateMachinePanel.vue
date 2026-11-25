@@ -10,6 +10,7 @@
         <button v-for="machine in machines" :key="machine.id" :class="{ active: machine.id === selectedId }" :disabled="dirty && machine.id !== selectedId" @click="selectMachine(machine.id)">{{ machine.name }}</button>
       </view>
       <view v-if="!machines.length" class="empty">此对象还没有状态机。新建只保存草稿，不会执行动作。</view>
+      <p v-if="record?.restricted && Object.keys(record.restricted).length" class="notice" role="status">部分定义、版本或执行证据因当前引用权限受限，未显示；不代表记录不存在，也不改变执行门禁。</p>
       <template v-if="record && draft">
         <view class="machine-summary">
           <span class="chip ok">过程状态 {{ record.current_state }}（非设备反馈）</span>
@@ -195,7 +196,7 @@ function selectMachine(id: string) {
   selectedId.value = id
   try { pendingEvent.value = JSON.parse(localStorage.getItem(eventStorageKey(id)) || 'null') } catch { pendingEvent.value = null }
   record.value = machines.value.find(machine => machine.id === id) || null
-  draft.value = record.value ? bindStateMachineDefinition(record.value.draft, nodes.value) : null
+  draft.value = record.value?.draft ? bindStateMachineDefinition(record.value.draft, nodes.value) : null
   statesText.value = draft.value?.states.join(",") || "stopped,running"
   dirty.value = false; simulation.value = null; confirmed.value = false; confirmPublish.value = false
   expandedTransition.value = ""; editorOpen.value = false
@@ -239,7 +240,7 @@ async function publish() {
 function replaceRecord(result: StateMachineRecord) {
   const index = machines.value.findIndex(machine => machine.id === result.id)
   if (index >= 0) machines.value[index] = result
-  record.value = result; draft.value = bindStateMachineDefinition(result.draft, nodes.value); statesText.value = result.draft.states.join(","); dirty.value = false
+  record.value = result; draft.value = result.draft ? bindStateMachineDefinition(result.draft, nodes.value) : null; statesText.value = result.draft?.states.join(",") || ""; dirty.value = false
 }
 function addTransition() {
   if (!draft.value || states.value.length < 1) return
@@ -271,7 +272,7 @@ async function execute() {
     localStorage.setItem(eventStorageKey(record.value.id), JSON.stringify(pendingEvent.value))
     const result = await request<StateMachineRecord>(`/state-machines/${record.value.id}/execute`, "POST", pendingEvent.value)
     localStorage.removeItem(eventStorageKey(record.value.id)); pendingEvent.value = null
-    replaceRecord(result); confirmed.value = false; notice.value = result.execution?.status === "confirmed" ? "事件已回读确认。" : "事件未完整确认，未保存下一状态。"
+    replaceRecord(result); confirmed.value = false; notice.value = result.restricted?.execution ? "执行证据因引用权限受限，未显示不代表未执行；请由授权人员核对。" : result.execution?.status === "confirmed" ? "事件已回读确认。" : "事件未完整确认，未保存下一状态。"
     emit("refresh")
   } catch (cause) {
     const code = (cause as { code?: string })?.code
