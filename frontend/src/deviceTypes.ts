@@ -98,6 +98,10 @@ export type UnitModel = {
 
 export type StateValue = EmsStateValue
 
+export function isTerminalCommand(state: string) {
+  return ["confirmed", "rejected", "failed", "timeout", "unknown", "submitted", "superseded"].includes(state)
+}
+
 export type CommandOutcome = {
   request_id: string
   device_id: string

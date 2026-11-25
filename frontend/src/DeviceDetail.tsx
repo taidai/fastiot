@@ -6,6 +6,7 @@ import AckDialog from "./AckDialog"
 import CommandExecuteButton from "./CommandExecuteButton"
 import { describeObservation, observationTimeLabel } from "./observations"
 import { useObservations } from "./useObservations"
+import { isTerminalCommand as isTerminal } from "./deviceTypes"
 import type { CommandOutcome, LedgerDevice, UnitCommand, UnitModel } from "./deviceTypes"
 import { Actions, reasonText } from "./capabilities"
 import { useCapabilities } from "./capabilitiesContext"
@@ -14,7 +15,7 @@ type Tab = "overview" | "points" | "commands" | "history" | "alarms" | "verify"
 
 const healthNames: Record<string, string> = { healthy: "在线", degraded: "不稳定", offline: "离线", unknown: "未知" }
 const stateNames: Record<string, string> = {
-  queued: "排队", running: "执行中", confirmed: "已确认", failed: "失败", timeout: "超时", unknown: "结果未知",
+  queued: "排队", running: "执行中", confirmed: "已确认", rejected: "已拒绝", failed: "失败", timeout: "超时", unknown: "结果未知",
 }
 const roleNames: Record<string, string> = { info: "提示", warning: "警告", critical: "严重" }
 const pointRoleNames: Record<string, string> = { telemetry: "遥测", status: "遥信", energy: "电度", setpoint: "定值", protection: "压板" }
@@ -28,10 +29,6 @@ function timeText(value?: string) {
   if (!value) return "—"
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("zh-CN", { hour12: false })
-}
-
-function isTerminal(state: string) {
-  return ["confirmed", "failed", "timeout", "unknown"].includes(state)
 }
 
 export default function DeviceDetail({ token, device, canConfigure, onClose, onError, goChannels, goAlarms }: {

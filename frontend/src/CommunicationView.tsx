@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { createPortal } from "react-dom"
 import CommandExecuteButton from "./CommandExecuteButton"
+import { isTerminalCommand } from "./deviceTypes"
 import { ApiError, downloadCSV, nameOf, Node, point, request } from "./api"
 import { Actions, reasonText } from "./capabilities"
 import { useCapabilities } from "./capabilitiesContext"
@@ -445,7 +446,7 @@ export default function CommunicationView({ token, nodes, roots, groups, canConf
       })
       setCommandResults((prev) => ({ ...prev, [command.id]: outcome }))
       const deadline = Date.now() + 15000
-      while (!["confirmed", "failed", "unknown"].includes(outcome.state) && Date.now() < deadline) {
+      while (!isTerminalCommand(outcome.state) && Date.now() < deadline) {
         await new Promise((resolve) => window.setTimeout(resolve, 700))
         outcome = await request<CommandState>(token, `/modbus/${modelData.channel_id}/units/${modelUnit}/commands/${encodeURIComponent(requestID)}`)
         setCommandResults((prev) => ({ ...prev, [command.id]: outcome }))
@@ -458,7 +459,7 @@ export default function CommunicationView({ token, nodes, roots, groups, canConf
   }
 
   function commandStateLabel(state: string) {
-    return ({ accepted: "已接受", executing: "执行中", confirmed: "已回读", failed: "失败", unknown: "结果未知" } as Record<string, string>)[state] || state
+    return ({ accepted: "已接受", executing: "执行中", confirmed: "已回读", rejected: "已拒绝", failed: "失败", unknown: "结果未知" } as Record<string, string>)[state] || state
   }
 
   async function runLineTest() {

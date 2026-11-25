@@ -199,6 +199,11 @@ func (h *Handler) submitCabinetCommand(w http.ResponseWriter, identity Identity,
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
+	if outcome.State == command.Rejected {
+		// A pre-dispatch refusal cannot start a cabinet transition.
+		writeJSON(w, map[string]any{"state": current, "request_id": requestID, "command_state": outcome.State, "reason": outcome.Reason})
+		return
+	}
 	if err := SetCabinetState(h.nc, node.ID, next); err != nil {
 		writeError(w, http.StatusBadGateway, "save_failed")
 		return
@@ -233,6 +238,23 @@ func (h *Handler) ReconcileCabinetCommands() {
 		}
 		var event decision.CabinetEvent
 		switch outcome.State {
+		case command.Rejected:
+			// Older callers projected a transition even when no I/O was allowed.
+			// Do not guess the preceding physical state. Fault is only the existing
+			// safe process block here, not proof of a device hardware fault.
+			current := LoadCabinetState(unit)
+			if current == decision.CabinetStarting || current == decision.CabinetStopping {
+				if err := SetCabinetState(h.nc, unit.ID, decision.CabinetFault); err != nil {
+					continue
+				}
+			}
+			h.clearPending(unit.ID)
+			if h.audit != nil {
+				record := auditRecord(pending, string(outcome.State), "request "+pending.RequestID+": "+outcome.Reason+"；旧过渡投影已终结，实际状态未核实；安全阻断不代表已证实设备故障")
+				record.Result = "failure"
+				_ = h.audit.Append(record)
+			}
+			continue
 		case command.Confirmed:
 			if pending.Event == "start" {
 				event = decision.EvStartConfirmed

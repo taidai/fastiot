@@ -58,7 +58,7 @@ func profileMarker(note, marker string) bool {
 
 func TerminalCommandState(state string) bool {
 	switch state {
-	case "confirmed", "failed", "unknown", "submitted", "superseded":
+	case "confirmed", "rejected", "failed", "unknown", "submitted", "superseded":
 		return true
 	default:
 		return false
