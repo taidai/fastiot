@@ -77,6 +77,39 @@ func TestSubmitWritesAndReadbackConfirms(t *testing.T) {
 	}
 }
 
+func TestExactWritesRejectsWholeSequenceBeforeDispatch(t *testing.T) {
+	writer := &fakeWriter{}
+	profile := device.Profile{ID: "safe", Points: []device.Point{{ID: "first", Kind: signal.Number}, {ID: "second", Kind: signal.Number}}, Commands: []device.Command{{ID: "sequence", Writes: []device.Write{{Point: "first", Value: signal.Num(10)}, {Point: "second", Value: signal.Num(20)}}, Readback: []device.Readback{{Point: "second", Op: "eq", Value: signal.Num(20)}}}}}
+	m := New(writer, func(string) (device.Profile, bool) { return profile, true }, func(string, time.Time) map[string]signal.Sample { return nil }, time.Second, time.Second)
+	m.Guard = func(req GuardRequest) safety.Verdict {
+		if req.Point == "second" {
+			return safety.Verdict{Decision: safety.DecisionClamped, Value: 15, Reason: "range"}
+		}
+		return safety.Verdict{Decision: safety.DecisionAllowed, Value: 10}
+	}
+	exact := Request{ID: "exact", DeviceID: "device", CommandID: "sequence", Actor: "operator", ExactWrites: true}
+	got, err := m.Submit(t0, exact)
+	if err != nil || got.State != Rejected || !strings.Contains(got.Reason, "exact_write_required") || writer.calls != 0 {
+		t.Fatalf("partial exact sequence dispatched: %+v %v calls=%d", got, err, writer.calls)
+	}
+	exact.ExactWrites = false
+	if _, err = m.Submit(t0, exact); err == nil {
+		t.Fatal("changed exact-write contract reused ID")
+	}
+	exact.ID = "ordinary"
+	got, err = m.Submit(t0, exact)
+	if err != nil || got.State != Accepted || writer.calls != 1 || writer.last[1].Value.Num != 15 {
+		t.Fatalf("default clamp semantics changed: %+v %v", got, err)
+	}
+	if strings.Contains(got.Fingerprint, "ExactWrites") {
+		t.Fatal("default false changed legacy v2 fingerprint schema")
+	}
+	exact.ExactWrites = true
+	if _, err = m.Submit(t0, exact); err == nil {
+		t.Fatal("ordinary identity upgraded to exact")
+	}
+}
+
 func TestSubmitIsIdempotent(t *testing.T) {
 	writer := &fakeWriter{}
 	samples := map[string]signal.Sample{}
