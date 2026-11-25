@@ -639,9 +639,9 @@ func (h *Handler) unitCommands(w http.ResponseWriter, r *http.Request, identity 
 		return
 	case r.Method == http.MethodPost && requestID == "":
 		var input struct {
-			RequestID  string             `json:"request_id"`
-			CommandID  string             `json:"command_id"`
-			Parameters map[string]float64 `json:"parameters"`
+			RequestID  string              `json:"request_id"`
+			CommandID  string              `json:"command_id"`
+			Parameters map[string]*float64 `json:"parameters"`
 		}
 		if !decodeJSON(w, r, &input) {
 			return
@@ -654,7 +654,18 @@ func (h *Handler) unitCommands(w http.ResponseWriter, r *http.Request, identity 
 			writeError(w, http.StatusBadRequest, "invalid_request_id")
 			return
 		}
-		request := command.Request{ID: input.RequestID, DeviceID: deviceID, CommandID: input.CommandID, Actor: identity.UserID, Parameters: input.Parameters}
+		var parameters map[string]float64
+		if input.Parameters != nil {
+			parameters = make(map[string]float64, len(input.Parameters))
+			for name, value := range input.Parameters {
+				if value == nil || !finite(*value) {
+					writeError(w, http.StatusBadRequest, "invalid_parameter_value")
+					return
+				}
+				parameters[name] = *value
+			}
+		}
+		request := command.Request{ID: input.RequestID, DeviceID: deviceID, CommandID: input.CommandID, Actor: identity.UserID, Parameters: parameters}
 		if existing, found, err := h.ems.Service.Commands().Existing(request); err != nil {
 			writeCommandError(w, err)
 			return
