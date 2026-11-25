@@ -178,7 +178,18 @@ export type BatchBindingRow = {
   missing: string[]
 }
 
-export type BatchAccessResponse = { dry_run: boolean; rows: BatchBindingRow[]; applied: number }
+export type BatchAccessResponse = {
+  dry_run: boolean; rows: BatchBindingRow[]; applied: number; preview_version?: string
+  plans?: Record<number, { match: ProfileApplyResult; create_points: NonNullable<ProfileApplyResponse["create_points"]>; missing_required: string[] }>
+}
+
+export type BatchVerificationRecord = { at: string; actor: string; level: string; passed: boolean; reasons?: string[]; current?: boolean }
+
+export function batchVerificationText(records: BatchVerificationRecord[], level: "L1" | "L2") {
+  const record = records.filter(record => record.level === level).slice(-1)[0]
+  if (!record) return `${level}：未验证`
+  return `${level}：${record.current ? record.passed ? "通过" : "未通过" : "已失效"} · ${record.at} · ${record.actor}${record.reasons?.length ? ` · ${record.reasons.join("；")}` : ""}`
+}
 
 export function batchCSV(devices: { id: string; name: string }[], profileID: string, channelID: string, startStation: number) {
   const cell = (value: string | number) => {

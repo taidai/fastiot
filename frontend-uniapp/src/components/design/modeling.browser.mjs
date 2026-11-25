@@ -42,10 +42,10 @@ try {
     }
     if (path === "/nodes/unit-1/copy") return json({ id: "unit-copy", created: 2, skipped: 0, confirm: [] })
     if (path === "/nodes/unit-1" && method === "PATCH") { writes.push({ path, body: request.postDataJSON() }); return json({ saved: true, missing_required: [] }) }
-    if (path === "/access/batch") {
+    if (path === "/access/batch/reviewed") {
       const body = request.postDataJSON(); writes.push({ path, body })
       if (!body.dry_run) nodes.find(node => node.id === "channel-1").points.push({ type: "easyemsUnitModel", key: "1", text: JSON.stringify({ profile_id: "pcs-v1", business_node_id: "device-1", point_map: { 功率: "point-1" } }) })
-      return json({ dry_run: body.dry_run, applied: body.dry_run ? 0 : 1, rows: [{ line: 2, device: "device-1", model: "pcs-v1", channel: "channel-1", station: 1, device_id: "device-1", profile_id: "pcs-v1", channel_id: "channel-1", valid: true, status: body.dry_run ? "ready" : "mapped", errors: [], created_points: 1, mapped: body.dry_run ? 0 : 1, missing: [] }] })
+      return json({ preview_version: "fixture-reviewed-version", dry_run: body.dry_run, applied: body.dry_run ? 0 : 1, rows: [{ line: 2, device: "device-1", model: "pcs-v1", channel: "channel-1", station: 1, device_id: "device-1", profile_id: "pcs-v1", channel_id: "channel-1", valid: true, status: body.dry_run ? "ready" : "mapped", errors: [], created_points: 1, mapped: body.dry_run ? 0 : 1, missing: [] }] })
     }
     if (path === "/ems/channels") return json({ channels: [{ id: "channel-1", protocol: "tcp", address: "127.0.0.1:1502", devices: [{ server_id: 1, health: "healthy" }] }] })
     if (path === "/ems/profiles") return json({ profiles: [currentProfile()] })
@@ -90,7 +90,7 @@ try {
   await page.getByText("可导入", { exact: true }).waitFor()
   await button("批量套用可导入项").click()
   await page.getByText(/已保存 1 台设备映射/).waitFor()
-  assert(writes.some(write => write.path === "/access/batch" && write.body.dry_run === false && write.body.csv.includes("device-1")), "batch apply persists the selected device ID")
+  assert(writes.some(write => write.path === "/access/batch/reviewed" && write.body.dry_run === false && write.body.csv.includes("device-1")), "batch apply persists the selected device ID")
   await button("退出批量").click()
   await page.locator(".stepper uni-button").filter({ hasText: /搭台账/ }).click()
   const unit = page.locator(".ledger-worktable tr").filter({ hasText: "供水单元" }).first()
