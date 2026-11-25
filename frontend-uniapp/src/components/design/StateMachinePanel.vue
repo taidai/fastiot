@@ -30,7 +30,7 @@
           </view>
           <view class="machine-actions"><button class="ghost" :disabled="busy" @click="simulate">模拟守卫</button><checkbox-group class="confirm" @change="confirmed = $event.detail.value.includes('execute')"><label><checkbox value="execute" :checked="confirmed" /> 确认执行真实动作</label></checkbox-group><button class="primary" :disabled="readOnly || busy || !confirmed || !record.version || dirty || !record.permissions.execute" @click="execute">{{ pendingEvent ? `查询原事件 ${pendingEvent.event}` : '执行事件' }}</button></view>
           <view v-if="simulation" class="execution-result"><strong>{{ simulation.status === 'matched' ? `可转移：${simulation.from} → ${simulation.to}` : `保持 ${simulation.to}` }}</strong><span>{{ simulation.reason || '模拟未写设备' }}</span><view v-for="trace in simulation.trace || []" :key="trace.transition_id">{{ trace.transition_id }}：{{ trace.status }} {{ trace.reason || '' }}</view></view>
-          <view v-if="record.last_execution" class="execution-result" :class="record.last_execution.status"><strong>{{ executionStatusText(record.last_execution.status) }}：{{ record.last_execution.from }} → {{ record.last_execution.to }}</strong><span>{{ record.last_execution.reason || '执行结果已持久化' }}</span><span>来源 v{{ record.last_execution.version }} · 事件 {{ record.last_execution.request_id || '旧记录' }}</span><view v-for="command in record.last_execution.commands || []" :key="command.request_id">命令 {{ command.request_id }}：{{ executionStatusText(command.status || 'unknown') }} {{ command.reason || '' }}</view><view v-for="(action, index) in record.last_execution.actions || []" :key="index">{{ displayName(action.output) }}：{{ executionStatusText(action.status) }} {{ action.reason || '' }}</view></view>
+          <view v-if="record.last_execution" class="execution-result" :class="record.last_execution.status"><strong>{{ executionStatusText(record.last_execution.status) }}：{{ record.last_execution.from }} → {{ record.last_execution.to }}</strong><span>{{ record.last_execution.reason || '执行结果已持久化' }}</span><span>来源 v{{ record.last_execution.version }} · 事件 {{ record.last_execution.request_id || '旧记录' }}</span><view v-for="command in record.last_execution.commands || []" :key="command.request_id">命令 {{ command.request_id }}：{{ executionStatusText(command.status || 'unknown') }} {{ command.reason || '' }}</view><view v-for="(action, index) in record.last_execution.actions || []" :key="index">{{ executionActionName(action.output) }}：{{ executionStatusText(action.status) }} {{ action.reason || '' }}</view></view>
         </view>
         <view class="transition-heading"><strong>转移表</strong><button class="ghost" @click="addTransition">＋ 转移</button></view>
         <div class="table-wrap"><table class="mini-table machine-table"><thead><tr><th>当前</th><th>事件</th><th>守卫</th><th>下一状态</th><th>动作</th><th></th></tr></thead><tbody><tr v-for="transition in draft.transitions" :key="transition.transition_id"><td>{{ transition.from === '*' ? '任意' : transition.from }}</td><td>{{ transition.event }}</td><td>{{ guardText(transition) }}</td><td>{{ transition.to }}</td><td>{{ transitionActionText(transition) }}</td><td class="row-actions"><button class="ghost" @click="editTransition(transition.transition_id)">编辑</button><button class="ghost danger" :disabled="readOnly || busy || !record.permissions.edit" @click="removeTransition(transition.transition_id)">删除</button></td></tr></tbody></table></div>
@@ -96,7 +96,7 @@ import { nameOf } from "../../types/api"
 import type { Snapshot } from "../../types/api"
 import { businessId, conditionText, actionText, isRamped, isWritable } from "./strategy"
 import type { Condition, Action } from "./strategy"
-import { bindStateMachineDefinition, createStateMachineDefinition, executionStatusText, stateMachineSimulationPayload, stateMachineInputValue as inputValue, stateMachineInputNumber as inputNumber } from "./state-machine"
+import { bindStateMachineDefinition, createStateMachineDefinition, executionStatusText, stateMachineSimulationPayload, stateMachineInputValue as inputValue, stateMachineInputNumber as inputNumber, stateMachineCommandText } from "./state-machine"
 import type { StateMachineDefinition, StateMachineRecord, StateMachineSimulation, StateTransition, MachineCommandOption } from "./state-machine"
 import StateMachineActionEditor from "./StateMachineActionEditor.vue"
 import { loadUnitModel } from "../../pages/overview/operations"
@@ -140,7 +140,12 @@ watch(() => props.parent, async () => {
   await load()
   if (discarded) notice.value = "对象已切换；上一个状态机的未保存修改未保存。"
 })
-function displayName(id: string) { const node = nodes.value.find(item => businessId(item) === id); return node ? nameOf(node) : id || "—" }
+function displayName(id: string) { const node = nodes.value.find(item => item.id === id) || nodes.value.find(item => businessId(item) === id); return node ? nameOf(node) : id || "—" }
+function executionActionName(id: string) {
+  const version = record.value?.last_execution?.version
+  const source = version ? record.value?.versions?.[version] : undefined
+  return stateMachineCommandText(id, source, displayName) || displayName(id)
+}
 function inputKind(id: string) { return (draft.value?.transitions || []).flatMap(transition => transition.conditions).find(condition => condition.point_id === id)?.kind || "number" }
 function syncEditorOpen(event: Event) { editorOpen.value = (event.target as HTMLDetailsElement).open }
 function editTransition(id: string) { expandedTransition.value = id; editorOpen.value = true }
@@ -152,7 +157,7 @@ function removeTransition(id: string) {
   changed()
 }
 function guardText(transition: StateTransition) { return transition.conditions.length ? transition.conditions.map(condition => conditionText(condition, displayName)).join(transition.match === "any" ? " ∨ " : " ∧ ") : "—" }
-function transitionActionText(transition: StateTransition) { return transition.actions.length ? transition.actions.map(action => actionText(action, displayName)).join(" → ") : "仅记录状态转移" }
+function transitionActionText(transition: StateTransition) { return transition.actions.length ? transition.actions.map(action => stateMachineCommandText(action.action_id, draft.value, displayName) || actionText(action, displayName)).join(" → ") : "仅记录状态转移" }
 async function runEvent(event: string) { eventName.value = event; await simulate() }
 function resetSimulation() { simulation.value = null; confirmed.value = false; notice.value = "模拟结果已复位；真实当前状态未改变。" }
 function changed() { dirty.value = true; simulation.value = null; error.value = ""; notice.value = "" }

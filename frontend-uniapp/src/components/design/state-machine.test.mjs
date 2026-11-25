@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { bindStateMachineDefinition, createStateMachineDefinition, executionStatusText, stateMachineSimulationPayload, stateMachineInputNumber } from "./state-machine.ts"
+import { bindStateMachineDefinition, createStateMachineDefinition, executionStatusText, stateMachineSimulationPayload, stateMachineInputNumber, stateMachineCommandText } from "./state-machine.ts"
 
 test("uni numeric input preserves the explicit command parameter instead of substituting zero", () => {
   assert.equal(stateMachineInputNumber({ detail: { value: "20" }, target: {} }), 20)
@@ -19,6 +19,13 @@ test("renaming an empty state removes only generated empty lifecycle rows", () =
   const bound = bindStateMachineDefinition(definition, [])
   assert.equal(bound.state_actions.stopped, undefined)
   assert.equal(bound.state_actions.running.entry.length, 1, "never silently discard configured lifecycle effects")
+})
+
+test("declared command labels show bound parameters rather than the unused point value", () => {
+  const definition = createStateMachineDefinition("", "")
+  definition.command_bindings = { command: { device_id: "device", command_id: "set", parameters: { target: 20 } } }
+  assert.equal(stateMachineCommandText("command", definition, id => id === "device" ? "Pump" : id), "Pump · set（target=20）")
+  assert.equal(stateMachineCommandText("point", definition, id => id), undefined)
 })
 
 test("state machine definition binds only supplied real inputs and outputs", () => {

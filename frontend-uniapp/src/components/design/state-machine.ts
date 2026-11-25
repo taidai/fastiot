@@ -63,6 +63,7 @@ export type StateMachineRecord = {
   version: number
   draft: StateMachineDefinition
   applied?: StateMachineDefinition
+  versions?: Record<number, StateMachineDefinition>
   current_state: string
   last_execution?: StateMachineExecution
   permissions: { edit?: boolean; publish?: boolean; execute?: boolean }
@@ -141,6 +142,13 @@ export function stateMachineInputValue(event: Event): string {
 export function stateMachineInputNumber(event: Event) {
   const raw = stateMachineInputValue(event)
   return raw === "" ? Number.NaN : Number(raw)
+}
+
+export function stateMachineCommandText(actionID: string, definition: StateMachineDefinition | null | undefined, label: (id: string) => string) {
+  const binding = definition?.command_bindings?.[actionID]
+  if (!binding) return undefined
+  const parameters = Object.entries(binding.parameters || {}).map(([name, value]) => `${name}=${value}`).join(", ")
+  return `${label(binding.device_id)} · ${binding.command_id}（${parameters || "Profile 默认参数"}）`
 }
 
 export function executionStatusText(status: string) {
