@@ -44,6 +44,11 @@ func (r *StoreRuntime) Locate(pointID string) (string, int, bool, error) {
 	return deviceID, intervalMS, deviceID != "", nil
 }
 
+// Retention exposes the actual count cap; it is not a fixed-day policy.
+func (r *StoreRuntime) Retention() Retention {
+	return Retention{Kind: "count_per_point_per_kind", Limit: r.Store.Capacity()}
+}
+
 // Timeline returns the runtime observation and quality-event sequence.
 func (r *StoreRuntime) Timeline(deviceID, pointID string, start, end time.Time) []history.Sample {
 	return r.Store.Timeline(deviceID, pointID, start, end, 0)

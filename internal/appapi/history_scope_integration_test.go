@@ -43,6 +43,27 @@ func TestHistoryCursorAndAggregateStayConsistent(t *testing.T) {
 	if got := len(service.History.Query(device.ID, point, at, at.Add(599*time.Second), 1000)); got != 600 {
 		t.Fatalf("history fixture lost samples: %d", got)
 	}
+	// Prototype seconds must never silently become five-minute means.
+	secondsQuery := url.Values{"node_id": {point}, "start": {at.Format(time.RFC3339)}, "end": {at.Add(599 * time.Second).Format(time.RFC3339)}, "aggregate": {"1s"}, "limit": {"1"}}
+	var seconds struct {
+		Results []struct {
+			ActualIntervalMS int    `json:"actual_interval_ms"`
+			Aggregation      string `json:"aggregation"`
+			Source           string `json:"source"`
+			Retention        struct {
+				Kind  string `json:"kind"`
+				Limit int    `json:"limit"`
+			} `json:"retention"`
+		} `json:"results"`
+	}
+	secondsStatus, secondsBody := call(t, http.MethodGet, base+"/history?"+secondsQuery.Encode(), token, nil, &seconds)
+	if secondsStatus != 200 || len(seconds.Results) != 1 {
+		t.Fatalf("seconds granularity unavailable: %d %s", secondsStatus, secondsBody)
+	}
+	metadata := seconds.Results[0]
+	if metadata.ActualIntervalMS != 60000 || metadata.Aggregation != "mean" || metadata.Source != "modbus_runtime" || metadata.Retention.Kind != "count_per_point_per_kind" || metadata.Retention.Limit != 2000 {
+		t.Fatalf("history metadata does not describe actual storage and interval: %+v", metadata)
+	}
 	hq := h.historyQuery()
 	if _, _, err := hq.Execute(historyquery.Request{NodeIDs: []string{point}, Type: "value", Start: at, End: at.Add(599 * time.Second), Limit: 2000}); err != nil {
 		t.Fatal(err)
@@ -76,6 +97,9 @@ func TestHistoryCursorAndAggregateStayConsistent(t *testing.T) {
 	status, body = call(t, http.MethodGet, base+"/history/export?"+query.Encode(), token, nil, nil)
 	if status != 200 || !strings.Contains(body, "449.5") || !strings.Contains(body, "5m0s") {
 		t.Fatalf("export did not use query aggregation: %d %s", status, body)
+	}
+	if !strings.Contains(body, "时间依据,迟到观测,实际间隔毫秒,保留策略,保留条数") || !strings.Contains(body, "300000,count_per_point_per_kind,2000") {
+		t.Fatalf("CSV dropped query provenance/retention: %s", body)
 	}
 	empty := url.Values{"node_id": []string{point}, "start": []string{at.Add(time.Hour).Format(time.RFC3339)}, "end": []string{at.Add(time.Hour).Format(time.RFC3339)}}
 	status, body = call(t, http.MethodGet, base+"/history?"+empty.Encode(), token, nil, nil)

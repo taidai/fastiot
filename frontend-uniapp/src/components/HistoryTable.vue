@@ -1,30 +1,31 @@
 <template>
   <view class="table-wrap" :class="{ compact }">
     <table>
-      <thead><tr><th>{{ compact ? '时间' : '观测时间' }}</th><th>值</th><th>单位</th><th>质量</th><th v-if="!compact">来源</th></tr></thead>
+      <thead><tr><th>{{ compact ? '时间' : '观测时间' }}</th><th>值</th><th>单位</th><th>质量</th><th v-if="!compact">接收时间 / 时间依据</th><th v-if="!compact">来源</th></tr></thead>
       <tbody v-if="records.length">
         <tr v-for="(record, index) in records" :key="`${record.point_id}-${record.source_time || record.received_time}-${index}`">
-          <td class="num time">{{ timeText(record) }}</td>
-          <td class="num">{{ historyValueText(record) }}</td>
+          <td class="num time">{{ timeText(record) }}<view v-if="!compact" class="reason">{{ historyGapText(records[index - 1], record, cycleMs) }}</view></td>
+          <td class="num">{{ historyValueText(record) }}<view v-if="record.aggregate" class="reason">{{ record.aggregate }} 窗口平均 · {{ record.sample_count }} 个样本</view></td>
           <td>{{ record.unit || "—" }}</td>
           <td :class="{ off: record.quality && !['good', '有效'].includes(record.quality) }">
             {{ qualityText(record.quality) }}<view v-if="record.reason" class="reason">{{ record.reason }}</view>
           </td>
+          <td v-if="!compact" class="time">{{ historyTimeText({ source_time: record.received_time }) }}<view class="reason">{{ record.time_source || '观测时间依据未声明' }}<template v-if="record.late"> · 迟到观测</template></view></td>
           <td v-if="!compact">{{ sourceText(record.source) }}</td>
         </tr>
       </tbody>
-      <tbody v-else><tr class="placeholder-row"><td :colspan="compact ? 4 : 5">—</td></tr></tbody>
+      <tbody v-else><tr class="placeholder-row"><td :colspan="compact ? 4 : 6">该时间范围没有记录</td></tr></tbody>
     </table>
   </view>
 </template>
 
 <script setup lang="ts">
 import type { HistoryRecord } from "../types/api"
-import { historyTimeText, historyValueText, qualityText } from "../pages/history/history"
-const props = defineProps<{ records: HistoryRecord[]; compact?: boolean }>()
+import { historyGapText, historyTimeText, historyValueText, qualityText } from "../pages/history/history"
+const props = defineProps<{ records: HistoryRecord[]; compact?: boolean; cycleMs?: number }>()
 function timeText(record: HistoryRecord) {
   if (!props.compact) return historyTimeText(record)
-  const value = record.source_time || record.received_time
+  const value = record.source_time
   if (!value) return "—"
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString("zh-CN", { hour12: false })

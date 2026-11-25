@@ -1,5 +1,20 @@
 import type { HistoryRecord } from "../../types/api"
 
+export type HistoryScope = { point: string; start: Date; end: Date; aggregate: string }
+export type HistoryCursor = { before: string; count: number }
+
+// Export omits the page cursor, but uses the exact successful query window.
+export function buildHistoryQuery(scope: HistoryScope, cursor?: HistoryCursor) {
+  const params = new URLSearchParams({ type: "value", node_id: scope.point, start: scope.start.toISOString(), end: scope.end.toISOString(), aggregate: scope.aggregate })
+  if (cursor) { params.set("before", cursor.before); params.set("before_count", String(cursor.count)) }
+  return params.toString()
+}
+
+export function historyGapText(previous: Pick<HistoryRecord, "source_time"> | undefined, current: Pick<HistoryRecord, "source_time">, cycleMs = 0) {
+  const gap = Date.parse(current.source_time || "") - Date.parse(previous?.source_time || "")
+  return cycleMs > 0 && gap > cycleMs * 2.5 ? `距上一条${gap / 1000}秒，存在采样缺口` : ""
+}
+
 export function qualityText(quality?: string) {
   return ({ good: "有效", stale: "过期", invalid: "无效", uninitialized: "未初始化" } as Record<string, string>)[quality || ""] || quality || "—"
 }
@@ -11,7 +26,7 @@ export function historyValueText(record: Pick<HistoryRecord, "value" | "text" | 
 }
 
 export function historyTimeText(record: Pick<HistoryRecord, "source_time" | "received_time">) {
-  const value = record.source_time || record.received_time
+  const value = record.source_time
   if (!value) return "—"
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
@@ -35,10 +50,10 @@ export function buildTrend(records: HistoryRecord[], start: Date, end: Date, wid
   const startMs = start.getTime()
   const endMs = end.getTime()
   const duration = Math.max(1, endMs - startMs)
-  const ordered = records.map(record => ({ record, time: new Date(record.source_time || record.received_time || "").getTime() }))
+  const ordered = records.map(record => ({ record, time: new Date(record.source_time || "").getTime() }))
     .filter(item => Number.isFinite(item.time) && item.time >= startMs && item.time <= endMs)
     .sort((a, b) => a.time - b.time)
-  const numeric = ordered.filter(item => item.record.kind !== "quality_event" && item.record.quality !== "invalid" && item.record.value !== undefined && Number.isFinite(item.record.value))
+  const numeric = ordered.filter(item => item.record.kind !== "quality_event" && (!item.record.quality || item.record.quality === "good") && item.record.value !== undefined && Number.isFinite(item.record.value))
   const rawValues = numeric.map(item => item.record.value as number)
   const min = rawValues.length ? Math.min(...rawValues) : 0
   const max = rawValues.length ? Math.max(...rawValues) : 1
@@ -56,7 +71,7 @@ export function buildTrend(records: HistoryRecord[], start: Date, end: Date, wid
   }
   for (const item of ordered) {
     const value = item.record.value
-    const valid = item.record.kind !== "quality_event" && item.record.quality !== "invalid" && value !== undefined && Number.isFinite(value)
+    const valid = item.record.kind !== "quality_event" && (!item.record.quality || item.record.quality === "good") && value !== undefined && Number.isFinite(value)
     if (!valid) {
       interruptions += 1
       flush()
@@ -73,6 +88,7 @@ export function buildTrend(records: HistoryRecord[], start: Date, end: Date, wid
       interruptions += 1
       flush()
     }
+    if (cycleMs <= 0 || item.record.aggregate || segment[segment.length - 1]?.record.aggregate) flush()
     samples.push(point)
     segment.push(point)
   }

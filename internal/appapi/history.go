@@ -119,6 +119,14 @@ func historyAggregation(value string) (time.Duration, error) {
 	switch value {
 	case "", "raw":
 		return 0, nil
+	case "1s":
+		return time.Second, nil
+	case "5s":
+		return 5 * time.Second, nil
+	case "30s":
+		return 30 * time.Second, nil
+	case "1m":
+		return time.Minute, nil
 	case "5m":
 		return 5 * time.Minute, nil
 	case "1h":
@@ -194,7 +202,7 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request, identity Ident
 		w.Header().Set("X-History-Limit", strconv.Itoa(historyExportLimit))
 		w.Header().Set("Content-Disposition", `attachment; filename="history.csv"`)
 		writer := csv.NewWriter(w)
-		if err := writer.Write([]string{"点位ID", "设备ID", "观测时间", "接收时间", "桶结束", "质量", "数值", "文本", "来源", "来源标识", "单位", "聚合", "样本数", "种类", "原因"}); err != nil {
+		if err := writer.Write([]string{"点位ID", "设备ID", "观测时间", "接收时间", "桶结束", "质量", "数值", "文本", "来源", "来源标识", "单位", "聚合", "样本数", "种类", "原因", "时间依据", "迟到观测", "实际间隔毫秒", "保留策略", "保留条数"}); err != nil {
 			return
 		}
 		for _, result := range results {
@@ -213,7 +221,7 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request, identity Ident
 				if !record.BucketEnd.IsZero() {
 					bucketEnd = record.BucketEnd.Format(time.RFC3339Nano)
 				}
-				_ = writer.Write([]string{record.PointID, record.DeviceID, at, received, bucketEnd, record.Quality, value, text, record.Source, record.Origin, record.Unit, record.Aggregate, strconv.Itoa(record.SampleCount), record.Kind, record.Reason})
+				_ = writer.Write([]string{record.PointID, record.DeviceID, at, received, bucketEnd, record.Quality, value, text, record.Source, record.Origin, record.Unit, record.Aggregate, strconv.Itoa(record.SampleCount), record.Kind, record.Reason, record.TimeSource, strconv.FormatBool(record.Late), strconv.Itoa(result.ActualIntervalMS), result.Retention.Kind, strconv.Itoa(result.Retention.Limit)})
 			}
 		}
 		writer.Flush()
