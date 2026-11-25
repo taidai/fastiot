@@ -54,6 +54,9 @@ func (r routeRequirement) inPackage(id string) routeRequirement {
 // Targets declare direct object scope; list filters and derived references stay
 // in the owning module.
 var routeRequirements = []routeRequirement{
+	authenticatedRoute(http.MethodGet, "notifications"),
+	authenticatedRoute(http.MethodPost, "notifications/*/read"),
+	actionRoute(http.MethodGet, "notification-recipients", Configure, "admin_required").queryTarget("scope_node_id"),
 	authenticatedRoute(http.MethodGet, "ws"),
 	authenticatedRoute(http.MethodGet, "metrics"),
 	authenticatedRoute(http.MethodGet, "snapshot"),

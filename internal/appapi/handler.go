@@ -31,6 +31,7 @@ import (
 	"fastiot/internal/emsapi"
 	"fastiot/internal/genscreen"
 	"fastiot/internal/industry"
+	"fastiot/internal/notification"
 )
 
 type Handler struct {
@@ -69,6 +70,9 @@ type Handler struct {
 	alarmEventsMu         sync.Mutex
 	alarmEventsError      error
 	alarmCheckpointWrites int
+
+	notificationMu sync.Mutex
+	notifications  *notification.Store
 
 	sessionMu      sync.Mutex
 	sessions       map[string]sessionState
@@ -389,6 +393,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		defer finish()
 	}
 	switch {
+	case path == "notifications" && r.Method == http.MethodGet:
+		h.listNotifications(w, r, identity)
+	case path == "notification-recipients" && r.Method == http.MethodGet:
+		h.notificationRecipients(w, r, identity)
+	case len(parts) == 3 && parts[0] == "notifications" && parts[2] == "read" && r.Method == http.MethodPost:
+		h.readNotification(w, r, identity, parts[1])
 	case path == "ws":
 		h.serveWS(status.ResponseWriter, r, identity)
 	case path == "metrics" && r.Method == http.MethodGet:
