@@ -55,10 +55,7 @@
         </view>
 
         <view class="daily glass">
-          <view class="dfig"><text>今日电量</text><b>—<small>kWh</small></b></view>
-          <view class="dfig"><text>运行时长</text><b>—<small>h</small></b></view>
-          <view class="dfig"><text>通信成功率</text><b>{{ successRate }}</b></view>
-          <view class="dfig"><text>数据新鲜度</text><b>—</b></view>
+          <OverviewDailyStats :layer-id="selectedDevice ? selectedDevice.business_node_id || '' : session.layer" />
           <OverviewTrend :records="trendRecords" :start="trendStart" :end="trendEnd" :unit="metrics[0]?.unit || ''" :label="metrics[0]?.label || '指标趋势'" @select="openHistory()" />
           <view v-if="trendError" class="trend-error">{{ trendError }}</view>
         </view>
@@ -107,6 +104,7 @@ import AlarmCenter from "../../components/AlarmCenter.vue"
 import HistoryTable from "../../components/HistoryTable.vue"
 import DevicePanel from "./DevicePanel.vue"
 import OverviewTrend from "./OverviewTrend.vue"
+import OverviewDailyStats from "./OverviewDailyStats.vue"
 import HandoverPanel from "./HandoverPanel.vue"
 import { ApiError, request } from "../../api/client"
 import {
@@ -117,7 +115,7 @@ import type { HistoryRecord, ScreenConfig } from "../../types/api"
 import { historyValueText } from "../history/history"
 import {
   boundDevicesForLayer, businessName, descendantNodeIds, deviceKey, displaySample, healthLabel, metricForPoint,
-  qualityLabel, shortTime, summarizeSuccessRate, unitOf, valueInLayer, alarmInLayer, devicePointIds, screenMetricTarget,
+  qualityLabel, shortTime, unitOf, valueInLayer, alarmInLayer, devicePointIds, screenMetricTarget,
 } from "./overview"
 import type { LedgerDevice, OverviewScreen, QualityStats } from "./overview"
 import { DEFAULT_APPEARANCE, applyAppearanceDocument, normalizeAppearance } from "./appearance"
@@ -248,8 +246,6 @@ const onlineCount = computed(() => scopedDevices.value.filter(device => {
   return quality?.health === "healthy"
 }).length)
 const goodValueCount = computed(() => scopedValues.value.filter(value => value.quality === "good" || value.quality === "有效").length)
-const scopedQualityDevices = computed(() => qualityDevices.value.filter(item => !!item.device_id && scopedDeviceIds.value.has(item.device_id)))
-const successRate = computed(() => summarizeSuccessRate(scopedQualityDevices.value))
 const selectedCommunication = computed(() => {
   if (!selectedDevice.value) return "—"
   const id = deviceKey(selectedDevice.value)
@@ -468,11 +464,6 @@ h1 { margin: 0; font-size: 34px; line-height: normal; letter-spacing: -.02em; }
 .warn { color: var(--amber); }
 .page-error { margin-top: 12px; }
 .daily { position: relative; display: grid; grid-template-columns: repeat(4,minmax(0,1fr)) minmax(0,2fr); gap: 0; align-items: end; margin-top: auto; padding: 12px 18px; }
-.dfig { padding: 2px 14px; border-left: 1px solid var(--line); }
-.dfig:first-child { border-left: 0; padding-left: 0; }
-.dfig > text { display: block; color: var(--muted); font-size: 10px; letter-spacing: .06em; }
-.dfig b { font-size: 21px; font-weight: 600; }
-.dfig b small { margin-left: 2px; color: var(--muted); font-size: 10px; font-weight: 400; }
 .trend-error { position: absolute; right: 18px; bottom: 100%; max-width: 45%; color: var(--amber); font-size: 10px; }
 .colophon { display: flex; justify-content: space-between; padding: 2px 4px 0; color: var(--muted); font-size: 9.5px; }
 @media (max-width: 1150px) {
