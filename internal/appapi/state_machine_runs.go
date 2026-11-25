@@ -119,8 +119,7 @@ func (h *Handler) replayMachineRun(w http.ResponseWriter, node data.NodeEdge, do
 				return true
 			}
 		}
-		response := h.stateMachineResult(node, document, identity)
-		response.Execution = &run.Execution
+		response := h.stateMachineResult(node, document, identity, &run.Execution)
 		writeJSON(w, response)
 		return true
 	}

@@ -61,7 +61,8 @@ export type StateMachineRecord = {
   name: string
   revision: number
   version: number
-  draft: StateMachineDefinition
+  draft?: StateMachineDefinition
+  restricted?: Record<string, string>
   applied?: StateMachineDefinition
   versions?: Record<number, StateMachineDefinition>
   current_state: string

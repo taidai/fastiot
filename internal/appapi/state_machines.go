@@ -31,6 +31,7 @@ type stateMachineRequest struct {
 }
 
 type stateMachineResponse struct {
+	Restricted    map[string]string                          `json:"restricted,omitempty"`
 	Pending       *stateMachineRun                           `json:"pending,omitempty"`
 	Versions      map[uint64]decision.StateMachineDefinition `json:"versions,omitempty"`
 	ID            string                                     `json:"id"`
@@ -56,7 +57,7 @@ func decodeStateMachine(node data.NodeEdge) (decision.StateMachineDocument, erro
 	return document, document.Draft.Validate()
 }
 
-func (h *Handler) stateMachineResult(node data.NodeEdge, document decision.StateMachineDocument, identity Identity) stateMachineResponse {
+func (h *Handler) stateMachineResult(node data.NodeEdge, document decision.StateMachineDocument, identity Identity, execution ...*decision.StateMachineExecution) stateMachineResponse {
 	last := document.LastExecution
 	var pending *stateMachineRun
 	runs, _ := machineRuns(node)
@@ -70,12 +71,16 @@ func (h *Handler) stateMachineResult(node data.NodeEdge, document decision.State
 			last = &execution
 		}
 	}
-	return stateMachineResponse{
+	response := stateMachineResponse{
 		Pending: pending, Versions: document.Versions,
 		ID: node.ID, Parent: node.Parent, Name: nodeName(node), Revision: document.Revision, Version: document.Version,
 		Draft: &document.Draft, Applied: document.Applied, CurrentState: document.CurrentState, LastExecution: last,
 		Permissions: map[string]bool{"edit": canAction(identity, ActionConfigure), "publish": canAction(identity, ActionRulePublish), "execute": canAction(identity, ActionCommand)},
 	}
+	if len(execution) != 0 {
+		response.Execution = execution[0]
+	}
+	return h.scopeMachineResponse(identity, document, runs, response)
 }
 
 // stateMachines is registered by the shared handler owner. Published machines
@@ -162,6 +167,10 @@ func (h *Handler) stateMachines(w http.ResponseWriter, r *http.Request, identity
 			writeError(w, 403, "forbidden")
 			return
 		}
+		if !h.machineDefinitionVisible(identity, document.Draft) {
+			writeError(w, 403, "source_scope_restricted")
+			return
+		}
 		next, err := document.Publish(input.Revision)
 		if err != nil {
 			inputError(w, err)
@@ -189,13 +198,25 @@ func (h *Handler) stateMachines(w http.ResponseWriter, r *http.Request, identity
 		if input.Definition.InitialState != "" {
 			definition = input.Definition
 		}
+		if err := definition.Validate(); err != nil {
+			inputError(w, err)
+			return
+		}
+		if !h.machineDefinitionVisible(identity, definition) {
+			writeError(w, 403, "source_scope_restricted")
+			return
+		}
 		result, err := definition.Simulate(current, input.Event, input.Inputs, input.TextInputs, at)
 		if err != nil {
 			inputError(w, err)
 			return
 		}
 		response := h.stateMachineResult(node, document, identity)
-		response.Simulation = &result
+		if h.machineDefinitionVisible(identity, definition) {
+			response.Simulation = &result
+		} else {
+			response.Restricted["simulation"] = "source_scope_restricted"
+		}
 		writeJSON(w, response)
 	case "execute":
 		if !canAction(identity, ActionCommand) {
@@ -345,6 +366,10 @@ func (h *Handler) executeStateMachine(w http.ResponseWriter, r *http.Request, no
 		writeError(w, 409, "revision_conflict")
 		return
 	}
+	if !h.machineDefinitionVisible(identity, *document.Applied) {
+		writeError(w, 403, "source_scope_restricted")
+		return
+	}
 	if err := h.validateStateMachineScope(node.Parent, *document.Applied); err != nil {
 		writeError(w, 400, err.Error())
 		return
@@ -417,10 +442,15 @@ func (h *Handler) executeStateMachine(w http.ResponseWriter, r *http.Request, no
 		uncertain.Status, uncertain.To, uncertain.Reason = "unknown", previousState, "state_persistence_unconfirmed"
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"error": "state_persistence_unconfirmed", "id": node.ID, "revision": document.Revision - 1,
-			"current_state": previousState, "execution": uncertain, "persisted": "unknown",
-		})
+		view := document
+		view.Revision--
+		view.CurrentState, view.LastExecution = previousState, &uncertain
+		response := h.stateMachineResult(node, view, identity, &uncertain)
+		_ = json.NewEncoder(w).Encode(struct {
+			stateMachineResponse
+			Error     string `json:"error"`
+			Persisted string `json:"persisted"`
+		}{response, "state_persistence_unconfirmed", "unknown"})
 		return
 	}
 	run.Execution, run.Finished = *execution, true
@@ -428,8 +458,7 @@ func (h *Handler) executeStateMachine(w http.ResponseWriter, r *http.Request, no
 		writeError(w, 503, "state_machine_run_unconfirmed")
 		return
 	}
-	response := h.stateMachineResult(node, document, identity)
-	response.Execution = execution
+	response := h.stateMachineResult(node, document, identity, execution)
 	writeJSON(w, response)
 }
 

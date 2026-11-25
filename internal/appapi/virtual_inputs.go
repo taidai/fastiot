@@ -306,7 +306,7 @@ func publicInputNodes(nodes []data.NodeEdge) []data.NodeEdge {
 			}
 		}
 	}
-	return out
+	return publicStateMachineNodes(out)
 }
 
 type inputImpact struct {
