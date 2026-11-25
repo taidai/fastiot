@@ -8,9 +8,15 @@
         <hr><button role="menuitem" @click="newProject">＋ 新建项目</button><button role="menuitem" @click="projectOpen = false; emit('import-project')">导入项目包…</button>
       </view>
     </view>
+    <view v-else-if="!PREVIEW_MODE" class="project" @keydown.esc.prevent="closeProjectMenu">
+      <button class="project-button" role="button" :tabindex="currentProject ? 0 : -1" :aria-expanded="projectOpen" aria-haspopup="menu" :disabled="!currentProject" @click="projectOpen = !projectOpen" @keydown.enter.prevent @keydown.space.prevent @keyup.enter.stop.prevent="openProjectMenu" @keyup.space.stop.prevent="openProjectMenu" @keydown.down.prevent="openProjectMenu">项目：<b>{{ currentProject?.name || '未选择项目' }}</b> ▾</button>
+      <view v-if="projectOpen" class="project-menu" role="menu" aria-label="授权项目" @keydown.down.prevent="moveProjectFocus(1)" @keydown.up.prevent="moveProjectFocus(-1)">
+        <button v-for="item in projectContext.projects" :key="item.id" role="menuitemradio" tabindex="0" :aria-checked="item.id === projectContext.id" @keydown.enter.prevent @keydown.space.prevent @keyup.enter.stop.prevent="chooseLiveProject(item.id)" @keyup.space.stop.prevent="chooseLiveProject(item.id)" @click="chooseLiveProject(item.id)">{{ item.name }}</button>
+      </view>
+    </view>
     <view v-else class="project">项目<text v-if="!showWorkbench"> </text><text v-else>：</text><text class="project-name">{{ project }}</text><text v-if="showWorkbench" class="project-caret">▾</text></view>
     <view v-if="showWorkbench" class="workbench" aria-label="工作台">
-      <button v-for="item in tabs" :key="item.key" :class="{ active: active === item.key }" :aria-current="active === item.key ? 'page' : undefined" @click="$emit('navigate', item.key)">{{ item.label }}</button>
+      <button v-for="item in tabs" :key="item.key" role="button" tabindex="0" :class="{ active: active === item.key }" :aria-current="active === item.key ? 'page' : undefined" @keydown.enter.prevent="$emit('navigate', item.key)" @keydown.space.prevent="$emit('navigate', item.key)" @click="$emit('navigate', item.key)">{{ item.label }}</button>
     </view>
     <button v-if="showEms" class="ems-toggle" role="switch" :aria-checked="emsInstalled === true" :disabled="emsBusy || emsInstalled === null" @click="emit('toggle-ems')"><text class="ems-check">{{ emsInstalled ? '✓' : '' }}</text><text>EMS 行业包</text></button>
     <view v-if="showAppearance" class="top-meta desktop-only">{{ meta }}</view>
@@ -29,7 +35,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue"
+import { computed, nextTick, ref } from "vue"
+import { currentProject, projectContext, selectProject } from '../stores/projects'
 import { PREVIEW_MODE } from '../api/source'
 import { previewWorkspace, previewProjects, selectPreviewProject, createPreviewProject } from '../api/preview/workspace'
 import { selectDeliveryPreviewProject } from '../api/preview/delivery'
@@ -61,6 +68,32 @@ const emit = defineEmits<{
 }>()
 const open = ref(false)
 const projectOpen = ref(false)
+function closeProjectMenu() {
+  const trigger = document.activeElement?.closest('.project')?.querySelector<HTMLElement>('.project-button')
+  projectOpen.value = false
+  trigger?.focus()
+}
+async function openProjectMenu() {
+  // uni-app wraps keyboard event targets as data, not DOM elements.
+  const container = document.activeElement?.closest('.project')
+  projectOpen.value = true
+  await nextTick()
+  container?.querySelector<HTMLElement>('[role="menuitemradio"]')?.focus()
+}
+function moveProjectFocus(direction: number) {
+  const container = document.activeElement?.closest('[role="menu"]')
+  const items = Array.from(container?.querySelectorAll<HTMLElement>('[role="menuitemradio"]') || [])
+  const index = items.indexOf(document.activeElement as HTMLElement)
+  items[(index + direction + items.length) % items.length]?.focus()
+}
+// keyup.stop on menu items keeps the opening Enter from also confirming uni.showModal.
+async function chooseLiveProject(id: string) {
+  projectOpen.value = false
+  const changed = await selectProject(id, () => new Promise(resolve => {
+    uni.showModal({ title: '切换项目', content: '切换将放弃当前页面未保存的修改。已发出的写入仍属于原项目，请返回原项目核实结果。', confirmText: '放弃并切换', success: result => resolve(result.confirm), fail: () => resolve(false) })
+  }))
+  if (changed) uni.reLaunch({ url: `/pages/${props.active}/index` })
+}
 const previewProjectName = computed(() => previewProjects.find(item => item.id === previewWorkspace.projectId)?.name || props.project)
 function chooseProject(id: string) { selectDeliveryPreviewProject(id); selectPreviewProject(id); projectOpen.value = false; emit('project-change', id) }
 function newProject() { const project = createPreviewProject(); selectDeliveryPreviewProject(project.id); projectOpen.value = false; emit('new-project') }

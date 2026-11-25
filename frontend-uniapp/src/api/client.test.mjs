@@ -6,9 +6,8 @@ import { fileURLToPath } from 'node:url'
 // Bundle the actual application modules, including the preview resolver. Only
 // uni's host I/O is substituted; no API client, store or resolver is mocked.
 let generation = 0
-async function application(preview = false) {
+async function application(preview = false, storage = new Map([['fastems-token', 'live-session']])) {
   globalThis.location = new URL(`http://localhost/uniapp/${preview ? '?preview=1' : ''}`)
-  const storage = new Map([['fastems-token', 'live-session']])
   const storageReads = []
   const redirects = []
   const requests = []
@@ -20,10 +19,16 @@ async function application(preview = false) {
     setStorageSync(key, value) { storage.set(key, value) },
     removeStorageSync(key) { storage.delete(key) },
     redirectTo(options) { redirects.push(options.url) },
-    request(options) { requests.push(options) },
+    request(options) {
+      if (options.url === '/api/projects') return options.success({ statusCode: 200, data: { user_id: 'fixture-user', projects: [
+        { id: 'project-a', name: 'Project A', root_id: 'project-a', scope_root_ids: ['project-a'], sites: [] },
+        { id: 'project-b', name: 'Project B', root_id: 'project-b', scope_root_ids: ['project-b'], sites: [] },
+      ] } })
+      requests.push(options)
+    },
   }
   const result = await build({
-    stdin: { contents: 'export * from "./client.ts"; export * from "../stores/session.ts"', resolveDir: fileURLToPath(new URL('.', import.meta.url)), loader: 'ts' },
+    stdin: { contents: 'export * from "./client.ts"; export * from "../stores/session.ts"; export * from "../stores/projects.ts"', resolveDir: fileURLToPath(new URL('.', import.meta.url)), loader: 'ts' },
     bundle: true, write: false, platform: 'node', format: 'esm',
   })
   const api = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text + `\n//# sourceURL=client-test-${generation++}.mjs`).toString('base64')}`)
@@ -37,6 +42,102 @@ async function pendingRequest(app, path = '/snapshot') {
   while (!app.requests.length) await new Promise(resolve => setImmediate(resolve))
   return { promise, request: app.requests.shift() }
 }
+
+test('project selection fences late reads and writes and persists only authorized context', async () => {
+  const app = await application()
+  const old = await pendingRequest(app)
+  assert.equal(old.request.header['X-Fastiot-Project'], 'project-a')
+  const write = app.api.request('/nodes/a/screen', 'PUT', { version: 2 })
+  write.catch(() => {})
+  await new Promise(resolve => setImmediate(resolve))
+  const oldWrite = app.requests.shift()
+  assert.equal(oldWrite.header['X-Fastiot-Project'], 'project-a')
+  assert.deepEqual(oldWrite.data, { version: 2 })
+  await app.api.selectProject('project-b', async () => true)
+  old.request.success({ statusCode: 200, data: { roots: ['project-a'], nodes: [] } })
+  oldWrite.success({ statusCode: 200, data: { version: 3 } })
+  await assert.rejects(old.promise, { code: 'project_context_changed' })
+  await assert.rejects(write, { code: 'project_context_changed' })
+  const current = await pendingRequest(app)
+  assert.equal(current.request.header['X-Fastiot-Project'], 'project-b')
+  current.request.success({ statusCode: 200, data: {} })
+  await current.promise
+  assert.equal(app.api.projectContext.id, 'project-b')
+  assert.equal(await app.api.selectProject('not-authorized', async () => true), false)
+  assert.equal(await app.api.selectProject('project-a', async () => false), false)
+  assert.equal(app.api.projectContext.id, 'project-b')
+})
+
+test('refresh restores an authorized project and layer, and project change clears scoped data', async () => {
+  const storage = new Map([['fastems-token', 'live-session'], ['fastiot-project-context:fixture-user', { project: 'project-b', layer: 'b-layer' }]])
+  const app = await application(false, storage)
+  await app.api.ensureProjectContext()
+  assert.equal(app.api.projectContext.id, 'project-b')
+  app.api.session.snapshot = { roots: ['project-b'], nodes: [{ id: 'b-layer' }] }
+  app.api.session.layer = 'b-layer'
+  app.api.session.values = [{ point_id: 'b-point' }]
+  await app.api.selectProject('project-a', async () => true)
+  assert.equal(app.api.session.snapshot, null)
+  assert.equal(app.api.session.layer, '')
+  assert.deepEqual(app.api.session.values, [])
+  const reloaded = await application(false, storage)
+  await reloaded.api.ensureProjectContext()
+  assert.equal(reloaded.api.projectContext.id, 'project-a')
+  assert.equal(reloaded.api.projectContext.layer, '')
+})
+
+test('returning to a project does not revive old responses or swallow revision conflicts', async () => {
+  const app = await application()
+  const old = await pendingRequest(app)
+  await app.api.selectProject('project-b', async () => true)
+  await app.api.selectProject('project-a', async () => true)
+  old.request.success({ statusCode: 200, data: { stale: true } })
+  await assert.rejects(old.promise, { code: 'project_context_changed' })
+  const save = app.api.request('/ems/screen/layer-a', 'PUT', { layer: 'layer-a', version: 1 })
+  save.catch(() => {})
+  await new Promise(resolve => setImmediate(resolve))
+  const outgoing = app.requests.shift()
+  assert.equal(outgoing.header['X-Fastiot-Project'], 'project-a')
+  assert.equal(outgoing.data.version, 1)
+  outgoing.success({ statusCode: 409, data: { error: 'screen_version_conflict' } })
+  await assert.rejects(save, { code: 'screen_version_conflict', status: 409 })
+  const binary = app.api.request('/delivery/evidence', 'GET', undefined, 'arraybuffer')
+  binary.catch(() => {})
+  await new Promise(resolve => setImmediate(resolve))
+  const download = app.requests.shift()
+  assert.equal(download.responseType, 'arraybuffer')
+  await app.api.selectProject('project-b', async () => true)
+  download.success({ statusCode: 200, data: new ArrayBuffer(4) })
+  await assert.rejects(binary, { code: 'project_context_changed' })
+})
+
+test('refresh validates persisted layer against the authorized snapshot', async () => {
+  for (const savedLayer of ['b-layer', 'a-layer']) {
+    const app = await application(false, new Map([['fastems-token', 'live-session'], ['fastiot-project-context:fixture-user', { project: 'project-b', layer: savedLayer }]]))
+    const refresh = app.api.refreshAll()
+    await new Promise(resolve => setImmediate(resolve))
+    const responses = {
+      '/api/snapshot': { roots: ['project-b'], nodes: [{ id: 'project-b' }, { id: 'b-layer', parent: 'project-b' }], user: {} },
+      '/api/ems/state': { values: [], evaluated_at: '' }, '/api/ems/quality': { channels: [], devices: [] }, '/api/ems/alarms': { alarms: [] },
+    }
+    app.requests.splice(0).forEach(req => req.success({ statusCode: 200, data: responses[req.url] }))
+    await refresh
+    assert.equal(app.api.session.layer, savedLayer === 'b-layer' ? 'b-layer' : 'project-b')
+    app.api.selectLayer('a-layer')
+    assert.notEqual(app.api.session.layer, 'a-layer')
+  }
+})
+
+test('directory failures remain visible and do not fetch unscoped business data', async () => {
+  const app = await application()
+  const paths = []
+  globalThis.uni.request = options => { paths.push(options.url); options.success({ statusCode: 503, data: { error: 'catalog_offline' } }) }
+  await app.api.refreshAll()
+  assert.equal(app.api.session.error, 'catalog_offline')
+  assert.equal(app.api.session.loading, false)
+  assert.equal(app.api.session.snapshot, null)
+  assert.deepEqual(paths, ['/api/projects'])
+})
 
 test('preview login, reads, writes and logout never touch live credentials or HTTP', async () => {
   const app = await application(true)
@@ -87,6 +188,7 @@ test('polling reports failures and stops on expiry without unhandled rejections'
   const app = await application()
   context.after(() => app.api.stopPolling())
   app.api.startPolling()
+  await new Promise(resolve => setImmediate(resolve))
   const replies = {
     '/api/snapshot': { nodes: [], roots: [], user: {} },
     '/api/ems/state': { values: [], evaluated_at: 'fixture-time' },
@@ -96,10 +198,12 @@ test('polling reports failures and stops on expiry without unhandled rejections'
   app.requests.splice(0).forEach(request => request.success({ statusCode: 200, data: replies[request.url] }))
   await new Promise(resolve => setImmediate(resolve))
   context.mock.timers.tick(2000)
+  await new Promise(resolve => setImmediate(resolve))
   app.requests.splice(0).forEach(request => request.success({ statusCode: 403, data: { error: 'forbidden' } }))
   await new Promise(resolve => setImmediate(resolve))
   assert.equal(app.api.session.error, '当前账号无权执行此操作')
   context.mock.timers.tick(2000)
+  await new Promise(resolve => setImmediate(resolve))
   app.requests.splice(0).forEach(request => request.success({ statusCode: 401, data: { error: 'expired' } }))
   await new Promise(resolve => setImmediate(resolve))
   context.mock.timers.tick(4000)

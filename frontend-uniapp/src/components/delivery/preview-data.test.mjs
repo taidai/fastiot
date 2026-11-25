@@ -171,7 +171,7 @@ test("deployment rows and evidence download are preview-only while the live API 
   assert.match(page, /v-if="PREVIEW_MODE"[^>]*v-for="record in DELIVERY_PREVIEW_DEPLOYMENTS"/)
   assert.match(page, /v-else[^>]*>\s*<td colspan="5"[^>]*>暂无部署记录：后端没有独立的/)
   assert.match(page, /if \(PREVIEW_MODE\)[\s\S]*fastiot-acceptance-evidence\.json/)
-  assert.match(page, /responseType: "arraybuffer"/)
+  assert.match(page, /request<ArrayBuffer>\([\s\S]*'arraybuffer'\)/)
   assert.match(page, /application\/zip/)
   assert.doesNotMatch(page, /iframe|交付 · 玻璃磨砂\.html/)
 })

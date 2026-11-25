@@ -41,7 +41,7 @@ async function submit() {
     const token = await login(email.value, password.value)
     session.token = token
     startPolling()
-    uni.redirectTo({ url: "/pages/overview/index" })
+    uni.reLaunch({ url: "/pages/overview/index" })
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "登录失败"
   } finally {

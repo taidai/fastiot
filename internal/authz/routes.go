@@ -57,6 +57,7 @@ var routeRequirements = []routeRequirement{
 	authenticatedRoute(http.MethodGet, "ws"),
 	authenticatedRoute(http.MethodGet, "metrics"),
 	authenticatedRoute(http.MethodGet, "snapshot"),
+	authenticatedRoute(http.MethodGet, "projects"),
 	authenticatedRoute(http.MethodGet, "audit-settings"),
 	actionRoute(http.MethodPut, "audit-settings", SiteSettings, "admin_required"),
 	actionRoute(http.MethodGet, "audit", AuditView, "admin_required"),

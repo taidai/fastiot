@@ -30,6 +30,7 @@ const server = createServer(async (req, res) => {
     }
     if (expired || req.headers.authorization !== 'Bearer http-live-session') return json(401, { error: 'unauthorized' })
     if (req.method !== 'GET') return json(403, { error: 'fixture_rejects_all_business_writes' })
+    if (url.pathname === '/api/projects') return json(200, { user_id: 'fixture-operator', projects: [{ id: 'fixture-project', root_id: 'fixture-project', name: 'HTTP 隔离验收现场', scope_root_ids: ['fixture-site'], runtime: { kind: 'local', root_id: 'fixture-project' }, sites: [{ id: 'fixture-site', name: 'HTTP 隔离验收现场', latest_version: null }], dependencies: [] }] })
     if (url.pathname === '/api/snapshot') return json(200, {
       user: { user_id: 'fixture-operator', policy: { role: 'viewer', admin: false }, actions: [] }, roots: ['fixture-site'],
       nodes: [{ id: 'fixture-site', type: 'site', parent: '', points: [{ type: 'description', key: '', text: 'HTTP 隔离验收现场', time: '' }] }],

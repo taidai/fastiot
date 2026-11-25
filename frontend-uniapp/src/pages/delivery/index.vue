@@ -2,6 +2,7 @@
   <view class="page">
     <TopBar active="delivery" :project="projectName" meta="发布 / 导入 / 回退，不等于部署" :pending="pendingAlarms.length" :alpha="42"
       show-ems :ems-installed="emsInstalled" :ems-busy="busy === 'industry'" @toggle-ems="toggleEms" @project-change="changePreviewProject" @new-project="changePreviewProject" @import-project="current = 'package'; choosePackage()" @navigate="navigate" @bell="alarmOpen = true" @alpha="() => {}" />
+    <view v-if="!PREVIEW_MODE && session.error" class="error">{{ session.error }}</view>
     <view class="statebar">
       <span>项目 <b>{{ projectName }}</b></span><span>工作台 <b>交付</b></span><span>页面 <b>{{ currentLabel }}</b></span><span>EMS <b>{{ emsInstalled === null ? "—" : emsInstalled ? "已启用" : "未启用" }}</b></span>
     </view>
@@ -19,7 +20,7 @@
           <view class="variant-head"><b>项目包与版本</b><span>这份工程是哪个版本、依赖什么？</span></view>
           <view class="package-grid">
             <section class="card glass package-card delivery-package">
-              <view class="row"><span>当前版本</span><view class="version-site"><span>{{ hasPublished ? versions[0]?.id || "未发布" : "未发布" }}</span><label class="site-field">Site<select v-model="selectedSite" class="site-select" :disabled="!sites.length"><option v-if="!sites.length" value="">没有可用 Site</option><option v-for="item in sites" :key="item.id" :value="item.id">{{ nameOf(item) }}</option></select></label></view></view>
+              <view class="row"><span>当前版本</span><view class="version-site"><span>{{ hasPublished ? versions[0]?.id || "未发布" : "未发布" }}</span><label class="site-field">Site<select v-model="selectedSite" class="site-select" :disabled="!sites.length" @change="!PREVIEW_MODE && selectLayer(selectedSite)"><option v-if="!sites.length" value="">没有可用 Site</option><option v-for="item in sites" :key="item.id" :value="item.id">{{ nameOf(item) }}</option></select></label></view></view>
               <view class="row"><span>依赖</span><span class="src">{{ packageDependencies }}</span></view>
               <view class="row"><span>现场绑定</span><span class="src">地址、凭据、控制启动与运行数据不进包</span></view>
               <view class="row"><span>预检</span><span v-if="gates" class="chip" :class="gates.status">{{ statusText(gates.status) }} · 通过 {{ gates.summary?.pass || 0 }} · 注意 {{ gates.summary?.warn || 0 }} · 阻断 {{ gates.summary?.fail || 0 }}<template v-if="PREVIEW_MODE && previewPreflightFail"> · PCS7 必需点未映射</template></span><span v-else class="src">{{ gateError ? "读取失败" : "—" }}</span></view>
@@ -134,6 +135,7 @@
 </template>
 
 <script setup lang="ts">
+import { currentProject } from '../../stores/projects'
 import { computed, nextTick, onMounted, onUnmounted, ref, toRef, watch } from "vue"
 import TopBar from "../../components/TopBar.vue"
 import AlarmCenter from "../../components/AlarmCenter.vue"
@@ -146,7 +148,7 @@ import { ApiError, downloadText, request } from "../../api/client"
 import { PREVIEW_MODE } from "../../api/source"
 import { DELIVERY_PREVIEW_DEPLOYMENTS, deliveryPreviewState, setDeliveryPreviewScenarios } from "../../api/preview/delivery"
 import { previewProjects, previewWorkspace } from "../../api/preview/workspace"
-import { acknowledgeAlarm, closeAlarm, nameOf, pendingAlarms, refreshAll, requireAuth, session, startPolling, stopPolling } from "../../stores/session"
+import { acknowledgeAlarm, closeAlarm, layerPath, selectLayer, nameOf, pendingAlarms, refreshAll, requireAuth, session, startPolling, stopPolling } from "../../stores/session"
 import { canAction, clock, deliveryError, statusText } from "../../components/delivery/contracts"
 
 type Gate = { key: string; title: string; status: string; detail: string; object?: string; next_step?: string; informational?: boolean }
@@ -200,11 +202,10 @@ const assetTabs = [{ key: "package", label: "项目包与版本" }, { key: "depl
 const systemTabs = [{ key: "users", label: "账号与权限" }, { key: "audit", label: "审计" }, { key: "industry", label: "行业包" }]
 const currentLabel = computed(() => [...assetTabs, ...systemTabs].find(item => item.key === current.value)?.label || "")
 const sites = computed(() => session.snapshot?.nodes.filter(node => node.type === "site") || [])
-const projectRootId = computed(() => session.snapshot?.roots[0] || "")
+const projectRootId = computed(() => PREVIEW_MODE ? session.snapshot?.roots[0] || "" : currentProject.value?.root_id || "")
 const projectName = computed(() => {
   if (PREVIEW_MODE) return previewProjects.find(project => project.id === previewWorkspace.projectId)?.name || "未选择项目"
-  const root = session.snapshot?.nodes.find(node => node.id === projectRootId.value)
-  return root ? nameOf(root) : "未选择项目"
+  return currentProject.value?.name || "未选择项目"
 })
 const siteName = computed(() => {
   const site = sites.value.find(node => node.id === selectedSite.value)
@@ -230,8 +231,10 @@ async function changePreviewProject() {
   await refreshAll()
   await loadSiteData(selectedSite.value)
 }
-watch(sites, list => {
-  if (!list.some(node => node.id === selectedSite.value)) selectedSite.value = PREVIEW_MODE ? previewWorkspace.projectId : list[0]?.id || ""
+watch([sites, () => session.layer], ([list]) => {
+  const site = !PREVIEW_MODE ? layerPath(session.layer).find(node => node.type === 'site') : null
+  if (site) selectedSite.value = site.id
+  else if (!list.some(node => node.id === selectedSite.value)) selectedSite.value = PREVIEW_MODE ? previewWorkspace.projectId : list[0]?.id || ""
 }, { immediate: true })
 watch(selectedSite, () => {
   gates.value = null; latestPreflight.value = null; versions.value = []
@@ -394,15 +397,7 @@ async function exportEvidence() {
       messageTone.value = "success"
       return
     } else {
-      const response = await new Promise<UniApp.RequestSuccessCallbackResult>((resolve, reject) => {
-        uni.request({ url: "/api/delivery/evidence", method: "GET", responseType: "arraybuffer", header: { Authorization: `Bearer ${uni.getStorageSync("fastems-token")}` }, success: resolve, fail: reject })
-      })
-      data = response.data as ArrayBuffer
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        let code = ""
-        try { code = JSON.parse(new TextDecoder().decode(data)).error || "" } catch { /* non-JSON error */ }
-        throw new ApiError(code || `证据导出失败（${response.statusCode}）`, response.statusCode, code)
-      }
+      data = await request<ArrayBuffer>(`/delivery/evidence${queryFor(selectedSite.value)}`, 'GET', undefined, 'arraybuffer')
     }
     const bytes = data instanceof Uint8Array ? data : new Uint8Array(data)
     if (bytes[0] !== 0x50 || bytes[1] !== 0x4b) throw new Error("后端未返回有效 ZIP 文件")

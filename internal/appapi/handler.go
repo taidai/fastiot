@@ -306,6 +306,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if actor == "" {
 		actor = identity.UserID
 	}
+	if projectID := r.Header.Get("X-Fastiot-Project"); projectID != "" {
+		root, err := client.GetRootNode(h.nc)
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "project_context_unavailable")
+			return
+		}
+		if projectID != root.ID {
+			writeError(w, http.StatusConflict, "project_context_mismatch")
+			return
+		}
+		identity = h.identityInProject(identity, root.ID)
+		if len(identity.Anchors) == 0 {
+			writeError(w, http.StatusForbidden, "no_project_access")
+			return
+		}
+	}
 	if route, declared := authz.Required(r); declared && !h.packageInstalled(route.Package) {
 		writeError(w, http.StatusConflict, ReasonPackageNotInstalled)
 		return
@@ -345,6 +361,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveWS(status.ResponseWriter, r, identity)
 	case path == "metrics" && r.Method == http.MethodGet:
 		h.serveMetrics(w, identity)
+	case path == "projects" && r.Method == http.MethodGet:
+		h.projectDirectory(w, identity)
 	case path == "snapshot" && r.Method == http.MethodGet:
 		h.snapshot(w, identity)
 	case path == "audit-settings" && (r.Method == http.MethodGet || r.Method == http.MethodPut):

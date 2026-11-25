@@ -1,7 +1,7 @@
 <template>
   <view class="page" :class="appearance.theme === 'light' ? '' : `theme-${appearance.theme}`">
     <TopBar active="overview" :project="projectName" :meta="syncMeta" :pending="unackedAlarms.length" :alpha="appearance.alpha"
-      :theme="appearance.theme" themes :show-workbench="false" show-appearance show-bell @navigate="navigate" @bell="alarmOpen = true" @alpha="setAlpha" @theme="setTheme" @reset="resetAppearance" />
+      :theme="appearance.theme" themes show-appearance show-bell @navigate="navigate" @bell="alarmOpen = true" @alpha="setAlpha" @theme="setTheme" @reset="resetAppearance" />
 
     <view class="layout">
       <LedgerTree :selected="selectedKey" :devices="ledger" :alarms="session.alarms" @select="selectLayer" />
@@ -88,6 +88,7 @@
 </template>
 
 <script setup lang="ts">
+import { currentProject } from '../../stores/projects'
 import { computed, onMounted, ref, watch } from "vue"
 import "./theme.css"
 import { onHide, onLoad, onShow } from "@dcloudio/uni-app"
@@ -143,11 +144,7 @@ function setAlpha(value: number) { appearance.value = normalizeAppearance({ ...a
 function setTheme(value: AppearanceTheme) { appearance.value = normalizeAppearance({ ...appearance.value, theme: value }); persistAppearance(); applyAppearanceDocument(appearance.value) }
 function resetAppearance() { appearance.value = { ...DEFAULT_APPEARANCE }; persistAppearance(); applyAppearanceDocument(appearance.value) }
 
-const projectName = computed(() => {
-  const root = session.snapshot?.roots[0]
-  const node = session.snapshot?.nodes.find(item => item.id === root)
-  return node ? nameOf(node) : "未选择项目"
-})
+const projectName = computed(() => currentProject.value?.name || "未选择项目")
 const selectedDevice = computed(() => ledger.value.find(device => deviceKey(device) === selectedDeviceId.value) || null)
 const selectedKey = computed(() => selectedDeviceId.value ? `device:${selectedDeviceId.value}` : session.layer)
 const layerName = computed(() => selectedDevice.value?.name || (currentNode.value ? nameOf(currentNode.value) : "未选择对象"))

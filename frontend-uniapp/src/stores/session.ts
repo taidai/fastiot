@@ -1,5 +1,6 @@
-import { computed, reactive } from "vue"
-import { logout, request } from "../api/client"
+import { computed, reactive, watch } from "vue"
+import { ensureProjectContext, projectContext, rememberLayer } from './projects'
+import { ApiError, logout, request } from "../api/client"
 import { PREVIEW_MODE } from '../api/source'
 import { kindOf, nameOf } from "../types/api"
 import type { EmsAlarm, HistoryQueryResponse, Node, ScreenConfig, Snapshot, StateValue } from "../types/api"
@@ -18,16 +19,25 @@ export const session = reactive({
 
 let timer: ReturnType<typeof setInterval> | undefined
 
-uni.$on("session-ended", () => {
-  stopPolling()
-  session.token = ""
+function clearProjectData() {
   session.snapshot = null
   session.values = []
   session.alarms = []
   session.quality = { channels: [], devices: [] }
   session.layer = ""
   session.lastSync = ""
+  session.error = ""
+  session.loading = false
+}
+uni.$on('project-context-changed', clearProjectData)
+uni.$on("session-ended", () => {
+  stopPolling()
+  session.token = ""
+  clearProjectData()
 })
+watch(() => session.layer, id => {
+  if (session.snapshot?.nodes.some(node => node.id === id)) rememberLayer(id)
+}, { flush: 'sync' })
 
 export const pendingAlarms = computed(() => session.alarms.filter(alarm => alarm.active))
 export const currentLayer = computed(() => {
@@ -71,14 +81,15 @@ export function layerPath(nodeId: string): Node[] {
 }
 
 export function selectLayer(id: string) {
-  session.layer = id
+  if (session.snapshot?.nodes.some(node => node.id === id)) session.layer = id
 }
 
 async function refreshSnapshot() {
   const snapshot = await request<Snapshot>("/snapshot")
   session.snapshot = snapshot
   if (!session.layer || !snapshot.nodes.some(node => node.id === session.layer)) {
-    session.layer = snapshot.roots[0] || snapshot.nodes[0]?.id || ""
+    const restored = !PREVIEW_MODE ? projectContext.layer : ''
+    session.layer = snapshot.nodes.some(node => node.id === restored) ? restored : snapshot.roots[0] || snapshot.nodes[0]?.id || ""
   }
 }
 
@@ -95,14 +106,19 @@ async function refreshRuntime() {
 }
 
 export async function refreshAll() {
+  let generation: number | undefined
+  const token = session.token
   session.loading = true
   session.error = ""
   try {
+    await ensureProjectContext()
+    generation = projectContext.generation
     await Promise.all([refreshSnapshot(), refreshRuntime()])
   } catch (error) {
-    session.error = error instanceof Error ? error.message : String(error)
+    const stale = error instanceof ApiError && ['project_context_changed', 'session_changed'].includes(error.code)
+    if (!stale && token === session.token && (generation === undefined || generation === projectContext.generation)) session.error = error instanceof Error ? error.message : String(error)
   } finally {
-    session.loading = false
+    if (token === session.token && (generation === undefined || generation === projectContext.generation)) session.loading = false
   }
 }
 
@@ -110,8 +126,9 @@ export function startPolling() {
   stopPolling()
   void refreshAll()
   timer = setInterval(() => {
+    const generation = projectContext.generation
     void refreshRuntime().catch(error => {
-      session.error = error instanceof Error ? error.message : String(error)
+      if (generation === projectContext.generation) session.error = error instanceof Error ? error.message : String(error)
     })
   }, 2000)
 }

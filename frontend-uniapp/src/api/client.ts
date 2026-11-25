@@ -1,4 +1,5 @@
 import { PREVIEW_MODE } from "./source"
+import { ensureProjectContext, projectContext, resetProjectContext } from '../stores/projects'
 
 export class ApiError extends Error {
   constructor(message: string, public status: number, public code = "") {
@@ -8,6 +9,10 @@ export class ApiError extends Error {
 
 const ERROR_TEXTS: Record<string, string> = {
   forbidden: "当前账号无权执行此操作",
+  project_context_mismatch: "项目与当前运行实例不匹配，请刷新后重新选择",
+  project_context_unavailable: "项目目录暂时无法读取，请稍后重试",
+  project_versions_unavailable: "项目版本暂时无法读取，请稍后重试",
+  no_project_access: "当前账号没有可访问的项目",
   admin_required: "需要管理员权限",
   read_only: "该点位只读，不能写入",
   operation_not_allowed: "当前状态下不允许此操作",
@@ -20,7 +25,7 @@ const ERROR_TEXTS: Record<string, string> = {
 
 let redirectingToLogin = false
 
-export async function request<T>(path: string, method = "GET", body?: unknown): Promise<T> {
+export async function request<T>(path: string, method = "GET", body?: unknown, responseType: 'text' | 'arraybuffer' = 'text'): Promise<T> {
   if (PREVIEW_MODE) {
     const { resolvePreview } = await import("./preview")
     const preview = await resolvePreview(path, method, body)
@@ -31,13 +36,23 @@ export async function request<T>(path: string, method = "GET", body?: unknown): 
     const message = preview.handled ? ERROR_TEXTS[backendCode] || backendCode || `预览操作失败：${method} ${path}` : `预览接口未实现：${method} ${path}`
     throw new ApiError(message, preview.status || 501, code)
   }
+  const scoped = path !== '/login' && path !== '/projects' && path !== '/health'
+  const entryGeneration = projectContext.generation
+  const hadProject = !!projectContext.id
+  if (scoped) {
+    await ensureProjectContext()
+    if (hadProject && entryGeneration !== projectContext.generation) throw new ApiError('项目上下文已改变，请重新读取', 409, 'project_context_changed')
+  }
+  const generation = projectContext.generation
   const token = path === "/login" ? "" : (uni.getStorageSync("fastems-token") || "") as string
   const response = await new Promise<UniApp.RequestSuccessCallbackResult>((resolve, reject) => {
     uni.request({
       url: `/api${path}`,
       method: method as any,
+      responseType,
       data: body as Record<string, unknown> | undefined,
       header: {
+        ...(scoped ? { 'X-Fastiot-Project': projectContext.id } : {}),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...(body === undefined ? {} : { "Content-Type": "application/json" }),
       },
@@ -45,7 +60,13 @@ export async function request<T>(path: string, method = "GET", body?: unknown): 
       fail: reject,
     })
   })
-  const result = response.data as { error?: string }
+  if (scoped && generation !== projectContext.generation && token === (uni.getStorageSync('fastems-token') || '')) {
+    throw new ApiError('项目上下文已改变，请重新读取；已发出的写入请回到原项目核实', 409, 'project_context_changed')
+  }
+  let result = response.data as { error?: string }
+  if (responseType === 'arraybuffer' && response.statusCode >= 400) {
+    try { result = JSON.parse(new TextDecoder().decode(response.data as ArrayBuffer)) } catch { result = {} }
+  }
   if (response.statusCode < 200 || response.statusCode >= 300) {
     if (response.statusCode === 401 && path !== "/login" && token === (uni.getStorageSync("fastems-token") || "") && !redirectingToLogin) {
       logout()
@@ -61,13 +82,19 @@ export async function request<T>(path: string, method = "GET", body?: unknown): 
 
 export async function login(email: string, password: string) {
   const result = await request<{ token: string }>("/login", "POST", { email, password })
-  if (!PREVIEW_MODE) uni.setStorageSync("fastems-token", result.token)
+  if (!PREVIEW_MODE) {
+    resetProjectContext()
+    uni.setStorageSync("fastems-token", result.token)
+  }
   redirectingToLogin = false
   return result.token
 }
 
 export function logout() {
-  if (!PREVIEW_MODE) uni.removeStorageSync("fastems-token")
+  if (!PREVIEW_MODE) {
+    resetProjectContext()
+    uni.removeStorageSync("fastems-token")
+  }
   uni.$emit("session-ended")
   if (redirectingToLogin) return
   redirectingToLogin = true

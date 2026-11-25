@@ -2,6 +2,7 @@
   <view class="page">
     <TopBar active="design" :project="projectName" :meta="PREVIEW_MODE ? '原型预览数据 · 操作仅保存在当前会话' : '按步骤牵引，不使用演示配置'" :pending="pendingAlarms.length" :alpha="42"
       show-ems :ems-installed="PREVIEW_MODE ? previewWorkspace.emsEnabled : emsInstalled" :ems-busy="industryBusy" @project-change="changeProject" @new-project="newPreviewProject" @import-project="navigate('delivery')" @toggle-ems="toggleEms" @navigate="navigate" @bell="alarmOpen = true" @alpha="() => {}" />
+    <view v-if="!PREVIEW_MODE && session.error" class="error">{{ session.error }}</view>
     <view class="statebar">
       <span>项目 <b>{{ projectName }}</b></span><span>工作台 <b>设计</b></span><span>页面 <b>{{ activeTool || '台账树' }}</b></span><span v-if="selectedRow">选中 <b>{{ selectedRow.name }}</b> · {{ selectedRow.kind }}</span><span>EMS <b>{{ emsInstalled === null ? "—" : emsInstalled ? "已启用" : "未启用" }}</b></span>
     </view>
@@ -116,6 +117,7 @@
 </template>
 
 <script setup lang="ts">
+import { currentProject } from '../../stores/projects'
 import { computed, onMounted, onUnmounted, ref, watch } from "vue"
 import TopBar from "../../components/TopBar.vue"
 import AlarmCenter from "../../components/AlarmCenter.vue"
@@ -175,7 +177,7 @@ const summary = computed(() => summarizeLedger(session.snapshot?.nodes || []))
 const boundIDs = computed(() => boundBusinessIDs(session.snapshot?.nodes || []))
 const activeBatchSelection = computed(() => batchSelection.value.filter(id => !boundIDs.value.has(id)))
 const rootNode = computed(() => session.snapshot?.nodes.find(node => node.id === session.snapshot?.roots[0]) || null)
-const projectName = computed(() => PREVIEW_MODE ? previewProjects.find(p => p.id === previewWorkspace.projectId)?.name || '未命名项目' : rootNode.value ? nameOf(rootNode.value) : "未选择项目")
+const projectName = computed(() => PREVIEW_MODE ? previewProjects.find(p => p.id === previewWorkspace.projectId)?.name || '未命名项目' : currentProject.value?.name || "未选择项目")
 const canConfigure = computed(() => canConfigureAccess(session.snapshot))
 const selectedNode = computed(() => session.snapshot?.nodes.find(node => node.id === session.layer) || rootNode.value)
 const selectedRow = computed(() => businessRows.value.find(row => row.node.id === selectedNode.value?.id) || null)
