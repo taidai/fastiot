@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/simpleiot/simpleiot/client"
 	"github.com/simpleiot/simpleiot/data"
 )
 
@@ -90,6 +91,34 @@ func TestAccountsManagementScope(t *testing.T) {
 	status, body = call(t, "GET", base+"/users/"+userID+"/authorization?target="+outside+"&operation=command", admin, nil, nil)
 	if status != 200 || !strings.Contains(body, `"allowed":true`) {
 		t.Fatalf("restarted permission matrix: %d %s", status, body)
+	}
+}
+
+func TestAccountsAdminDeclaredScopeDoesNotExpandThroughAnotherEdge(t *testing.T) {
+	base, admin, h, _ := startInputServer(t, t.TempDir(), data.NewID())
+	root := snapshotRoot(t, base, admin)
+	inside := createNodeAPI(t, base, admin, "group", root, "admin inside", 0)
+	outside := createNodeAPI(t, base, admin, "group", root, "admin outside", 0)
+	var user struct {
+		ID string `json:"id"`
+	}
+	password := data.NewID()
+	status, body := call(t, "POST", base+"/users", admin, map[string]any{"parent": inside, "email": "scoped-admin@example.test", "password": password, "role": "admin"}, &user)
+	if status != 200 {
+		t.Fatalf("create: %d %s", status, body)
+	}
+	// A mirrored/stale edge must not broaden an explicitly declared policy root.
+	if err := client.MirrorNode(h.nc, user.ID, inside, outside, "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	token := loginAPI(t, base, "scoped-admin@example.test", password)
+	status, body = call(t, "GET", base+"/snapshot", token, nil, nil)
+	if status != 200 || strings.Contains(body, "admin outside") {
+		t.Fatalf("admin policy scope leaked: %d %s", status, body)
+	}
+	status, body = call(t, "GET", base+"/users/"+user.ID+"/authorization?target="+outside+"&operation=command", admin, nil, nil)
+	if status != 200 || strings.Contains(body, `"allowed":true`) {
+		t.Fatalf("admin scope explanation broadened: %d %s", status, body)
 	}
 }
 

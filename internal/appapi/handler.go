@@ -734,7 +734,9 @@ func (h *Handler) identityForUser(userID string) (Identity, bool) {
 	if !policy.Admin && policy.Role != "implementer" && policy.Role != "operator" && policy.Role != "viewer" {
 		return Identity{}, false
 	}
-	if !policy.Admin {
+	// Admin bypasses action limits, not an explicit object-scope declaration.
+	// Legacy bootstrap admins without declared roots still use their real anchors.
+	if !policy.Admin || len(policy.RootNodeIDs) > 0 {
 		allowed := make(map[string]bool, len(policy.RootNodeIDs))
 		for _, root := range policy.RootNodeIDs {
 			allowed[root] = true
