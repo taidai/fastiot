@@ -304,7 +304,7 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
   let versionDifferent = false
   try {
     const applied = JSON.parse(point(rule, "applied")?.text || "") as Document
-    appliedRows = applied.table.rows.length
+    appliedRows = applied.table?.rows?.length || 0
     versionDifferent = JSON.stringify({ table: applied.table, bindings: applied.bindings }) !== JSON.stringify({ table: document.table, bindings: document.bindings })
   } catch { /* An unpublished rule has no comparison target. */ }
 
@@ -614,7 +614,7 @@ export default function DecisionEditor({ token, rule, nodes, onRefresh, onError,
     </div>}
     {showVersions && !readOnly && <div className="version-panel">
       {published && <div className="version-compare"><strong>草稿与运行版本</strong><span>当前草稿 {rows.length} 行；运行版本 {appliedRows} 行</span><span>{versionDifferent ? "存在规则内容差异" : "规则内容一致"}</span></div>}
-      {versions.length === 0 ? <p>首次发布后，再次发布会在这里保存历史版本。</p> : versions.map((version) => <div className="version-line" key={version.id}><div><strong>{new Date(version.published_at).toLocaleString("zh-CN")}</strong><span>{version.document.table.rows.length} 行</span></div><button className="secondary-button" disabled={busy !== ""} onClick={() => void manage("restore", version)}>恢复到草稿</button></div>)}
+      {versions.length === 0 ? <p>首次发布后，再次发布会在这里保存历史版本。</p> : versions.map((version) => <div className="version-line" key={version.id}><div><strong>{new Date(version.published_at).toLocaleString("zh-CN")}</strong><span>{version.document?.table?.rows?.length || 0} 行</span></div><button className="secondary-button" disabled={busy !== ""} onClick={() => void manage("restore", version)}>恢复到草稿</button></div>)}
     </div>}
 
     {showStrategy && !readOnly && <div className="strategy-panel">
