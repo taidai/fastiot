@@ -115,9 +115,10 @@
                       <input aria-label="开始时间" type="time" :value="condition.start || ''" @input="condition.start = inputValue($event); changed()">
                       <span>至</span>
                       <input aria-label="结束时间" type="time" :value="condition.end || ''" @input="condition.end = inputValue($event); changed()">
-                      <view class="weekdays" aria-label="星期">
-                        <label v-for="day in weekdayOptions" :key="day.bit"><input type="checkbox" :checked="Boolean((condition.weekday_mask || 0) & (1 << day.bit))" @change="toggleWeekday(condition, day.bit, $event)">{{ day.label }}</label>
-                      </view>
+                      <checkbox-group class="weekdays" aria-label="星期" @change="setWeekdays(condition, $event)">
+                        <label v-for="day in weekdayOptions" :key="day.bit"><checkbox :value="String(day.bit)" :checked="Boolean((condition.weekday_mask || 0) & (1 << day.bit))" :disabled="readOnly || busy !== ''" color="var(--accent)" role="checkbox" :aria-label="`周${day.label}`" :aria-checked="Boolean((condition.weekday_mask || 0) & (1 << day.bit))" :tabindex="readOnly || busy !== '' ? -1 : 0" @keydown.space.prevent="toggleWeekday(condition, day.bit)" />{{ day.label }}</label>
+                      </checkbox-group>
+                      <span class="src">未选星期表示每天</span>
                       <button class="ghost" aria-label="删除时间窗" @click="removeCondition(row, condition)">×</button>
                     </view>
                     <view v-if="!timeConditions(row).length" class="src">常驻</view>
@@ -220,6 +221,7 @@ import {
   liveSimulationInputs,
   ruleInputValue,
   ruleInputNumber,
+  ruleWeekdayMask,
   actionText,
   conditionText,
   createSimulationPayload,
@@ -446,10 +448,14 @@ function changeConditionKind(condition: Condition, event: Event) {
   else Object.assign(condition, { kind, point_id: condition.point_id || availableIds.value[0] || "", operator: kind === "number" ? "gt" : "eq", value: kind === "bool" ? 0 : condition.value, text: kind === "enum" ? condition.text || "" : "", start: "", end: "", weekday_mask: 0 })
   changed()
 }
-function toggleWeekday(condition: Condition, bit: number, event: Event) {
-  const checked = (event.target as HTMLInputElement).checked
-  const mask = condition.weekday_mask || 0
-  condition.weekday_mask = checked ? mask | (1 << bit) : mask & ~(1 << bit)
+function setWeekdays(condition: Condition, event: unknown) {
+  if (readOnly.value || busy.value) return
+  condition.weekday_mask = ruleWeekdayMask(event)
+  changed()
+}
+function toggleWeekday(condition: Condition, bit: number) {
+  if (readOnly.value || busy.value) return
+  condition.weekday_mask = (condition.weekday_mask || 0) ^ (1 << bit)
   changed()
 }
 function setTiming(row: Row, field: "hold_ms" | "cooldown_ms", event: Event) {

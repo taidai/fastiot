@@ -154,6 +154,12 @@ export function moveRows<T>(rows: T[], index: number, direction: -1 | 1): T[] {
   return result
 }
 
+export function ruleWeekdayMask(event: unknown): number {
+  const values = (event as { detail?: { value?: unknown } }).detail?.value
+  if (!Array.isArray(values) || values.some(value => !/^[0-6]$/.test(String(value)))) throw new Error('星期选择无效')
+  return values.reduce((mask, value) => mask | (1 << Number(value)), 0)
+}
+
 export function ruleInputValue(event: unknown): string {
   const input = event as { detail?: { value?: unknown }; target?: { value?: unknown } }
   return String(input.detail?.value ?? input.target?.value ?? '')

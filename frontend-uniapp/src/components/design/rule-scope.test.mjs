@@ -5,6 +5,13 @@ import * as strategy from './strategy.ts'
 const node = (id, parent, type = 'group', points = []) => ({ id, parent, type, points })
 const rule = (id, parent, scope) => node(id, parent, 'decisionTable', [{ type: 'applied', text: JSON.stringify({ scope, table: { rows: [] } }) }])
 
+test('weekday group events preserve actual selections and reject malformed values', () => {
+ assert.equal(strategy.ruleWeekdayMask({ detail: { value: ['1', '3'] } }), 10)
+ assert.equal(strategy.ruleWeekdayMask({ detail: { value: ['0', '1', '2', '3', '4', '5', '6'] } }), 127)
+ assert.equal(strategy.ruleWeekdayMask({ detail: { value: [] } }), 0)
+ assert.throws(() => strategy.ruleWeekdayMask({ detail: { value: null } }), /星期/)
+})
+
 test('restricted historical data does not mark an allowed current draft restricted', () => {
  const current = node('r', 'site', 'decisionTable', [{ type: 'ruleAccess', key: '0', text: '{"history_restricted":true,"trace_restricted":true}' }])
  assert.equal(strategy.getRuleAccess(current).history_restricted, true)
