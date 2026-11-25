@@ -507,6 +507,36 @@ func TestL3RequiresBoundBusinessDevice(t *testing.T) {
 	}
 }
 
+func TestL3DeletedBusinessDeviceCannotReadEvidenceOrWrite(t *testing.T) {
+	f, bus, sim := l3Fixture(t)
+	input := l3Input(t, f, bus, "deleted-business")
+	url := f.base + "/modbus/" + bus + "/units/1"
+	var model unitModelView
+	call(t, http.MethodGet, url+"/model", f.token, nil, &model)
+	business := model.Model.BusinessNodeID
+	parent := ""
+	for _, node := range snapshotNodes(t, f.base, f.token) {
+		if node.ID == business {
+			parent = node.Parent
+		}
+	}
+	status, body := call(t, http.MethodDelete, f.base+"/nodes/"+business, f.token, map[string]string{"parent": parent}, nil)
+	if status != 200 {
+		t.Fatal(status, body)
+	}
+	status, body = call(t, http.MethodGet, url+"/verify", f.token, nil, nil)
+	if status != 403 {
+		t.Errorf("deleted Device evidence accessible: %d %s", status, body)
+	}
+	status, body = call(t, http.MethodPost, url+"/verify", f.token, input, nil)
+	if status != 403 {
+		t.Errorf("deleted Device allowed L3: %d %s", status, body)
+	}
+	if writes := sim.written(); len(writes) != 0 {
+		t.Fatalf("deleted Device wrote: %v", writes)
+	}
+}
+
 func TestL3RequiresCurrentBasisBeforeAnyWrite(t *testing.T) {
 	f, bus, sim := l3Fixture(t)
 	status, body := call(t, http.MethodPost, f.base+"/modbus/"+bus+"/units/1/verify", f.token, map[string]any{"level": "L3", "command_id": "safe", "confirm": true}, nil)
