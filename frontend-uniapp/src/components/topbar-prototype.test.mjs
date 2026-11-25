@@ -9,7 +9,7 @@ const design = readFileSync(new URL("../pages/design/index.vue", import.meta.url
 test("workbench header exposes a real EMS switch and prototype project label", () => {
   assert.match(topbar, /class="ems-toggle"[^>]*role="switch"/)
   assert.match(topbar, /@click="emit\('toggle-ems'\)"/)
-  assert.match(topbar, /:aria-checked="emsInstalled === true"/)
+  assert.match(topbar, /:aria-checked="displayEmsInstalled === true"/)
   assert.match(topbar, /showEms\?: boolean/)
   assert.match(topbar, /<text v-else>：<\/text>/)
   assert.match(topbar, /class="project-caret">▾<\/text>/)

@@ -1143,8 +1143,7 @@ func (h *Handler) rollbackImportedNodes(created []data.NodeEdge, identity Identi
 // package and stays installable on the bare base product.
 func packageNeedsIndustry(nodes []data.NodeEdge) bool {
 	for _, node := range nodes {
-		switch node.Type {
-		case NodeTypePlant, NodeTypeEnergyUnit, NodeTypeResourceGroup:
+		if len(industryConfiguration(node)) > 0 {
 			return true
 		}
 	}

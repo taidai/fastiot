@@ -18,7 +18,7 @@
     <view v-if="showWorkbench" class="workbench" aria-label="工作台">
       <button v-for="item in tabs" :key="item.key" role="button" tabindex="0" :class="{ active: active === item.key }" :aria-current="active === item.key ? 'page' : undefined" @keydown.enter.prevent="$emit('navigate', item.key)" @keydown.space.prevent="$emit('navigate', item.key)" @click="$emit('navigate', item.key)">{{ item.label }}</button>
     </view>
-    <button v-if="showEms" class="ems-toggle" role="switch" :aria-checked="emsInstalled === true" :disabled="emsBusy || emsInstalled === null" @click="emit('toggle-ems')"><text class="ems-check">{{ emsInstalled ? '✓' : '' }}</text><text>EMS 行业包</text></button>
+    <button v-if="showEms" class="ems-toggle" role="switch" :aria-checked="displayEmsInstalled === true" :disabled="emsBusy || displayEmsInstalled === null || !canChangeIndustry" title="启用不等于购买、部署或控制授权" @click="emit('toggle-ems')"><text class="ems-check">{{ displayEmsInstalled ? '✓' : '' }}</text><text>EMS 行业包</text></button>
     <view v-if="showAppearance" class="top-meta desktop-only">{{ meta }}</view>
     <button v-if="showAppearance" class="appearance" :aria-expanded="open" @click="open = !open">外观</button>
     <button v-if="showBell" class="bell" @click="$emit('bell')">告警中心 <text v-if="pending" class="badge">{{ pending }}</text></button>
@@ -36,6 +36,8 @@
 
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue"
+import { session } from '../stores/session'
+import { canAction } from './delivery/contracts'
 import { currentProject, projectContext, selectProject } from '../stores/projects'
 import { PREVIEW_MODE } from '../api/source'
 import { previewWorkspace, previewProjects, selectPreviewProject, createPreviewProject } from '../api/preview/workspace'
@@ -66,6 +68,8 @@ const emit = defineEmits<{
   (event: "new-project"): void
   (event: "import-project"): void
 }>()
+const displayEmsInstalled = computed(() => PREVIEW_MODE ? props.emsInstalled : session.snapshot?.industry?.installed ?? props.emsInstalled)
+const canChangeIndustry = computed(() => PREVIEW_MODE || (canAction(session.snapshot, 'site_settings') && !!currentProject.value && !!session.snapshot?.roots.includes(currentProject.value.root_id)))
 const open = ref(false)
 const projectOpen = ref(false)
 function closeProjectMenu() {

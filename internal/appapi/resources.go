@@ -17,6 +17,7 @@ import (
 	"fastiot/internal/ems/command"
 	"fastiot/internal/ems/profile"
 	"fastiot/internal/ems/signal"
+	"fastiot/internal/industry"
 )
 
 func (h *Handler) updateNode(w http.ResponseWriter, r *http.Request, identity Identity, id string) {
@@ -280,6 +281,10 @@ func (h *Handler) createSiteFromTemplate(w http.ResponseWriter, identity Identit
 	}
 	if err := domainaccess.ValidateSiteTemplate(template); err != nil {
 		writeError(w, http.StatusConflict, "invalid_site_template")
+		return
+	}
+	if !h.packageInstalled(industry.EMSPackageID) && templateNeedsIndustry(template.Nodes) {
+		writeError(w, http.StatusConflict, ReasonPackageNotInstalled)
 		return
 	}
 	parent, ok := h.routeNode(w, parentID)
@@ -714,6 +719,9 @@ func (h *Handler) verifyUnit(w http.ResponseWriter, r *http.Request, identity Id
 		}
 		if !canAction(identity, ActionCommand) {
 			writeError(w, http.StatusForbidden, "command_required")
+			return
+		}
+		if !h.requireProjectIndustry(w, identity) {
 			return
 		}
 		model, configured := unitModelFor(channel, server)

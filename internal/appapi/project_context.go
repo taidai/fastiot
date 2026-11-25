@@ -84,7 +84,12 @@ func (h *Handler) projectDirectory(w http.ResponseWriter, identity Identity) {
 		version, _ := h.profileVersion(id)
 		project.Dependencies = append(project.Dependencies, packageDependency{Kind: dependencyKindProfile, ID: id, Version: version})
 	}
-	if packageNeedsIndustry(nodes) {
+	required, err := h.projectRequiresIndustry(scoped, nodes)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "project_context_unavailable")
+		return
+	}
+	if required {
 		project.Dependencies = append(project.Dependencies, packageDependency{Kind: dependencyKindIndustry, ID: industry.EMSPackageID, Version: industry.EMSPackageVersion})
 	}
 	sort.Slice(project.Sites, func(i, j int) bool { return project.Sites[i].ID < project.Sites[j].ID })
