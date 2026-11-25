@@ -20,19 +20,19 @@ The worktree starts at the current committed source plus only task-related pendi
 | 02 | [项目选择与三工作台上下文统一](02.md) | 01 | integrated — 8106978 |
 | 03 | [从模板建立并维护真实台账](03.md) | 02 | integrated — 3dceb63 |
 | 04 | [行业包依赖门禁](04.md) | 02 | integrated — 3ec9fdb |
-| 05 | [单设备 Profile 接入与只读验证](05.md) | 03 | integrated — b633be0; shared auth stability open |
-| 06 | [批量接入与 CSV 逐台结果](06.md) | 05 | in progress — isolated worktree |
+| 05 | [单设备 Profile 接入与只读验证](05.md) | 03 | integrated — b633be0 |
+| 06 | [批量接入与 CSV 逐台结果](06.md) | 05 | integrated — e068b25 |
 | 07 | [操作抽屉与命令回读闭环](07.md) | 05 | in progress — isolated worktree |
 | 08 | [L3 安全写回读验证](08.md) | 07 | pending |
 | 09 | [按层总览与可信实时数据](09.md) | 02 | integrated — b74d6e2 |
 | 10 | [历史查询、断线曲线与 CSV](10.md) | 02 | integrated — b399379 |
-| 11 | [告警生命周期与交接持久化](11.md) | 09, 10 | integrated — aac3628; shared auth stability open |
-| 12 | [今日电量、运行时长与健康统计](12.md) | 09, 10 | integrated — c273cbc; shared auth stability open |
+| 11 | [告警生命周期与交接持久化](11.md) | 09, 10 | integrated — aac3628 |
+| 12 | [今日电量、运行时长与健康统计](12.md) | 09, 10 | integrated — c273cbc |
 | 13 | [四段式规则与显式作用范围](13.md) | 07 | pending |
 | 14 | [状态机定义、模拟与受控执行](14.md) | 07 | pending |
 | 15 | [持续运行的聚合点](15.md) | 09, 10 | integrated — 8d927ab |
 | 16 | [今日执行统一查询](16.md) | 13, 14 | pending |
-| 17 | [配界面保存到客户总览](17.md) | 09, 11, 12 (active-alarm and statistics bindings) | code integrated — 1868cc3; reopened preview regression |
+| 17 | [配界面保存到客户总览](17.md) | 09, 11, 12 (active-alarm and statistics bindings) | integrated — 02220a1; preview repair verified |
 | 18 | [派生输入与已配置画面的联动验收](18.md) | 13, 14, 15, 17 | pending |
 | 19 | [账号、对象范围与只读权限演练](19.md) | 02 | integrated — de84402 |
 | 20 | [真实预检、不可变发布与包导出](20.md) | 06, 13, 14, 17 | pending |
@@ -66,4 +66,6 @@ The worktree starts at the current committed source plus only task-related pendi
 - 15/17 code merged (`8d927ab`/`1868cc3`), evidence `6c53b2e`: full Go37 packages, frontend130, real screen/access/alarm/daily passed. Original design-preview exposed missing prototype trend/today content;17 reopened. Independent delivery row-count failed once; workspace harness could not import its hardcoded React-side Playwright. These were retained in [batch evidence](aggregate-screen-integration.md), not erased.
 - Auth fix `0ffd389` merged at `6c2b598`: credential/context publication ordering and unauthenticated-read rejection, retaining Handover synchronous invalidation. Integrated frontend133/type/build passed. Complete auth/preview matrix waits for17 preview repair; original uninstrumented expiry-timeout causality remains unproven.
 - Parent reproduced workspace module-resolution failure, then used the uniapp-owned dependency and explicit preview query. Workspace and delivery isolated browser tests passed with zero live API requests. Delivery original retest also passed before editing; its test now waits for the asynchronously loaded table before the unchanged exact-three count, rather than asserting during loading. This readiness fix does not retrospectively prove the first failure's cause.
+- Final06/17-preview combination `02220a1`, evidence `b0173ad`:133frontend/type/build, all37Go packages, five realGo browser pairs and22 focused regressions passed. Four original auth scenarios each passed all three preview suites with unchanged8s/2300ms boundaries. Confirmed auth re-entry and design-preview regressions are repaired/verified; original uninstrumented-timeout causality is not retroactively asserted. Integrated count13/25;07 is the active dependency gate.
+- The preliminary06-only full run failed before Profile assertions because a bootstrap password update was ignored by the store timestamp guard. Final planned combination passed without excluding the test. Parent traced `Bootstrap` through acknowledged point writes and verified default admin edges are created after initial points; no root-cause claim or clock/storage workaround is made. This bootstrap ordering stability finding remains for final acceptance, with fixture hashes kept out of reports.
 - Local baseline and per-ticket verification must be recorded before marking a ticket complete.
