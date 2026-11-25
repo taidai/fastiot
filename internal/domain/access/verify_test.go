@@ -59,7 +59,7 @@ func TestSafeCommandRequiresProfileDeclarationFixedValueAndReadback(t *testing.T
 
 func TestCommandOutcomeRequiresConfirmedReadback(t *testing.T) {
 	t.Parallel()
-	for _, state := range []string{"failed", "unknown", "submitted", "superseded", "confirmed"} {
+	for _, state := range []string{"rejected", "failed", "unknown", "submitted", "superseded", "confirmed"} {
 		if !TerminalCommandState(state) {
 			t.Errorf("terminal state %s still treated as pending", state)
 		}
@@ -69,7 +69,7 @@ func TestCommandOutcomeRequiresConfirmedReadback(t *testing.T) {
 			t.Errorf("pending state %s treated as complete", state)
 		}
 	}
-	if CommandOutcomePassed("submitted") || CommandOutcomePassed("unknown") || !CommandOutcomePassed("confirmed") {
+	if CommandOutcomePassed("rejected") || CommandOutcomePassed("submitted") || CommandOutcomePassed("unknown") || !CommandOutcomePassed("confirmed") {
 		t.Fatal("only confirmed readback may pass L3")
 	}
 }

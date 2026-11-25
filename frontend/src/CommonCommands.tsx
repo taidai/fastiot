@@ -2,10 +2,11 @@ import { useEffect, useMemo, useState } from "react"
 import { createPortal } from "react-dom"
 import { request } from "./api"
 import ConfirmDialog from "./ConfirmDialog"
+import { isTerminalCommand } from "./deviceTypes"
 import type { CommandOutcome, LedgerDevice, UnitCommand, UnitModel } from "./deviceTypes"
 
 const deviceKey = (device: LedgerDevice) => `${device.channel_id}/${device.server_id}`
-const stateNames: Record<string, string> = { queued: "排队", running: "执行中", confirmed: "已确认", failed: "失败", timeout: "超时", unknown: "结果未知" }
+const stateNames: Record<string, string> = { queued: "排队", running: "执行中", confirmed: "已确认", rejected: "已拒绝", failed: "失败", timeout: "超时", unknown: "结果未知" }
 
 function defaultParams(command: UnitCommand) {
   return Object.fromEntries((command.parameters || []).map((parameter) => [parameter.name, parameter.default]))
@@ -65,7 +66,7 @@ export default function CommonCommands({ token, canOperate, onError, onClose }: 
         request_id: requestID, command_id: command.id, parameters: defaultParams(command),
       })
       let state = outcome.state
-      for (let i = 0; i < 12 && !["confirmed", "failed", "timeout", "unknown"].includes(state); i += 1) {
+      for (let i = 0; i < 12 && !isTerminalCommand(state); i += 1) {
         await new Promise((resolve) => window.setTimeout(resolve, 500))
         const latest = await request<{ commands: CommandOutcome[] }>(token, `${base}/commands`)
         const item = (latest.commands || []).find((entry) => entry.request_id === requestID)

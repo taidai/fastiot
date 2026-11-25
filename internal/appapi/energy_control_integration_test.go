@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fastiot/internal/decision"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -17,6 +19,93 @@ import (
 	"github.com/simpleiot/simpleiot/data"
 	"github.com/simpleiot/simpleiot/server"
 )
+
+// A refusal before I/O is not evidence that the cabinet started transitioning.
+func TestCabinetRejectedCommandDoesNotEnterTransition(t *testing.T) {
+	for _, event := range []string{"start", "stop"} {
+		t.Run(event, func(t *testing.T) {
+			f, bus, sim := operationFixtureWithProfile(t, strings.Replace(operationProfile, `"id":"set"`, `"id":"`+event+`"`, 1))
+			var model unitModelView
+			call(t, http.MethodGet, f.base+"/modbus/"+bus+"/units/1/model", f.token, nil, &model)
+			point := model.Model.PointMap["Target"]
+			root := snapshotRoot(t, f.base, f.token)
+			unit, err := CreateDomainNode(f.handler.nc, root, NodeTypeEnergyUnit, map[string]string{"description": "rejected cabinet"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := CreateDomainNode(f.handler.nc, unit, data.NodeTypeDevice, map[string]string{"description": "power device", PointTypePowerSetpoint: point}); err != nil {
+				t.Fatal(err)
+			}
+			before := decision.CabinetStandby
+			if event == "stop" {
+				before = decision.CabinetRunning
+			}
+			if err := SetCabinetState(f.handler.nc, unit, before); err != nil {
+				t.Fatal(err)
+			}
+			status, body := call(t, http.MethodPut, f.base+"/safety", f.token, map[string]any{"node": point, "safety": map[string]any{"conditions": []any{map[string]any{"point_id": point, "operator": "eq", "value": 99}}}}, nil)
+			if status != 200 {
+				t.Fatalf("safety: %d %s", status, body)
+			}
+			var payload map[string]any
+			status, body = call(t, http.MethodPost, f.base+"/energy-units/"+unit+"/events", f.token, map[string]string{"event": event, "request_id": "cabinet-refused"}, &payload)
+			if status != 200 || payload["command_state"] != "rejected" || payload["state"] != string(before) || payload["reason"] == nil {
+				t.Errorf("refusal invented transition/lost reason: %d %s", status, body)
+			}
+			f.handler.ReconcileCabinetCommands()
+			node := f.node(t, unit)
+			if LoadCabinetState(node) != before {
+				t.Errorf("cabinet moved on refusal: %s", LoadCabinetState(node))
+			}
+			if pending, found := loadPendingCommand(node); found {
+				t.Errorf("rejected command left pending: %+v", pending)
+			}
+			var outcome pumpCommandOutcome
+			status, body = call(t, http.MethodGet, f.base+"/modbus/"+bus+"/units/1/commands/cabinet-refused", f.token, nil, &outcome)
+			if status != 200 || outcome.State != "rejected" || outcome.Reason == "" {
+				t.Errorf("canonical refusal missing: %d %s", status, body)
+			}
+			if writes := sim.written(); len(writes) != 0 {
+				t.Fatalf("refused operation reached simulator: %v", writes)
+			}
+			transition := decision.CabinetStarting
+			if event == "stop" {
+				transition = decision.CabinetStopping
+			}
+			for _, stored := range []decision.CabinetState{transition, decision.CabinetMaintenance, decision.CabinetRunning} {
+				t.Run("legacy-"+string(stored), func(t *testing.T) {
+					// Fixture for the persisted projection written by the pre-fix caller.
+					if err := SetCabinetState(f.handler.nc, unit, stored); err != nil {
+						t.Fatal(err)
+					}
+					encoded, _ := json.Marshal(pendingCommand{RequestID: "cabinet-refused", Event: event, Actor: "legacy-fixture", At: time.Now()})
+					if err := siotclient.SendNodePoint(f.handler.nc, unit, data.NewPointString(pendingCommandPoint, "", string(encoded)), true); err != nil {
+						t.Fatal(err)
+					}
+					f.handler.ReconcileCabinetCommands()
+					node := f.node(t, unit)
+					want := stored
+					if stored == transition {
+						want = decision.CabinetFault
+					}
+					if got := LoadCabinetState(node); got != want {
+						t.Errorf("legacy rejection state=%s want %s", got, want)
+					}
+					if pending, found := loadPendingCommand(node); found {
+						t.Errorf("legacy rejection remained pending: %+v", pending)
+					}
+					_, auditBody := call(t, http.MethodGet, f.base+"/audit", f.token, nil, nil)
+					if !strings.Contains(auditBody, "rejected") || !strings.Contains(auditBody, "实际状态未核实") {
+						t.Errorf("legacy refusal lacks explanatory terminal audit: %s", auditBody)
+					}
+					if len(sim.written()) != 0 {
+						t.Fatal("reconciling rejected projection dispatched device")
+					}
+				})
+			}
+		})
+	}
+}
 
 // TestEnergyControlEvents 验证控制器人工操作的 HTTP 语义：人工模式立即停止
 // 自动调度；检修/故障确认走状态机；没有命令运行时不假装启停成功。
