@@ -328,11 +328,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	configurationMutation := false
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		requirement, _ := authz.Required(r)
-		configurationMutation = requirement.AdminOnly
-		switch requirement.Action {
-		case ActionConfigure, ActionDelete, ActionRulePublish, ActionVirtualInputApply, ActionCalculationApply, ActionAccountManage, ActionSiteSettings:
-			configurationMutation = true
-		}
+		configurationMutation = requirement.AdminOnly || requirement.Action == ActionConfigure ||
+			requirement.Action == ActionDelete || requirement.Action == ActionRulePublish ||
+			requirement.Action == ActionVirtualInputApply || requirement.Action == ActionCalculationApply ||
+			requirement.Action == ActionAccountManage || requirement.Action == ActionSiteSettings
 	}
 	if configurationMutation {
 		h.engineeringMu.Lock()

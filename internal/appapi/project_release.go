@@ -276,6 +276,9 @@ func (h *Handler) validatePackageSource(identity Identity, nodes []data.NodeEdge
 				continue
 			}
 			if containsPackageSecret(string(point.Data)) {
+				if point.Type == generatedScreenDraftType {
+					return fmt.Errorf("screen_contains_secret")
+				}
 				return fmt.Errorf("package_contains_secret")
 			}
 			if packageJSONDefinition(node, point) && (!json.Valid([]byte(point.Txt())) || point.Txt() == "null") {

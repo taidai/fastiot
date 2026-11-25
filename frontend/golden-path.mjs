@@ -55,7 +55,9 @@ for (let attempt = 0; attempt < 60 && !site; attempt++) {
   if (!site) await new Promise((resolve) => setTimeout(resolve, 1000))
 }
 if (!site) throw new Error("seeded instance has no site after 60s")
-const publish = await api(token, "/projects/publish", "POST", { site: site.id, note: "黄金路径基线", confirm: true })
+const inspection = await api(token, `/delivery/gates?site=${encodeURIComponent(site.id)}`)
+if (inspection.status !== 200 || inspection.data.status === "fail" || !inspection.data.fingerprint) throw new Error(`baseline preflight refused: ${inspection.status} ${JSON.stringify(inspection.data)}`)
+const publish = await api(token, "/projects/publish", "POST", { site: site.id, note: "黄金路径基线", expected_fingerprint: inspection.data.fingerprint })
 if (![200, 201].includes(publish.status)) throw new Error(`baseline publish failed: ${publish.status} ${JSON.stringify(publish.data)}`)
 
 let browser

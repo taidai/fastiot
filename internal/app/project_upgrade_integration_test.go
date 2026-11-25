@@ -81,8 +81,8 @@ func findUpgradeNode(t *testing.T, preview upgradePreviewResponse, name string) 
 	return upgradeNodeDiffBody{}
 }
 
-// newTemplateFromExport 把导出包改成"新模板"：改一个工程点（轮询周期），并新增一个变量。
-// 这正是交付人员拿到新版模板时的做法，不改动现场。
+// newTemplateFromExport deliberately tampers with a sealed export. It is used
+// only for the integrity-refusal assertion; valid templates come from the real API.
 func newTemplateFromExport(t *testing.T, exported json.RawMessage, pollPeriod float64, extraName string) json.RawMessage {
 	t.Helper()
 	var pkg map[string]any
@@ -182,8 +182,28 @@ func TestProjectUpgradeConflictBlocksThenRollbackKeepsUpgradeHistory(t *testing.
 	var baseline struct {
 		ID string `json:"id"`
 	}
+	var inspected struct {
+		Fingerprint string `json:"fingerprint"`
+		Status      string `json:"status"`
+		Gates       []struct {
+			Key    string `json:"key"`
+			Status string `json:"status"`
+			Detail string `json:"detail"`
+		} `json:"gates"`
+	}
+	defer func() {
+		if t.Failed() {
+			t.Logf("last baseline preflight: %+v", inspected)
+		}
+	}()
+	// The real channel reconciler starts asynchronously. Wait on the public
+	// readiness facts instead of confirming through the not-started blocker.
+	waitFor(t, "simulated channel ready for ordinary publication", func() bool {
+		mustCall(t, application, "GET", "/delivery/gates?site="+site.ID, token, nil, &inspected)
+		return inspected.Fingerprint != "" && inspected.Status != "fail"
+	})
 	mustCall(t, application, "POST", "/projects/publish", token, map[string]any{
-		"site": site.ID, "note": "升级前基线", "confirm": true,
+		"site": site.ID, "note": "升级前基线", "expected_fingerprint": inspected.Fingerprint,
 	}, &baseline)
 	if baseline.ID == "" {
 		t.Fatal("publish returned no baseline version")
@@ -208,17 +228,57 @@ func TestProjectUpgradeConflictBlocksThenRollbackKeepsUpgradeHistory(t *testing.
 		return false
 	})
 
-	// 新模板 C：导出当前包，改轮询周期为 300 并新增一个变量。
+	// Editing sealed JSON is not a new valid template; the public preview must refuse it.
 	var exported json.RawMessage
 	mustCall(t, application, "GET", "/projects/export?site="+site.ID, token, nil, &exported)
-	template := newTemplateFromExport(t, exported, 300, "模板新增")
+	tampered := newTemplateFromExport(t, exported, 300, "模板新增")
+	tamperStatus, tamperBody := callApp(t, application, "POST", "/projects/upgrade/preview", token, map[string]any{
+		"site": site.ID, "base": baseline.ID, "package": tampered,
+	})
+	if tamperStatus != 400 || !strings.Contains(string(tamperBody), "package_integrity_mismatch") {
+		t.Fatalf("tampered template: %d %s", tamperStatus, tamperBody)
+	}
+
+	// Author C through real configuration APIs and export its seal, then restore B
+	// before exercising three-way upgrade. No private snapshot or reseal bypass.
+	writeChannel(300)
+	var extra struct {
+		ID string `json:"id"`
+	}
+	mustCall(t, application, "POST", "/nodes", token, map[string]any{"parent": site.ID, "type": "variable", "description": "模板新增"}, &extra)
+	waitFor(t, "template configuration C", func() bool {
+		for _, node := range snapshotNodes(t, application, token).Nodes {
+			if node.ID == channelID {
+				value, ok := pointValue(node, data.PointTypePollPeriod)
+				return ok && value == 300
+			}
+		}
+		return false
+	})
+	var template json.RawMessage
+	mustCall(t, application, "GET", "/projects/export?site="+site.ID, token, nil, &template)
+	writeChannel(250)
+	mustCall(t, application, "DELETE", "/nodes/"+extra.ID, token, map[string]any{"parent": site.ID}, nil)
+	waitFor(t, "restore local configuration B", func() bool {
+		snapshot := snapshotNodes(t, application, token)
+		if _, found := nodeByDescription(snapshot.Nodes, "模板新增"); found {
+			return false
+		}
+		for _, node := range snapshot.Nodes {
+			if node.ID == channelID {
+				value, ok := pointValue(node, data.PointTypePollPeriod)
+				return ok && value == 250
+			}
+		}
+		return false
+	})
 
 	// 三方对照：旧基线、现场、新模板的值同时可见。
 	var preview upgradePreviewResponse
 	mustCall(t, application, "POST", "/projects/upgrade/preview", token, map[string]any{
 		"site": site.ID, "base": baseline.ID, "package": template,
 	}, &preview)
-	if preview.Baseline.Version != baseline.ID || preview.Template.Name != "升级演练模板" {
+	if preview.Baseline.Version != baseline.ID || preview.Template.Name != site.Desc() {
 		t.Fatalf("preview identity = %+v", preview)
 	}
 	conflictID := ""

@@ -125,7 +125,7 @@ var packageRuntimePoints = map[string]bool{
 	PointTypeActualPower: true, PointTypePVAvailableKW: true, PointTypePVLimitKW: true,
 	PointTypePVForecastKW: true, PointTypeEVMaxLoadKW: true, PointTypeEVCurtailableKW: true,
 	PointTypeEVOnlineRatio: true,
-	"valueSet":             true, "ruleAccess": true, "easyemsAllocHistory": true,
+	"valueSet":             true, "health": true, "ruleAccess": true, "easyemsAllocHistory": true,
 	"businessId": true, "easyemsInput": true, "easyemsDerivedObservation": true, "ruleExecutionFact": true,
 }
 

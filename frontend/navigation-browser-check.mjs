@@ -31,7 +31,9 @@ if (snapshot.status !== 200 || !snapshot.data.roots?.length) throw new Error(`sn
 const root = snapshot.data.roots[0]
 const siteNode = snapshot.data.nodes?.find((node) => node.type === "site")
 if (siteNode) {
-  const baseline = await api(adminToken, "/projects/publish", "POST", { site: siteNode.id, note: "验收基线（脚本预置）", confirm: true })
+  const inspection = await api(adminToken, `/delivery/gates?site=${encodeURIComponent(siteNode.id)}`)
+  if (inspection.status !== 200 || inspection.data.status === "fail" || !inspection.data.fingerprint) throw new Error(`baseline preflight refused: ${inspection.status} ${JSON.stringify(inspection.data)}`)
+  const baseline = await api(adminToken, "/projects/publish", "POST", { site: siteNode.id, note: "验收基线（脚本预置）", expected_fingerprint: inspection.data.fingerprint })
   if (![200, 201].includes(baseline.status)) throw new Error(`baseline publish failed: ${baseline.status} ${JSON.stringify(baseline.data)}`)
 }
 

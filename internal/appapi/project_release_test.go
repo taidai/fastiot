@@ -227,7 +227,7 @@ func TestDeliveryPackageReferencesAndRuntimeBoundary(t *testing.T) {
 	store(rule, "draft", decision.Document{Table: decision.Table{Rows: []decision.Row{{ID: "r1", Actions: []decision.Action{{ActionID: "a1", Readback: &decision.Readback{Target: decision.Target{NodeID: point}, TimeoutMS: 1000}}}}}}, Bindings: decision.BindingSet{Actions: map[string]decision.Target{"a1": {NodeID: point}}}})
 	definition := decision.StateMachineDefinition{InitialState: "idle", States: []string{"idle"}, CommandBindings: map[string]decision.StateMachineCommandBinding{"start": {DeviceID: device, CommandID: "start"}}}
 	store(machine, stateMachineDocumentPoint, decision.StateMachineDocument{Schema: 1, Revision: 1, Draft: definition, CurrentState: "runtime-state", LastExecution: &decision.StateMachineExecution{RequestID: "runtime-command-id"}})
-	for _, typ := range []string{"value", "valueSet", "ruleAccess", "easyemsAllocHistory", stateMachineRunPoint, "easyemsInput", "easyemsDerivedObservation", "ruleExecutionFact"} {
+	for _, typ := range []string{"value", "valueSet", "health", "ruleAccess", "easyemsAllocHistory", stateMachineRunPoint, "easyemsInput", "easyemsDerivedObservation", "ruleExecutionFact"} {
 		if err := client.SendNodePoint(h.nc, machine, data.NewPointString(typ, "0", "runtime-"+typ), true); err != nil {
 			t.Fatal(err)
 		}
@@ -237,7 +237,7 @@ func TestDeliveryPackageReferencesAndRuntimeBoundary(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("export: %d %s", code, body)
 	}
-	for _, forbidden := range []string{site, point, device, excludedAccount, "runtime-state", "runtime-command-id", "runtime-valueSet", "runtime-ruleAccess", "runtime-easyemsAllocHistory", "runtime-easyemsInput", "runtime-easyemsDerivedObservation", "runtime-ruleExecutionFact"} {
+	for _, forbidden := range []string{site, point, device, excludedAccount, "runtime-state", "runtime-command-id", "runtime-valueSet", "runtime-health", "runtime-ruleAccess", "runtime-easyemsAllocHistory", "runtime-easyemsInput", "runtime-easyemsDerivedObservation", "runtime-ruleExecutionFact"} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("package retained source/runtime identity %q", forbidden)
 		}
