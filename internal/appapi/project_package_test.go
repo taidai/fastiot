@@ -125,6 +125,146 @@ func TestPackageStateMachineReferences(t *testing.T) {
 	}
 }
 
+func TestProjectPackageAggregateOwnerReferences(t *testing.T) {
+	base, token, _, _ := startInputServer(t, t.TempDir(), data.NewID())
+	root := snapshotRoot(t, base, token)
+	site := createNodeAPI(t, base, token, NodeTypeSite, root, "Aggregate package", 0)
+	group := createNodeAPI(t, base, token, "group", site, "Aggregate owner", 0)
+	member := createNodeAPI(t, base, token, "variable", group, "Aggregate member", 7)
+	code, body := call(t, http.MethodPut, base+"/aggregate", token, AggregateConfig{Group: group, Op: "sum", Members: []string{member}}, nil)
+	if code != 200 {
+		t.Fatalf("configure aggregate: %d %s", code, body)
+	}
+	var pkg projectPackage
+	code, body = call(t, http.MethodGet, base+"/projects/export?site="+site, token, nil, &pkg)
+	if code != 200 {
+		t.Fatalf("export aggregate: %d %s", code, body)
+	}
+	checkPackageOwner := func(pkg projectPackage) (string, string) {
+		t.Helper()
+		if err := pkg.validate(); err != nil {
+			t.Fatal(err)
+		}
+		for _, node := range pkg.Nodes {
+			for _, point := range node.Points {
+				if point.Type != aggregatePoint {
+					continue
+				}
+				var config AggregateConfig
+				if err := json.Unmarshal([]byte(point.Txt()), &config); err != nil {
+					t.Fatal(err)
+				}
+				if config.Group != node.Ref || len(config.Members) != 1 {
+					t.Fatalf("aggregate owner is not its package ref: owner=%q ref=%q members=%v", config.Group, node.Ref, config.Members)
+				}
+				for _, target := range pkg.Nodes {
+					if target.Ref == config.Members[0] && target.Type == "variable" && target.Parent == node.Ref {
+						return node.Ref, target.Ref
+					}
+				}
+				t.Fatal("aggregate member is not a resolvable child point")
+			}
+		}
+		t.Fatal("aggregate definition missing")
+		return "", ""
+	}
+	ownerRef, memberRef := checkPackageOwner(pkg)
+	if strings.Contains(body, group) || strings.Contains(body, member) {
+		t.Fatal("source aggregate identities survived export")
+	}
+
+	targetBase, targetToken, _, _ := startInputServer(t, t.TempDir(), data.NewID())
+	targetRoot := snapshotRoot(t, targetBase, targetToken)
+	var imported importProjectResult
+	code, body = call(t, http.MethodPost, targetBase+"/projects/import", targetToken, map[string]any{"parent": targetRoot, "package": pkg}, &imported)
+	if code != 200 {
+		t.Fatalf("import aggregate: %d %s", code, body)
+	}
+	var snapshot struct {
+		Nodes []data.NodeEdge `json:"nodes"`
+	}
+	code, body = call(t, http.MethodGet, targetBase+"/snapshot", targetToken, nil, &snapshot)
+	if code != 200 {
+		t.Fatal(body)
+	}
+	found := false
+	for _, node := range snapshot.Nodes {
+		if node.Parent != imported.SiteID || node.Desc() != "Aggregate owner" {
+			continue
+		}
+		point, exists := node.Points.Find(aggregatePoint, "")
+		if !exists {
+			t.Fatal("imported raw aggregate definition missing")
+		}
+		var config AggregateConfig
+		if err := json.Unmarshal([]byte(point.Txt()), &config); err != nil {
+			t.Fatal(err)
+		}
+		// /snapshot exposes the stored definition; /aggregate would overwrite
+		// Group at read time and conceal a failed import remapping.
+		if config.Group != node.ID || config.Group == group || config.Group == ownerRef || len(config.Members) != 1 || config.Members[0] == member || config.Members[0] == memberRef {
+			t.Fatalf("raw imported aggregate references: %+v", config)
+		}
+		for _, target := range snapshot.Nodes {
+			if target.ID == config.Members[0] && target.Parent == node.ID {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("imported aggregate owner/member closure missing")
+	}
+	var roundTrip projectPackage
+	code, body = call(t, http.MethodGet, targetBase+"/projects/export?site="+imported.SiteID, targetToken, nil, &roundTrip)
+	if code != 200 {
+		t.Fatalf("re-export aggregate: %d %s", code, body)
+	}
+	checkPackageOwner(roundTrip)
+
+	for _, invalidOwner := range []string{"old-instance-owner", memberRef} {
+		raw, err := json.Marshal(pkg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var invalid projectPackage
+		if err := json.Unmarshal(raw, &invalid); err != nil {
+			t.Fatal(err)
+		}
+		for i := range invalid.Nodes {
+			for j, point := range invalid.Nodes[i].Points {
+				if point.Type != aggregatePoint {
+					continue
+				}
+				var config AggregateConfig
+				if err := json.Unmarshal([]byte(point.Txt()), &config); err != nil {
+					t.Fatal(err)
+				}
+				config.Group = invalidOwner
+				encoded, err := json.Marshal(config)
+				if err != nil {
+					t.Fatal(err)
+				}
+				invalid.Nodes[i].Points[j] = data.NewPointString(aggregatePoint, point.Key, string(encoded))
+			}
+		}
+		invalid.seal() // A recomputed hash must not bypass reference/owner validation.
+		if err := invalid.validate(); err == nil {
+			t.Fatalf("invalid aggregate owner %q accepted", invalidOwner)
+		}
+		code, body = call(t, http.MethodPost, targetBase+"/projects/import", targetToken, map[string]any{"parent": targetRoot, "package": invalid}, nil)
+		if code != 400 {
+			t.Fatalf("invalid aggregate import: %d %s", code, body)
+		}
+		var after struct {
+			Nodes []data.NodeEdge `json:"nodes"`
+		}
+		code, body = call(t, http.MethodGet, targetBase+"/snapshot", targetToken, nil, &after)
+		if code != 200 || len(after.Nodes) != len(snapshot.Nodes) {
+			t.Fatalf("invalid import changed visible nodes: %d %s", code, body)
+		}
+	}
+}
+
 func TestPackageContentCounts(t *testing.T) {
 	nodes := []packageNode{
 		{Ref: "n1", Type: NodeTypeSite, Points: data.Points{data.NewPointString("description", "", "站点")}},

@@ -238,6 +238,12 @@ func (pkg projectPackage) validate() error {
 					return fmt.Errorf("invalid_package_structure:missing_reference")
 				}
 			}
+			if point.Type == aggregatePoint {
+				var config AggregateConfig
+				if json.Unmarshal([]byte(point.Txt()), &config) != nil || config.Group != node.Ref {
+					return fmt.Errorf("invalid_package_structure:aggregate_owner")
+				}
+			}
 		}
 	}
 	if sites != 1 {
@@ -439,6 +445,7 @@ func packageReferences(node data.NodeEdge, p data.Point) []string {
 		if json.Unmarshal([]byte(p.Txt()), &config) != nil {
 			return nil
 		}
+		refs = append(refs, config.Group)
 		refs = append(refs, config.Members...)
 	case calculationDocument:
 		var document calculation.Document
@@ -871,6 +878,11 @@ func rewritePackagePoint(node data.NodeEdge, p data.Point, idMap map[string]stri
 			return &point, true, nil
 		}
 		var unresolved []string
+		owner, ok := remap(config.Group)
+		if !ok {
+			unresolved = append(unresolved, config.Group)
+		}
+		config.Group = owner
 		kept := make([]string, 0, len(config.Members))
 		for _, id := range config.Members {
 			if mapped, ok := idMap[id]; ok {
