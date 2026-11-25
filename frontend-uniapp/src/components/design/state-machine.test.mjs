@@ -1,6 +1,25 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { bindStateMachineDefinition, createStateMachineDefinition, executionStatusText, stateMachineSimulationPayload } from "./state-machine.ts"
+import { bindStateMachineDefinition, createStateMachineDefinition, executionStatusText, stateMachineSimulationPayload, stateMachineInputNumber } from "./state-machine.ts"
+
+test("uni numeric input preserves the explicit command parameter instead of substituting zero", () => {
+  assert.equal(stateMachineInputNumber({ detail: { value: "20" }, target: {} }), 20)
+  assert.equal(stateMachineInputNumber({ target: { value: "0" } }), 0)
+  assert.equal(Number.isNaN(stateMachineInputNumber({ detail: { value: "" } })), true)
+  const definition = createStateMachineDefinition("permit", "pump")
+  definition.transitions[0].actions[0].value = Number.NaN
+  assert.throws(() => bindStateMachineDefinition(definition, []), /有效数字/)
+})
+
+test("renaming an empty state removes only generated empty lifecycle rows", () => {
+  const definition = createStateMachineDefinition("", "")
+  definition.states = ["idle", "active"]
+  definition.initial_state = "idle"
+  definition.state_actions = { stopped: { entry: [], exit: [] }, running: { entry: [{ action_id: "must-resolve", value: 1 }] } }
+  const bound = bindStateMachineDefinition(definition, [])
+  assert.equal(bound.state_actions.stopped, undefined)
+  assert.equal(bound.state_actions.running.entry.length, 1, "never silently discard configured lifecycle effects")
+})
 
 test("state machine definition binds only supplied real inputs and outputs", () => {
   const definition = createStateMachineDefinition("permit", "pump")

@@ -172,6 +172,9 @@ func TestStateMachineDeclaredCommandHTTPAndNoDuplicateWireWrites(t *testing.T) {
 	if status != 200 || len(sim.written()) != 0 {
 		t.Fatalf("publish activated control: %d %s", status, body)
 	}
+	if status, body := call(t, "POST", url+"/execute", f.token, map[string]any{"request_id": "unconfirmed", "event": "start", "revision": machine.Revision}, nil); status != 400 || len(sim.written()) != 0 {
+		t.Fatalf("missing explicit confirmation dispatched: %d %s", status, body)
+	}
 	viewer := inputAccount(t, f, site, "viewer", nil)
 	request := map[string]any{"request_id": "machine-start", "event": "start", "revision": machine.Revision, "confirm": true}
 	if status, body := call(t, "POST", url+"/execute", viewer, request, nil); status != 403 || len(sim.written()) != 0 {

@@ -28,7 +28,7 @@
             </label>
             <label>模拟时刻<input type="datetime-local" v-model="simAt"></label>
           </view>
-          <view class="machine-actions"><button class="ghost" :disabled="busy" @click="simulate">模拟守卫</button><label class="confirm"><input type="checkbox" v-model="confirmed"> 确认执行真实动作</label><button class="primary" :disabled="readOnly || busy || !confirmed || !record.version || dirty || !record.permissions.execute" @click="execute">{{ pendingEvent ? `查询原事件 ${pendingEvent.event}` : '执行事件' }}</button></view>
+          <view class="machine-actions"><button class="ghost" :disabled="busy" @click="simulate">模拟守卫</button><checkbox-group class="confirm" @change="confirmed = $event.detail.value.includes('execute')"><label><checkbox value="execute" :checked="confirmed" /> 确认执行真实动作</label></checkbox-group><button class="primary" :disabled="readOnly || busy || !confirmed || !record.version || dirty || !record.permissions.execute" @click="execute">{{ pendingEvent ? `查询原事件 ${pendingEvent.event}` : '执行事件' }}</button></view>
           <view v-if="simulation" class="execution-result"><strong>{{ simulation.status === 'matched' ? `可转移：${simulation.from} → ${simulation.to}` : `保持 ${simulation.to}` }}</strong><span>{{ simulation.reason || '模拟未写设备' }}</span><view v-for="trace in simulation.trace || []" :key="trace.transition_id">{{ trace.transition_id }}：{{ trace.status }} {{ trace.reason || '' }}</view></view>
           <view v-if="record.last_execution" class="execution-result" :class="record.last_execution.status"><strong>{{ executionStatusText(record.last_execution.status) }}：{{ record.last_execution.from }} → {{ record.last_execution.to }}</strong><span>{{ record.last_execution.reason || '执行结果已持久化' }}</span><span>来源 v{{ record.last_execution.version }} · 事件 {{ record.last_execution.request_id || '旧记录' }}</span><view v-for="command in record.last_execution.commands || []" :key="command.request_id">命令 {{ command.request_id }}：{{ executionStatusText(command.status || 'unknown') }} {{ command.reason || '' }}</view><view v-for="(action, index) in record.last_execution.actions || []" :key="index">{{ displayName(action.output) }}：{{ executionStatusText(action.status) }} {{ action.reason || '' }}</view></view>
         </view>
@@ -96,7 +96,7 @@ import { nameOf } from "../../types/api"
 import type { Snapshot } from "../../types/api"
 import { businessId, conditionText, actionText, isRamped, isWritable } from "./strategy"
 import type { Condition, Action } from "./strategy"
-import { bindStateMachineDefinition, createStateMachineDefinition, executionStatusText, stateMachineSimulationPayload } from "./state-machine"
+import { bindStateMachineDefinition, createStateMachineDefinition, executionStatusText, stateMachineSimulationPayload, stateMachineInputValue as inputValue, stateMachineInputNumber as inputNumber } from "./state-machine"
 import type { StateMachineDefinition, StateMachineRecord, StateMachineSimulation, StateTransition, MachineCommandOption } from "./state-machine"
 import StateMachineActionEditor from "./StateMachineActionEditor.vue"
 import { loadUnitModel } from "../../pages/overview/operations"
@@ -140,8 +140,6 @@ watch(() => props.parent, async () => {
   await load()
   if (discarded) notice.value = "对象已切换；上一个状态机的未保存修改未保存。"
 })
-function inputValue(event: Event) { return (event.target as HTMLInputElement | HTMLSelectElement).value }
-function inputNumber(event: Event) { const raw = inputValue(event); const value = Number(raw); return raw && Number.isFinite(value) ? value : 0 }
 function displayName(id: string) { const node = nodes.value.find(item => businessId(item) === id); return node ? nameOf(node) : id || "—" }
 function inputKind(id: string) { return (draft.value?.transitions || []).flatMap(transition => transition.conditions).find(condition => condition.point_id === id)?.kind || "number" }
 function syncEditorOpen(event: Event) { editorOpen.value = (event.target as HTMLDetailsElement).open }
@@ -281,7 +279,7 @@ async function execute() {
 </script>
 
 <style scoped>
-.machine-panel { display: grid; gap: 12px; min-width: 0; }
+.machine-panel { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; }
 .panel-heading, .machine-summary, .machine-actions, .transition-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .note, .src { margin: 4px 0 0; color: var(--faint); font-size: 12px; }
 .machine-tabs { display: flex; gap: 6px; overflow-x: auto; }
@@ -306,8 +304,7 @@ input, select { min-height: 38px; border: 1px solid var(--line); border-radius: 
 .inline-editor input { width: 100px; }
 .event-panel { display: grid; gap: 10px; }
 .confirm { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; }
-.confirm input { min-height: auto; }
-.execution-result { display: grid; gap: 5px; border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: rgba(255,255,255,.42); font-size: 12px; }
+.execution-result { display: grid; overflow-wrap: anywhere; gap: 5px; border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: rgba(255,255,255,.42); font-size: 12px; }
 .execution-result.unknown { border-color: #d3a34d; }.execution-result.failed { border-color: var(--danger); }
 .publish-confirm { display: flex; align-items: center; gap: 9px; padding: 10px; border: 1px solid #eeddb9; border-radius: 10px; background: #fdf7ea; }
 .notice { margin: 0; color: var(--mint); }.error { margin: 0; }.danger { color: var(--danger); }

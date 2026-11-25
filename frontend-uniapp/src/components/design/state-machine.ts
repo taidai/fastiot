@@ -87,7 +87,13 @@ export function createStateMachineDefinition(inputId: string, outputId: string):
 }
 
 export function bindStateMachineDefinition(definition: StateMachineDefinition, nodes: Node[]) {
-  const result = JSON.parse(JSON.stringify(definition)) as StateMachineDefinition
+  const result = JSON.parse(JSON.stringify(definition, (_key, value) => {
+    if (typeof value === "number" && !Number.isFinite(value)) throw new Error("请输入有效数字，不能把空输入当作 0。")
+    return value
+  })) as StateMachineDefinition
+  for (const [state, actions] of Object.entries(result.state_actions || {})) {
+    if (!result.states.includes(state) && !actions.entry?.length && !actions.exit?.length) delete result.state_actions![state]
+  }
   const discovered = withDiscoveredBindings(nodes)
   const referencedPoints = new Set(result.transitions.flatMap(transition => transition.conditions.filter(condition => condition.kind !== "time").map(condition => condition.point_id)))
   const stateActions = Object.values(result.state_actions || {}).flatMap(actions => [...(actions.entry || []), ...(actions.exit || [])])
@@ -126,6 +132,15 @@ function withDiscoveredBindings(nodes: Node[]) {
 
 export function stateMachineSimulationPayload(event: string, inputs: Record<string, number>, textInputs: Record<string, string>, at: string) {
   return { event, inputs, text_inputs: Object.fromEntries(Object.entries(textInputs).filter(([, value]) => value !== "")), ...(at ? { at } : {}) }
+}
+
+export function stateMachineInputValue(event: Event): string {
+  return (event as CustomEvent<{ value?: string }>).detail?.value ?? (event.target as HTMLInputElement | null)?.value ?? ""
+}
+
+export function stateMachineInputNumber(event: Event) {
+  const raw = stateMachineInputValue(event)
+  return raw === "" ? Number.NaN : Number(raw)
 }
 
 export function executionStatusText(status: string) {

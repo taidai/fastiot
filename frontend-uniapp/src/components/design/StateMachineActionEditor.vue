@@ -33,10 +33,10 @@ import { nameOf } from "../../types/api"
 import { businessId } from "./strategy"
 import type { Action } from "./strategy"
 import type { MachineCommandOption, StateMachineDefinition } from "./state-machine"
+import { stateMachineInputNumber as number } from "./state-machine"
 const props = defineProps<{ actions: Action[]; definition: StateMachineDefinition; inputs: Node[]; outputs: Node[]; commands: MachineCommandOption[] }>()
 const emit = defineEmits<{ (event: "change"): void }>()
 function changed() { emit("change") }
-function number(event: Event) { return Number((event.target as HTMLInputElement).value) }
 function binding(action: Action) { return props.definition.command_bindings?.[action.action_id] }
 function keyOf(option: MachineCommandOption) { return JSON.stringify([option.device_id, option.command.id]) }
 function commandKey(action: Action) { const bound = binding(action); return bound ? JSON.stringify([bound.device_id, bound.command_id]) : "" }

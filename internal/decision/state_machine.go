@@ -1,6 +1,7 @@
 package decision
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -27,6 +28,30 @@ type StateMachineCommandBinding struct {
 	DeviceID   string             `json:"device_id"`
 	CommandID  string             `json:"command_id"`
 	Parameters map[string]float64 `json:"parameters,omitempty"`
+}
+
+// Reject null rather than letting encoding/json silently turn it into a zero
+// command parameter. Keep unknown-field rejection at this custom decode boundary.
+func (b *StateMachineCommandBinding) UnmarshalJSON(raw []byte) error {
+	var input struct {
+		DeviceID   string              `json:"device_id"`
+		CommandID  string              `json:"command_id"`
+		Parameters map[string]*float64 `json:"parameters,omitempty"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		return err
+	}
+	parameters := map[string]float64{}
+	for key, value := range input.Parameters {
+		if value == nil {
+			return fmt.Errorf("command parameter %s must be a number", key)
+		}
+		parameters[key] = *value
+	}
+	*b = StateMachineCommandBinding{DeviceID: input.DeviceID, CommandID: input.CommandID, Parameters: parameters}
+	return nil
 }
 
 // StateActions share the same bounded, readback-confirmed action vocabulary as
@@ -180,6 +205,9 @@ func (d StateMachineDocument) SaveDraft(draft StateMachineDefinition, revision u
 		return d, err
 	}
 	d.Draft = cloneStateMachineDefinition(draft)
+	if d.Version == 0 && d.Applied == nil && d.LastExecution == nil {
+		d.CurrentState = draft.InitialState
+	}
 	d.Revision++
 	return d, nil
 }

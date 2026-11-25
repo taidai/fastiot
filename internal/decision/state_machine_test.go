@@ -91,6 +91,18 @@ func TestStateMachineDeclaredCommandSimulationIsPure(t *testing.T) {
 	}
 }
 
+func TestStateMachineCommandParameterNullIsNotZero(t *testing.T) {
+	for _, input := range []string{
+		`{"device_id":"device","command_id":"set","parameters":{"target":null}}`,
+		`{"device_id":"device","command_id":"set","parameters":{"target":20},"script":"ignored"}`,
+	} {
+		var binding StateMachineCommandBinding
+		if err := json.Unmarshal([]byte(input), &binding); err == nil {
+			t.Fatalf("invalid typed command accepted: %s", input)
+		}
+	}
+}
+
 func TestStateMachinePublishedVersionsRemainImmutable(t *testing.T) {
 	doc, _ := NewStateMachineDocument(testStateMachineDefinition())
 	doc, _ = doc.Publish(doc.Revision)
@@ -105,6 +117,22 @@ func TestStateMachinePublishedVersionsRemainImmutable(t *testing.T) {
 	_ = json.Unmarshal(encoded, &response)
 	if len(response.Versions) != 2 || response.Versions[1].Transitions[0].Actions[0].Value != 1 || response.Versions[2].Transitions[0].Actions[0].Value != 2 {
 		t.Fatalf("published definitions lost or overwritten: %s", encoded)
+	}
+}
+
+func TestStateMachineInitialStateEditableOnlyBeforeFirstPublication(t *testing.T) {
+	doc, _ := NewStateMachineDocument(testStateMachineDefinition())
+	draft := testStateMachineDefinition()
+	draft.InitialState = "running"
+	doc, err := doc.SaveDraft(draft, doc.Revision)
+	if err != nil || doc.CurrentState != "running" {
+		t.Fatalf("unpublished initial state ignored: %+v %v", doc, err)
+	}
+	doc, _ = doc.Publish(doc.Revision)
+	draft.InitialState = "stopped"
+	doc, err = doc.SaveDraft(draft, doc.Revision)
+	if err != nil || doc.CurrentState != "running" {
+		t.Fatalf("draft reset published process state: %+v %v", doc, err)
 	}
 }
 
