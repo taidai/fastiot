@@ -22,14 +22,14 @@ The worktree starts at the current committed source plus only task-related pendi
 | 04 | [行业包依赖门禁](04.md) | 02 | integrated — 3ec9fdb |
 | 05 | [单设备 Profile 接入与只读验证](05.md) | 03 | integrated — b633be0 |
 | 06 | [批量接入与 CSV 逐台结果](06.md) | 05 | integrated — e068b25 |
-| 07 | [操作抽屉与命令回读闭环](07.md) | 05 | in progress — isolated worktree |
-| 08 | [L3 安全写回读验证](08.md) | 07 | pending |
+| 07 | [操作抽屉与命令回读闭环](07.md) | 05 | code integrated — 9de5c1d; full-suite acceptance open |
+| 08 | [L3 安全写回读验证](08.md) | 07 | queued — integrated command contract; final acceptance gated |
 | 09 | [按层总览与可信实时数据](09.md) | 02 | integrated — b74d6e2 |
 | 10 | [历史查询、断线曲线与 CSV](10.md) | 02 | integrated — b399379 |
 | 11 | [告警生命周期与交接持久化](11.md) | 09, 10 | integrated — aac3628 |
 | 12 | [今日电量、运行时长与健康统计](12.md) | 09, 10 | integrated — c273cbc |
-| 13 | [四段式规则与显式作用范围](13.md) | 07 | pending |
-| 14 | [状态机定义、模拟与受控执行](14.md) | 07 | pending |
+| 13 | [四段式规则与显式作用范围](13.md) | 07 | queued — integrated command contract; final acceptance gated |
+| 14 | [状态机定义、模拟与受控执行](14.md) | 07 | queued — integrated command contract; final acceptance gated |
 | 15 | [持续运行的聚合点](15.md) | 09, 10 | integrated — 8d927ab |
 | 16 | [今日执行统一查询](16.md) | 13, 14 | pending |
 | 17 | [配界面保存到客户总览](17.md) | 09, 11, 12 (active-alarm and statistics bindings) | integrated — 02220a1; preview repair verified |
@@ -68,4 +68,6 @@ The worktree starts at the current committed source plus only task-related pendi
 - Parent reproduced workspace module-resolution failure, then used the uniapp-owned dependency and explicit preview query. Workspace and delivery isolated browser tests passed with zero live API requests. Delivery original retest also passed before editing; its test now waits for the asynchronously loaded table before the unchanged exact-three count, rather than asserting during loading. This readiness fix does not retrospectively prove the first failure's cause.
 - Final06/17-preview combination `02220a1`, evidence `b0173ad`:133frontend/type/build, all37Go packages, five realGo browser pairs and22 focused regressions passed. Four original auth scenarios each passed all three preview suites with unchanged8s/2300ms boundaries. Confirmed auth re-entry and design-preview regressions are repaired/verified; original uninstrumented-timeout causality is not retroactively asserted. Integrated count13/25;07 is the active dependency gate.
 - The preliminary06-only full run failed before Profile assertions because a bootstrap password update was ignored by the store timestamp guard. Final planned combination passed without excluding the test. Parent traced `Bootstrap` through acknowledged point writes and verified default admin edges are created after initial points; no root-cause claim or clock/storage workaround is made. This bootstrap ordering stability finding remains for final acceptance, with fixture hashes kept out of reports.
+- 07 code integrated through `3563e89`, `e010b67`, `9de5c1d`: durable intent before IO, cold request-ID lookup, canonical unknown/rejected states; independently reproduced and fixed rejected cabinet pending and failed/unknown invalid transition.135frontend/type/React+H5, real operations/batch/access/screen/alarms/daily, four auth scenarios, project and preview checks passed. Cabinets preserve canonical results/maintenance and never redispatch in the verified matrix.
+- **Final full-suite acceptance is still open:** the one final Go run on9de5c1d passed36 packages but appapi failed `TestPumpHouseSampleCommandLifecycle` with unknown(clock_basis_inconsistent). Two bounded logging-only focused executions passed; neither reproduced or explained the full failure. Detailed probe counted112 samples with no native/wall predicate difference. The reason label alone does not establish clock step (window predicates also differ in arrival-order checks). No clocks/timeouts/assertions were changed, no full-suite green-seeking retry. Raw logs remain `.scratch/command-integration/`; historical bootstrap finding also remains.07 implementation is available to08/13/14, but this shared failure gates final25 acceptance.14/25 code integrated is not14 fully accepted tickets.
 - Local baseline and per-ticket verification must be recorded before marking a ticket complete.
