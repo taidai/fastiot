@@ -27,6 +27,11 @@ func projectedRuleText(point data.Point, text string) data.Point {
 // Read visibility is not execution eligibility: disabled/unverified but visible
 // references remain readable. Never mutate the stored definition or evidence.
 func (h *Handler) readableRuleDocument(identity Identity, doc decision.Document) bool {
+	for _, target := range doc.Bindings.Points {
+		if !h.inputVisible(identity, target) {
+			return false
+		}
+	}
 	for _, bindings := range []map[string]decision.Target{doc.Bindings.Points, doc.Bindings.Actions} {
 		for _, target := range bindings {
 			if target.NodeID == "" || !h.allows(identity, target.NodeID) {
@@ -49,6 +54,9 @@ func (h *Handler) readableRuleTrace(identity Identity, nodeID string, report dec
 		return false
 	}
 	for _, input := range report.Inputs {
+		if input.Observation != nil && !h.inputEvidenceVisible(identity, *input.Observation) {
+			return false
+		}
 		id := input.Target.NodeID
 		if id == "" {
 			id = doc.Bindings.Points[input.Input].NodeID

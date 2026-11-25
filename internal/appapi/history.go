@@ -48,6 +48,9 @@ func (r historyResolver) Resolve(id string) (historyquery.Node, error) {
 		return historyquery.Node{}, historyquery.ErrForbidden
 	}
 	node := nodes[0]
+	if node.Type == virtualInputType || node.Type == calculationType {
+		return historyquery.Node{ID: node.ID, Type: node.Type, Derived: true}, nil
+	}
 	if node.Type == data.NodeTypeGroup || node.Parent == "root" {
 		if definition, ok := node.Points.Find(aggregatePoint, ""); ok && definition.Tombstone%2 == 0 {
 			return historyquery.Node{ID: node.ID, Type: node.Type, Aggregate: true}, nil

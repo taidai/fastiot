@@ -298,7 +298,7 @@ func (h *Handler) validateStateMachineScope(parent string, definition decision.S
 		return err
 	}
 	for pointID, target := range definition.Bindings.Points {
-		if err := validateStateMachineTarget(h, parent, definition.Scope, target, false, nil); err != nil {
+		if err := h.validateMachineInput(parent, definition.Scope, target); err != nil {
 			return fmt.Errorf("point %s: %w", pointID, err)
 		}
 	}
@@ -380,7 +380,7 @@ func (h *Handler) executeStateMachine(w http.ResponseWriter, r *http.Request, no
 		writeError(w, 403, "target_out_of_scope")
 		return
 	}
-	values, texts, err := decision.ReadLiveInputs(h.nc, node.Parent, document.Applied.Bindings.Points)
+	values, texts, observations, err := h.readMachineInputs(node.Parent, document.Applied.Bindings.Points)
 	if err != nil {
 		writeError(w, 409, "input_unavailable")
 		return
@@ -390,7 +390,7 @@ func (h *Handler) executeStateMachine(w http.ResponseWriter, r *http.Request, no
 		inputError(w, err)
 		return
 	}
-	execution := &decision.StateMachineExecution{RequestID: input.RequestID, Version: document.Version, Trace: plan.Trace, At: time.Now().UTC(), Event: input.Event, Status: plan.Status, TransitionID: plan.TransitionID, From: plan.From, To: plan.To, Reason: plan.Reason}
+	execution := &decision.StateMachineExecution{InputObservations: observations, RequestID: input.RequestID, Version: document.Version, Trace: plan.Trace, At: time.Now().UTC(), Event: input.Event, Status: plan.Status, TransitionID: plan.TransitionID, From: plan.From, To: plan.To, Reason: plan.Reason}
 	var actions []decision.Action
 	if plan.Status == "matched" {
 		for _, transition := range document.Applied.Transitions {

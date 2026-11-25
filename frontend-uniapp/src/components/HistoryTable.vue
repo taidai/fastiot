@@ -11,7 +11,7 @@
             {{ qualityText(record.quality) }}<view v-if="record.reason" class="reason">{{ record.reason }}</view>
           </td>
           <td v-if="!compact" class="time">{{ historyTimeText({ source_time: record.received_time }) }}<view class="reason">{{ record.time_source || '观测时间依据未声明' }}<template v-if="record.late"> · 迟到观测</template></view></td>
-          <td v-if="!compact">{{ sourceText(record.source) }}</td>
+          <td v-if="!compact">{{ sourceText(record) }}</td>
         </tr>
       </tbody>
       <tbody v-else><tr class="placeholder-row"><td :colspan="compact ? 4 : 6">该时间范围没有记录</td></tr></tbody>
@@ -30,8 +30,18 @@ function timeText(record: HistoryRecord) {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString("zh-CN", { hour12: false })
 }
-function sourceText(source: string) {
-  return source === "modbus_runtime" ? "运行历史" : source === "siot" ? "点位历史" : source || "—"
+function sourceText(record: HistoryRecord) {
+  if (record.source === 'derived_runtime' || record.source === 'aggregate_runtime') {
+    try {
+      const input = JSON.parse(record.text || '{}')
+      const inputs: any[] = Array.isArray(input.observations) ? input.observations : [input]
+      const sources = [...new Set(inputs.map(item => item.source).filter(Boolean))].join(' / ')
+      const windows = [...new Set(inputs.map(item => item.config?.window || (typeof item.window === 'string' ? item.window : '')).filter(Boolean))].join(' / ')
+      const evaluations = inputs.map(item => item.evaluated_at).filter(Boolean).sort()
+      return [record.source === 'aggregate_runtime' ? '聚合历史' : '派生历史', sources, '非物理回读', inputs.some(item => item.simulated) ? '含模拟输入' : '', windows ? `窗口 ${windows} · 最大记录滞后 ${Math.max(...inputs.map(item => item.lag_seconds || 0))}s` : '', evaluations.length ? `计算于 ${evaluations[0]}${evaluations.length > 1 ? ` 至 ${evaluations.at(-1)}` : ''}` : ''].filter(Boolean).join(' · ')
+    } catch { return '派生历史 · 来源证据无效' }
+  }
+  return record.source === "modbus_runtime" ? "运行历史" : record.source === "siot" ? "点位历史" : record.source || "—"
 }
 </script>
 

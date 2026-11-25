@@ -54,7 +54,7 @@
             <view class="transition-detail">
               <strong>守卫</strong>
               <view v-for="(condition, conditionIndex) in transition.conditions" :key="conditionIndex" class="inline-editor">
-                <select :value="condition.point_id" @change="condition.point_id = inputValue($event); changed()"><option v-for="node in available" :key="node.id" :value="businessId(node)">{{ nameOf(node) }}</option></select>
+                <select :value="condition.point_id" @change="condition.point_id = inputValue($event); changed()"><option v-for="node in available" :key="node.id" :value="businessId(node)">{{ nameOf(node) }}{{ isDerivedInput(node) ? ` · ${metricForPoint(node.id, snapshot, []).quality}` : '' }}</option></select>
                 <select :value="condition.kind || 'number'" @change="changeGuardKind(condition, $event)"><option value="number">数值</option><option value="bool">布尔</option><option value="enum">枚举</option></select>
                 <select v-model="condition.operator" @change="changed"><option value="eq">=</option><option value="ne">≠</option><option v-if="!condition.kind || condition.kind === 'number'" value="gt">></option><option v-if="!condition.kind || condition.kind === 'number'" value="ge">≥</option><option v-if="!condition.kind || condition.kind === 'number'" value="lt"><</option><option v-if="!condition.kind || condition.kind === 'number'" value="le">≤</option></select>
                 <input v-if="condition.kind === 'enum'" :value="condition.text" @input="condition.text = inputValue($event); changed()">
@@ -66,14 +66,14 @@
             </view>
             <view class="transition-detail">
               <strong>动作序列</strong>
-              <StateMachineActionEditor :actions="transition.actions" :definition="draft" :inputs="available" :outputs="outputs" :commands="commandOptions" @change="changed" />
+              <StateMachineActionEditor :actions="transition.actions" :definition="draft" :inputs="available.filter(node => !isDerivedInput(node))" :outputs="outputs" :commands="commandOptions" @change="changed" />
               <span v-if="!transition.actions.length" class="src">无动作：仅记录状态转移</span>
             </view>
           </view>
           <view v-if="!draft.transitions.length" class="empty">尚无转移。</view>
           <details v-for="state in states" :key="state" class="transition-detail"><summary>{{ state }} · 进入／退出动作</summary>
-            <strong>退出 {{ state }}</strong><StateMachineActionEditor :actions="lifecycleActions(state, 'exit')" :definition="draft" :inputs="available" :outputs="outputs" :commands="commandOptions" @change="changed" />
-            <strong>进入 {{ state }}</strong><StateMachineActionEditor :actions="lifecycleActions(state, 'entry')" :definition="draft" :inputs="available" :outputs="outputs" :commands="commandOptions" @change="changed" />
+            <strong>退出 {{ state }}</strong><StateMachineActionEditor :actions="lifecycleActions(state, 'exit')" :definition="draft" :inputs="available.filter(node => !isDerivedInput(node))" :outputs="outputs" :commands="commandOptions" @change="changed" />
+            <strong>进入 {{ state }}</strong><StateMachineActionEditor :actions="lifecycleActions(state, 'entry')" :definition="draft" :inputs="available.filter(node => !isDerivedInput(node))" :outputs="outputs" :commands="commandOptions" @change="changed" />
           </details>
           <p class="note">执行顺序：退出动作 → 转移动作 → 进入动作；全部确认后才推进过程状态。</p>
         </fieldset>
@@ -95,7 +95,8 @@ import { computed, onMounted, ref, watch } from "vue"
 import { request } from "../../api/client"
 import { nameOf } from "../../types/api"
 import type { Snapshot } from "../../types/api"
-import { businessId, conditionText, actionText, isRamped, isWritable } from "./strategy"
+import { metricForPoint } from '../../pages/overview/overview'
+import { businessId, conditionText, actionText, isDerivedInput, isRamped, isWritable } from "./strategy"
 import type { Condition, Action } from "./strategy"
 import { bindStateMachineDefinition, createStateMachineDefinition, executionStatusText, stateMachineSimulationPayload, stateMachineInputValue as inputValue, stateMachineInputNumber as inputNumber, stateMachineCommandText } from "./state-machine"
 import type { StateMachineDefinition, StateMachineRecord, StateMachineSimulation, StateTransition, MachineCommandOption } from "./state-machine"
@@ -128,7 +129,7 @@ const commandOptions = ref<MachineCommandOption[]>([])
 const pendingEvent = ref<{ request_id: string; event: string; revision: number; confirm: true } | null>(null)
 const eventStorageKey = (id: string) => `fastiot.machine-event.${id}`
 const nodes = computed(() => props.snapshot?.nodes || [])
-const available = computed(() => nodes.value.filter(node => node.type === "variable" || node.type === "modbusIo"))
+const available = computed(() => nodes.value.filter(node => node.type === "variable" || node.type === "modbusIo" || isDerivedInput(node)))
 const outputs = computed(() => available.value.filter(node => isWritable(node) && !isRamped(node)))
 const states = computed(() => statesText.value.split(/[,，]/).map(value => value.trim()).filter(Boolean))
 const referencedInputs = computed(() => [...new Set((draft.value?.transitions || []).flatMap(transition => transition.conditions.map(condition => condition.point_id)))])

@@ -25,7 +25,8 @@ test("prototype tools remain reachable without inventing placeholder functionali
 })
 
 test("configurator shares the customer renderer instead of owning fake side-card state", () => {
-  assert.match(ui, /<ScreenRenderer[^>]*:document="draft"/)
+  assert.match(ui, /<ScreenRenderer[^>]*:document="previewDocument"/)
+  assert.match(ui, /!dirty\.value && saved\?\.inherited_from \? \{ \.\.\.draft\.value, inherited_from: saved\.inherited_from, version: saved\.version \|\| 0 \} : draft\.value/)
   for (const fixture of ["饮水线冲洗", "备用泵试转", "采暖预循环", "早高峰放电", "批量并网", "10:42 · 启动"]) assert.ok(!ui.includes(fixture), fixture)
   assert.doesNotMatch(ui, /data-preview="(?:today|oplog|trend)"/)
   assert.match(delivery, /v-if="PREVIEW_MODE && versions.length"[\s\S]*?版本差异/)

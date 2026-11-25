@@ -46,6 +46,7 @@ import { currentProject, projectContext } from "../../stores/projects"
 import type { HistoryRecord, HistoryPointResult, HistoryQueryResponse } from "../../types/api"
 import { buildHistoryQuery } from "./history"
 import type { HistoryCursor, HistoryScope } from "./history"
+import { isDerivedInput } from '../../components/design/strategy'
 import { businessName, unitOf } from "../overview/overview"
 import { DEFAULT_APPEARANCE, applyAppearanceDocument, normalizeAppearance } from "../overview/appearance"
 import type { Appearance, AppearanceTheme } from "../overview/appearance"
@@ -89,7 +90,7 @@ let exportSerial = 0
 
 const projectName = computed(() => currentProject.value?.name || "未选择项目")
 const unackedAlarms = computed(() => session.alarms.filter(alarm => alarm.active && alarm.state === "active"))
-const pointOptions = computed(() => (session.snapshot?.nodes || []).filter(node => ["variable", "modbusIo", "opcuaPoint", "mqttSub"].includes(node.type)).map(node => ({
+const pointOptions = computed(() => (session.snapshot?.nodes || []).filter(node => ["variable", "modbusIo", "opcuaPoint", "mqttSub"].includes(node.type) || isDerivedInput(node)).map(node => ({
   id: node.id,
   label: businessName(node),
   unit: unitOf(node),
@@ -126,7 +127,7 @@ async function load(older = false) {
   if (!point.value || !authorized) return
   const cursor = older ? nextCursor.value : undefined
   if (older && (!cursor || !activeScope.value)) return
-  const scope = older ? activeScope.value! : { point: point.value, ...period(range.value), aggregate: gran.value }
+  const scope = older ? activeScope.value! : { point: point.value, type: currentNode.value?.points.some(item => item.type === 'easyemsAggregate' && (item.tombstone || 0) % 2 === 0) ? 'easyemsAggregateValue' : 'value', ...period(range.value), aggregate: gran.value }
   bounds.value = { start: scope.start, end: scope.end }
   loading.value = true
   loadError.value = ""

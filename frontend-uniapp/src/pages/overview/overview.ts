@@ -113,6 +113,18 @@ export function metricForPoint(pointId: string, snapshot: Snapshot | null, value
   const node = snapshot?.nodes.find(item => item.id === pointId)
   const sample = values.find(item => item.point_id === pointId)
   const label = businessName(node)
+  const evidence = node && point(node, 'easyemsInput')?.text
+  if (evidence) {
+    try {
+      const input = JSON.parse(evidence)
+      const sources: Record<string, string> = { aggregate: '聚合', calculation: '计算', configuration: '配置输入', manual: '人工输入', simulation: '模拟输入' }
+      const quality = [qualityLabel(input.quality), sources[input.source] || '未知来源', input.software ? '软件值，非物理回读' : '', input.simulated ? '含模拟输入' : '', input.window ? `窗口 ${input.window} · 允许滞后 ≤ 一个窗口 · ${input.time && Number.isFinite(input.lag_seconds) ? `当前 ${Math.ceil(input.lag_seconds)}s` : '滞后未知（等待闭合窗口）'}` : '', input.time_source || '无观测时间依据'].filter(Boolean).join(' · ')
+      const value = input.quality !== 'good' ? '—' : input.kind === 'enum' ? input.text || '—' : typeof input.value === 'number' && Number.isFinite(input.value) ? (input.kind === 'bool' ? (input.value ? '是' : '否') : String(input.value)) : '—'
+      return { id: pointId, label, unit: input.unit || '', value, quality, time: shortTime(input.time) }
+    } catch {
+      return { id: pointId, label, unit: '', value: '—', quality: '来源证据无效', time: '—' }
+    }
+  }
   return {
     id: pointId,
     label,

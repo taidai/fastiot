@@ -133,9 +133,11 @@ export function bindStateMachineDefinition(definition: StateMachineDefinition, n
 function withDiscoveredBindings(nodes: Node[]) {
   const bindings: StateMachineDefinition["bindings"] = { points: {}, actions: {} }
   for (const node of nodes) {
-    if (node.type !== "variable" && node.type !== "modbusIo") continue
+    const aggregate = !!activePoint(node, 'easyemsAggregate')?.text
+    const derived = aggregate || node.type === 'virtualInput' || node.type === 'calculationPoint'
+    if (node.type !== "variable" && node.type !== "modbusIo" && !derived) continue
     const id = nodeBusinessId(node)
-    bindings.points[id] = { node_id: node.id, point_type: "value" }
+    bindings.points[id] = { node_id: node.id, point_type: aggregate ? 'easyemsAggregateValue' : 'value', ...(derived ? { use: 'decision' as const } : {}) }
     if (nodeWritable(node)) bindings.actions[id] = { node_id: node.id, point_type: "valueSet" }
   }
   return bindings

@@ -245,6 +245,7 @@ func (h *Handler) NewRuleClient(nc *nats.Conn, config decision.DecisionTable) cl
 		return samples
 	}
 	return decision.NewDecisionTableClientWithCommands(nc, config, observations, decision.RuleCommands{
+		ReadInput:        h.readBoundInput,
 		Validate:         func(id string, doc decision.Document) error { _, err := h.ruleRuntimeAuthority(id, doc); return err },
 		Notify:           h.submitRuleNotification,
 		Submit:           h.submitRuleCommand,

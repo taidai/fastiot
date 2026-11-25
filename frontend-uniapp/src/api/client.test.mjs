@@ -43,6 +43,47 @@ async function pendingRequest(app, path = '/snapshot') {
   return { promise, request: app.requests.shift() }
 }
 
+test('derived polling refreshes only observations and fails closed without replacing definitions', async () => {
+  const app = await application()
+  let tick
+  const interval = globalThis.setInterval, clear = globalThis.clearInterval
+  globalThis.setInterval = callback => { tick = callback; return 1 }
+  globalThis.clearInterval = () => {}
+  const snapshot = (value, definition = 'saved-config') => ({ roots: ['project-a'], nodes: [{ id: 'derived', parent: 'project-a', type: 'virtualInput', points: [{ type: 'easyemsInput', text: JSON.stringify({ value, quality: 'good' }) }, { type: 'easyemsScreen', text: definition }] }] })
+  const respond = (requests, value, failSnapshot = false) => requests.forEach(request => request.success({ statusCode: failSnapshot && request.url === '/api/snapshot' ? 403 : 200, data: request.url === '/api/snapshot' ? snapshot(value, value === 1 ? 'saved-config' : 'different-server-definition') : { values: [], alarms: [], channels: [], devices: [], evaluated_at: '2026-11-25T10:00:00Z' } }))
+  try {
+    app.api.startPolling()
+    await new Promise(resolve => setImmediate(resolve))
+    respond(app.requests.splice(0), 1)
+    await new Promise(resolve => setImmediate(resolve))
+    tick()
+    await new Promise(resolve => setImmediate(resolve))
+    const poll = app.requests.splice(0)
+    respond(poll, 2)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.ok(poll.some(request => request.url === '/api/snapshot'), 'the existing runtime tick must refresh derived observations')
+    const points = app.api.session.snapshot.nodes[0].points
+    assert.equal(JSON.parse(points.find(point => point.type === 'easyemsInput').text).value, 2)
+    assert.equal(points.find(point => point.type === 'easyemsScreen').text, 'saved-config')
+    tick()
+    await new Promise(resolve => setImmediate(resolve))
+    respond(app.requests.splice(0), 3, true)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(app.api.session.snapshot.nodes[0].points.some(point => point.type === 'easyemsInput'), false)
+    assert.match(app.api.session.runtimeError, /无权/)
+    tick()
+    await new Promise(resolve => setImmediate(resolve))
+    const old = app.requests.splice(0)
+    await app.api.selectProject('project-b', async () => true)
+    respond(old, 99)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(app.api.session.snapshot, null)
+  } finally {
+    app.api.stopPolling()
+    globalThis.setInterval = interval; globalThis.clearInterval = clear
+  }
+})
+
 test('project selection fences late reads and writes and persists only authorized context', async () => {
   const app = await application()
   const old = await pendingRequest(app)

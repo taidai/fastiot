@@ -1,11 +1,11 @@
 import type { HistoryRecord } from "../../types/api"
 
-export type HistoryScope = { point: string; start: Date; end: Date; aggregate: string }
+export type HistoryScope = { type?: string; point: string; start: Date; end: Date; aggregate: string }
 export type HistoryCursor = { before: string; count: number }
 
 // Export omits the page cursor, but uses the exact successful query window.
 export function buildHistoryQuery(scope: HistoryScope, cursor?: HistoryCursor) {
-  const params = new URLSearchParams({ type: "value", node_id: scope.point, start: scope.start.toISOString(), end: scope.end.toISOString(), aggregate: scope.aggregate })
+  const params = new URLSearchParams({ type: scope.type || "value", node_id: scope.point, start: scope.start.toISOString(), end: scope.end.toISOString(), aggregate: scope.aggregate })
   if (cursor) { params.set("before", cursor.before); params.set("before_count", String(cursor.count)) }
   return params.toString()
 }
@@ -19,8 +19,9 @@ export function qualityText(quality?: string) {
   return ({ good: "有效", stale: "过期", invalid: "无效", uninitialized: "未初始化" } as Record<string, string>)[quality || ""] || quality || "—"
 }
 
-export function historyValueText(record: Pick<HistoryRecord, "value" | "text" | "kind">) {
+export function historyValueText(record: Pick<HistoryRecord, "value" | "text" | "kind"> & { source?: string }) {
   if (record.kind === "quality_event") return "质量事件"
+  if ((record.source === 'derived_runtime' || record.source === 'aggregate_runtime') && typeof record.value === 'number') return String(Number(record.value.toPrecision(12)))
   if (record.text) return record.text
   return record.value === undefined ? "—" : String(Number(record.value.toPrecision(12)))
 }

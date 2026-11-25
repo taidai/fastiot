@@ -37,7 +37,7 @@ export type Row = {
   hold_ms?: number
   cooldown_ms?: number
 }
-export type Target = { node_id: string; point_type?: string; key?: string; command_id?: string; parameter?: string }
+export type Target = { use?: 'decision' | 'protection' | 'interlock' | 'readback'; node_id: string; point_type?: string; key?: string; command_id?: string; parameter?: string }
 export type DecisionDocument = {
   scope?: "self" | "descendants"
   revision?: string
@@ -124,10 +124,17 @@ export function isRamped(node: Node) {
   }
 }
 
+export function isDerivedInput(node: Node) {
+  return node.type === 'virtualInput' || node.type === 'calculationPoint' || !!activePoint(node, 'easyemsAggregate')?.text
+}
+
 export function withBindings(document: DecisionDocument, nodes: Node[]): DecisionDocument {
   const result = JSON.parse(JSON.stringify(document)) as DecisionDocument
   for (const node of nodes) {
     const id = businessId(node)
+    if (isDerivedInput(node)) {
+      result.bindings.points[id] ||= { node_id: node.id, point_type: activePoint(node, 'easyemsAggregate')?.text ? 'easyemsAggregateValue' : 'value', use: 'decision' }
+    }
     if (node.type === "variable" || node.type === "modbusIo") {
       result.bindings.points[id] ||= { node_id: node.id, point_type: "value" }
       if (isWritable(node)) result.bindings.actions[id] ||= { node_id: node.id, point_type: "valueSet" }
@@ -173,10 +180,20 @@ export function ruleInputNumber(event: unknown): number {
   return raw && Number.isFinite(value) ? value : Number.NaN
 }
 
-export function liveSimulationInputs(document: DecisionDocument, values: StateValue[]) {
+export function liveSimulationInputs(document: DecisionDocument, values: StateValue[], nodes: Node[] = []) {
   const inputs: Record<string, number> = {}
   const textInputs: Record<string, string> = {}
   for (const [id, target] of Object.entries(document.bindings.points)) {
+    const node = nodes.find(node => node.id === target.node_id)
+    if (node && isDerivedInput(node)) {
+      try {
+        const input = JSON.parse(activePoint(node, 'easyemsInput')?.text || '{}')
+        if (input.quality !== 'good' || !input.time) continue
+        if (input.kind === 'enum' && input.text) textInputs[id] = input.text
+        else if (typeof input.value === 'number' && Number.isFinite(input.value)) inputs[id] = input.value
+      } catch { /* No assumed value when source evidence is absent or invalid. */ }
+      continue
+    }
     const sample = values.find(value => value.point_id === target.node_id)
     if (!sample || sample.quality !== 'good' || !sample.source_time) continue
     if (sample.expires_at && Date.parse(sample.expires_at) <= Date.now()) continue

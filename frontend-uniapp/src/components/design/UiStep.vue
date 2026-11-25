@@ -41,7 +41,7 @@
             <view v-for="(metric, index) in kpiBinding.metrics" :key="index" class="metric-editor">
               <select :aria-label="`指标 ${index + 1} 绑定`" :value="metricKey(metric)" @change="changeMetric(index, inputValue($event))">
                 <option v-if="metric.point_id && !pointOptions.some(point => point.id === metric.point_id)" :value="`point:${metric.point_id}`">未绑定或不在本层范围</option>
-                <optgroup label="本层及下级点位"><option v-for="option in pointOptions" :key="option.id" :value="`point:${option.id}`">{{ option.label }}</option></optgroup>
+                <optgroup label="本层及下级点位"><option v-for="option in pointOptions" :key="option.id" :value="`point:${option.id}`">{{ option.label }}{{ option.detail ? ` · ${option.detail}` : '' }}</option></optgroup>
                 <optgroup label="自动指标"><option v-for="option in automaticMetrics" :key="option.key" :value="`auto:${option.key}`">{{ option.label }}</option></optgroup>
               </select>
               <input v-model="metric.label" aria-label="指标名称" placeholder="显示名称" />
@@ -82,7 +82,7 @@
             <view><span class="kicker">{{ projectName }} / {{ selectedKind }}</span><h1>{{ selectedName }}</h1></view>
             <view class="cust-head-right"><span class="chip ok">客户画面预览</span><view class="cust-tools"><span>历史数据</span><span>刷新</span><span>全屏</span></view></view>
           </view>
-          <ScreenRenderer :document="draft" :snapshot="snapshot" :values="values" :quality="quality" :alarms="alarms" :ledger="ledger" :layer-id="selected?.id || ''" :last-sync="lastSync" @history="emit('history', $event)" />
+          <ScreenRenderer :document="previewDocument" :snapshot="snapshot" :values="values" :quality="quality" :alarms="alarms" :ledger="ledger" :layer-id="selected?.id || ''" :last-sync="lastSync" @history="emit('history', $event)" />
 
         </view>
       </view>
@@ -101,7 +101,8 @@ import { PREVIEW_MODE } from "../../api/source"
 import { request, ApiError } from "../../api/client"
 import { nameOf } from "../../types/api"
 import type { EmsAlarm, ScreenConfig, Snapshot, StateValue } from "../../types/api"
-import { boundDevicesForLayer, devicePointIds, isBusinessLayer } from "../../pages/overview/overview"
+import { isDerivedInput } from "./strategy"
+import { boundDevicesForLayer, devicePointIds, isBusinessLayer, metricForPoint } from "../../pages/overview/overview"
 import type { LedgerDevice } from "../../pages/overview/overview"
 import { memberRolesOf } from "./members"
 import { flattenLedger, kindLabel } from "./design"
@@ -143,7 +144,7 @@ watch(() => props.snapshot?.roots.join('|'), async () => {
 }, { immediate: true })
 const pointOptions = computed(() => {
   const physical = new Set(devicePointIds(nodes.value, boundDevicesForLayer(selected.value?.id || '', nodes.value, ledger.value, memberRolesOf(selected.value).flatMap(member => member.node_id ? [member.node_id] : []))))
-  return nodes.value.filter(node => physical.has(node.id) || layerIds.value.has(node.id) && ['variable', 'calculationPoint'].includes(node.type)).map(node => ({ id: node.id, label: nameOf(node) }))
+  return nodes.value.filter(node => physical.has(node.id) || layerIds.value.has(node.id) && (node.type === 'variable' || isDerivedInput(node))).map(node => ({ id: node.id, label: nameOf(node), detail: isDerivedInput(node) ? metricForPoint(node.id, props.snapshot, props.values).quality : '' }))
 })
 const savedScreen = ref<ScreenLike | null>(null)
 const draft = ref<ScreenDocument>(defaultScreen("", "", "现场", []))
@@ -153,6 +154,10 @@ const busy = ref("")
 const saveStatus = ref("")
 const saveError = ref("")
 const dirty = computed(() => JSON.stringify(draft.value) !== baseline.value)
+const previewDocument = computed(() => {
+  const saved = savedScreen.value as ScreenDocument | null
+  return !dirty.value && saved?.inherited_from ? { ...draft.value, inherited_from: saved.inherited_from, version: saved.version || 0 } : draft.value
+})
 watch(draft, () => { if (dirty.value) saveStatus.value = "" }, { deep: true, flush: "sync" })
 const sourceText = computed(() => {
   const screen = savedScreen.value as ScreenDocument | null

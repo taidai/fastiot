@@ -209,6 +209,8 @@ func (h *Handler) publicAggregateNodes(identity Identity, nodes []data.NodeEdge)
 		evidence := data.NewPointString(aggregateResultPoint, "0", string(encoded))
 		evidence.Time = result.EvaluatedAt
 		out[i].Points = append(out[i].Points, definition, evidence)
+		input, _ := json.Marshal(aggregateInput(result))
+		out[i].Points = append(out[i].Points, data.NewPointString("easyemsInput", "0", string(input)))
 		if result.Value != nil && result.Time != nil {
 			scalar := data.NewPointFloat(aggregateValuePoint, "0", *result.Value)
 			scalar.Time = *result.Time

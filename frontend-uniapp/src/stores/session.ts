@@ -99,18 +99,33 @@ async function refreshSnapshot() {
   }
 }
 
+// Runtime polls merge observations only: saved definitions and editor drafts
+// are not replaced by a periodically fetched configuration snapshot.
+function mergeInputObservations(snapshot?: Snapshot) {
+  if (!session.snapshot) return
+  const current = new Map(snapshot?.nodes.map(node => [node.id, node]) || [])
+  session.snapshot = { ...session.snapshot, nodes: session.snapshot.nodes.map(node => {
+    const points = current.get(node.id)?.points?.filter(point => point.type === 'easyemsInput') || []
+    if (!points.length && !node.points?.some(point => point.type === 'easyemsInput')) return node
+    return { ...node, points: [...(node.points || []).filter(point => point.type !== 'easyemsInput'), ...points] }
+  }) }
+}
+
 async function refreshRuntime() {
   const serial = ++runtimeSerial
   const generation = projectContext.generation
   const token = session.token
   const current = () => serial === runtimeSerial && generation === projectContext.generation && token === session.token
   try {
-    const [state, quality, alarms] = await Promise.all([
+    const derived = session.snapshot?.nodes.some(node => node.type === 'virtualInput' || node.type === 'calculationPoint' || node.points?.some(point => point.type === 'easyemsAggregate'))
+    const [state, quality, alarms, inputs] = await Promise.all([
       request<{ values: StateValue[]; evaluated_at: string }>("/ems/state"),
       request<{ channels: unknown[]; devices: unknown[] }>("/ems/quality"),
       request<{ alarms: EmsAlarm[] }>("/ems/alarms"),
+      derived ? request<Snapshot>('/snapshot') : Promise.resolve(undefined),
     ])
     if (!current()) return
+    if (inputs) mergeInputObservations(inputs)
     session.values = state.values
     session.quality = quality
     session.alarms = alarms.alarms
@@ -121,6 +136,7 @@ async function refreshRuntime() {
     if (!current()) return
     // A failed query is not evidence of a device going offline. Do not keep
     // displaying the preceding successful poll as current, either.
+    mergeInputObservations()
     session.values = []
     session.alarms = []
     session.quality = { channels: [], devices: [] }
@@ -184,7 +200,8 @@ export async function loadScreen(nodeId: string) {
 }
 
 export async function loadHistory(pointId: string, start: Date, end: Date, aggregate = "raw") {
-  const query = new URLSearchParams({ type: "value", start: start.toISOString(), end: end.toISOString(), limit: "2000", aggregate })
+  const type = session.snapshot?.nodes.find(node => node.id === pointId)?.points.some(point => point.type === 'easyemsAggregate' && (point.tombstone || 0) % 2 === 0) ? 'easyemsAggregateValue' : 'value'
+  const query = new URLSearchParams({ type, start: start.toISOString(), end: end.toISOString(), limit: "2000", aggregate })
   query.append("node_id", pointId)
   const result = await request<HistoryQueryResponse & { node_id?: string; points?: any[] }>(`/history?${query.toString()}`)
   if (Array.isArray(result.results)) return result
