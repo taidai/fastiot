@@ -53,11 +53,32 @@ try {
       await page.locator('.tool-links uni-button, .tool-line uni-button').filter({ hasText: new RegExp(`^${tool}(?: →)?$`) }).click()
       await page.locator('.prototype-tools .variant-head b').filter({ hasText: tool }).waitFor()
       if (tool !== '聚合计算') assert.match(await page.locator('.prototype-tools').innerText(), /这一页只验证位置，不实现内容/)
+      if (tool === '聚合计算') {
+        await page.locator('.aggregate-result').getByText('当前值', { exact: true }).waitFor()
+        const member = page.locator('.aggregate-members uni-checkbox').first()
+        assert.ok(await member.count(), 'aggregate membership needs an operable checkbox, not a text input')
+        const before = await member.getAttribute('aria-checked')
+        assert.ok(before === 'true' || before === 'false', 'member selection must expose its checked state')
+        const saved = before === 'true' ? 'false' : 'true'
+        await member.click()
+        await page.waitForFunction(expected => document.querySelector('.aggregate-members uni-checkbox')?.getAttribute('aria-checked') === expected, saved)
+        await page.locator('.aggregate-panel uni-button').filter({ hasText: '保存定义' }).click()
+        await page.locator('.aggregate-panel .notice').filter({ hasText: '聚合定义已保存' }).waitFor()
+        await member.click()
+        await page.waitForFunction(expected => document.querySelector('.aggregate-members uni-checkbox')?.getAttribute('aria-checked') === expected, before)
+        await page.locator('.aggregate-panel .panel-heading uni-button').filter({ hasText: '刷新' }).click()
+        await page.waitForFunction(expected => document.querySelector('.aggregate-members uni-checkbox')?.getAttribute('aria-checked') === expected, saved)
+        await member.focus()
+        await page.keyboard.press('Space')
+        await page.waitForFunction(expected => document.querySelector('.aggregate-members uni-checkbox')?.getAttribute('aria-checked') === expected, before)
+        await page.keyboard.press('Space')
+        await page.waitForFunction(expected => document.querySelector('.aggregate-members uni-checkbox')?.getAttribute('aria-checked') === expected, saved)
+      }
       await page.locator('.prototype-tools uni-button').filter({ hasText: '回台账树' }).click()
       await page.locator('.stepper').waitFor()
     }
   }
   assert.deepEqual(requests, [], 'preview must never call real API')
   assert.deepEqual(errors, [])
-  console.log(JSON.stringify({ ok: true, checks: ['projects', 'EMS gate', '24-device batch', 'workbench roundtrip', 'new project', 'no live API'] }))
+  console.log(JSON.stringify({ ok: true, checks: ['projects', 'EMS gate', '24-device batch', 'workbench roundtrip', 'new project', 'aggregate member mouse/keyboard save/refresh', 'no live API'] }))
 } finally { await browser.close() }

@@ -12,7 +12,7 @@
             <view class="row"><span>质量策略</span><view class="chips"><button :class="{ active: quality === 'ignore' }" @click="quality = 'ignore'">忽略失效</button><button :class="{ active: quality === 'count' }" @click="quality = 'count'">计入失效</button><button :class="{ active: quality === 'degrade' }" @click="quality = 'degrade'">降级</button></view></view>
             <label class="units-field">单位<input v-model="units" placeholder="可选"></label>
             <view class="card-title">成员</view>
-            <div v-if="available.length" class="table-wrap"><table class="mini-table aggregate-members"><thead><tr><th>成员</th><th>值</th><th>质量</th></tr></thead><tbody><tr v-for="node in available" :key="node.id"><td><label class="member-check"><input type="checkbox" :checked="members.includes(node.id)" @change="toggleMember(node.id)"> {{ nameOf(node) }}</label></td><td>{{ memberValue(node.id) }}</td><td>{{ memberResult(node.id)?.quality || '—' }}</td></tr></tbody></table></div>
+            <div v-if="available.length" class="table-wrap"><checkbox-group @change="selectMembers"><table class="mini-table aggregate-members"><thead><tr><th>成员</th><th>值</th><th>质量</th></tr></thead><tbody><tr v-for="node in available" :key="node.id"><td><label class="member-check"><checkbox :value="node.id" :checked="members.includes(node.id)" :disabled="readOnly || busy" role="checkbox" :aria-label="displayName(node.parent) + ' · ' + nameOf(node)" :aria-checked="members.includes(node.id)" :aria-disabled="readOnly || busy" :tabindex="readOnly || busy ? -1 : 0" color="var(--accent)" @keydown.space.prevent="toggleMember(node.id)" /> {{ nameOf(node) }}</label></td><td>{{ memberValue(node.id) }}</td><td>{{ memberResult(node.id)?.quality || '—' }}</td></tr></tbody></table></checkbox-group></div>
             <view v-else class="empty">当前作用域没有可聚合的数值点。</view>
             <div class="actions"><button class="primary" :disabled="readOnly || busy || !members.length" @click="save">保存定义</button></div>
           </fieldset>
@@ -89,7 +89,15 @@ function memberValue(id: string) {
   const member = memberResult(id)
   return member && result.value ? aggregateValueText(member.value, result.value.config.units) : "—"
 }
-function toggleMember(id: string) { members.value = members.value.includes(id) ? members.value.filter(item => item !== id) : [...members.value, id] }
+function toggleMember(id: string) {
+  if (props.readOnly || busy.value || !available.value.some(node => node.id === id)) return
+  members.value = members.value.includes(id) ? members.value.filter(member => member !== id) : [...members.value, id]
+}
+function selectMembers(event: { detail?: { value?: string[] } }) {
+  const selected = event.detail?.value
+  if (props.readOnly || busy.value || !Array.isArray(selected)) return
+  members.value = selected.filter(id => available.value.some(node => node.id === id))
+}
 async function load() {
   if (!props.parent) return
   busy.value = true; error.value = ""; auxError.value = ""
@@ -133,7 +141,6 @@ async function save() {
 .units-field { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 12px; }
 .units-field input { width: 150px; min-height: 34px; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; background: rgba(255,255,255,.72); }
 .member-check { display: flex; align-items: center; gap: 6px; }
-.member-check input { accent-color: var(--accent); }
 .actions { display: flex; gap: 8px; margin-top: 4px; }
 .existing-engines { border-top: 1px solid var(--line); padding-top: 12px; }
 .existing-engines summary { cursor: pointer; font-weight: 600; }

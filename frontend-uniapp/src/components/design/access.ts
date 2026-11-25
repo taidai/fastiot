@@ -59,6 +59,7 @@ export type Profile = {
     readback?: string
     readback_value?: number
     timeout_ms?: number
+    readback_tolerance?: number
     parameters?: { name: string; label?: string; point?: string }[]
   }[]
 }

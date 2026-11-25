@@ -12,6 +12,7 @@ import (
 	"github.com/simpleiot/simpleiot/client"
 	"github.com/simpleiot/simpleiot/data"
 
+	"fastiot/internal/contract"
 	"fastiot/internal/decision"
 	domainaccess "fastiot/internal/domain/access"
 	"fastiot/internal/ems/command"
@@ -678,19 +679,25 @@ func (h *Handler) verifyUnit(w http.ResponseWriter, r *http.Request, identity Id
 		writeError(w, http.StatusBadRequest, "invalid_modbus_unit")
 		return
 	}
+	if model, configured := unitModelFor(channel, server); configured && !h.operationScope(identity, model) {
+		writeError(w, http.StatusForbidden, "out_of_scope")
+		return
+	}
 	if r.Method == http.MethodGet {
 		records := accessVerificationHistory(channel, server)
 		basis := h.accessBasis(channel, server)
 		for i := range records {
 			records[i].Current = basis != "" && records[i].Basis == basis
 		}
-		writeJSON(w, map[string]any{"records": records})
+		writeJSON(w, map[string]any{"records": records, "basis": basis})
 		return
 	}
 	var input struct {
 		Level     string `json:"level"`
 		CommandID string `json:"command_id"`
 		Confirm   bool   `json:"confirm"`
+		RequestID string `json:"request_id"`
+		Basis     string `json:"basis"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
@@ -807,16 +814,30 @@ func (h *Handler) verifyUnit(w http.ResponseWriter, r *http.Request, identity Id
 			writeError(w, http.StatusBadRequest, "l3_confirmation_required")
 			return
 		}
-		if !canAction(identity, ActionCommand) {
-			writeError(w, http.StatusForbidden, "command_required")
+		if !canAction(identity, ActionConfigure) || !canAction(identity, ActionCommand) {
+			writeError(w, http.StatusForbidden, "configure_and_command_required")
 			return
 		}
 		if !h.requireProjectIndustry(w, identity) {
 			return
 		}
+		if strings.TrimSpace(input.RequestID) == "" || len(input.RequestID) > 128 || input.Basis == "" {
+			writeError(w, http.StatusBadRequest, "l3_request_id_and_basis_required")
+			return
+		}
+		if basis == "" || input.Basis != basis {
+			writeError(w, http.StatusConflict, "verification_basis_changed")
+			return
+		}
 		model, configured := unitModelFor(channel, server)
-		if !configured || verificationPending(model) || h.ems == nil || h.ems.Profiles == nil || h.ems.Service == nil {
+		if !configured || h.ems == nil || h.ems.Profiles == nil || h.ems.Service == nil {
 			writeError(w, http.StatusConflict, "verification_required")
+			return
+		}
+		points := h.unitPoints(channel.ID)
+		model = currentProfileModel(model, h.ems.Profiles, points)
+		if model.BusinessNodeID == "" || model.ProfileVersion == "" || model.MappingVersion == "" || verificationPending(model) {
+			writeError(w, http.StatusConflict, "bound_current_profile_required")
 			return
 		}
 		prof, found := h.ems.Profiles.Get(model.ProfileID)
@@ -829,37 +850,60 @@ func (h *Handler) verifyUnit(w http.ResponseWriter, r *http.Request, identity Id
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		for _, spec := range prof.PointSpecs {
+			if spec.Name != safeCommand.Point && spec.Name != safeCommand.Readback {
+				continue
+			}
+			point, mapped := findPoint(points, model.PointMap[spec.Name])
+			if !mapped || point.ServerID != server || point.Disabled || len(pointDifferences(spec, point)) != 0 || numberPoint(channel.Points, data.PointTypeDisabled) != 0 {
+				writeError(w, http.StatusConflict, "l3_profile_mapping_mismatch")
+				return
+			}
+		}
 		deviceID := fmt.Sprintf("%s/%d", channel.ID, server)
 		if _, available := h.commandProfile(deviceID); !available {
 			writeError(w, http.StatusConflict, "command_points_not_mapped")
 			return
 		}
-		if h.ems.Service.State.Health(deviceID) == "offline" {
-			writeError(w, http.StatusConflict, "device_offline")
-			return
-		}
-		requestID := data.NewID()
-		outcome, err := h.ems.Service.Commands().Submit(time.Now(), command.Request{
-			ID: requestID, DeviceID: deviceID, CommandID: input.CommandID, Actor: identity.UserID,
-		})
+		request := command.Request{ID: input.RequestID, DeviceID: deviceID, CommandID: input.CommandID,
+			Actor: identity.UserID, Source: "manual", Stage: "L3", DispatchID: basis, ExactWrites: true}
+		outcome, found, err := h.ems.Service.Commands().Existing(request)
 		if err != nil {
-			writeError(w, http.StatusConflict, err.Error())
+			writeCommandError(w, err)
 			return
 		}
-		timeout := 5 * time.Second
-		if safeCommand.TimeoutMS > 0 {
-			timeout = time.Duration(safeCommand.TimeoutMS) * time.Millisecond
+		if found {
+			if outcome.Stage != "L3" || outcome.DispatchID != basis {
+				writeError(w, http.StatusConflict, "l3_request_basis_conflict")
+				return
+			}
+			for _, record := range accessVerificationHistory(channel, server) {
+				if record.RequestID == input.RequestID {
+					record.Current = record.Basis == basis
+					writeJSON(w, map[string]any{"level": "L3", "passed": record.Current && record.Passed, "reasons": record.Reasons, "record": record, "recorded": true, "command": commandOutcome(outcome)})
+					return
+				}
+			}
+		} else {
+			if h.ems.Service.State.Health(deviceID) == "offline" {
+				writeError(w, http.StatusConflict, "device_offline")
+				return
+			}
+			outcome, err = h.ems.Service.Commands().Submit(time.Now(), request)
+			if err != nil {
+				writeCommandError(w, err)
+				return
+			}
 		}
-		deadline := time.Now().Add(timeout)
-		for !domainaccess.TerminalCommandState(string(outcome.State)) && time.Now().Before(deadline) {
+		for !domainaccess.TerminalCommandState(string(outcome.State)) && time.Now().Before(outcome.Deadline) {
 			time.Sleep(50 * time.Millisecond)
-			if current, found := h.ems.Service.Commands().Get(requestID); found {
+			if current, found := h.ems.Service.Commands().Get(input.RequestID); found {
 				outcome = current
 			}
 		}
 		if !domainaccess.TerminalCommandState(string(outcome.State)) {
 			h.ems.Service.Commands().Tick(time.Now())
-			if current, found := h.ems.Service.Commands().Get(requestID); found {
+			if current, found := h.ems.Service.Commands().Get(input.RequestID); found {
 				outcome = current
 			}
 		}
@@ -867,7 +911,9 @@ func (h *Handler) verifyUnit(w http.ResponseWriter, r *http.Request, identity Id
 		reasons := []string{}
 		if outcome.Reason != "" {
 			reasons = append(reasons, outcome.Reason)
-		} else if !passed {
+		} else if passed {
+			reasons = append(reasons, "Profile 声明的安全写回读已确认")
+		} else {
 			reasons = append(reasons, "命令尚未确认")
 		}
 		h.finishAccessVerification(w, channel, server, identity, input.Level, passed, reasons, basis, map[string]any{"command": commandOutcome(outcome)})
@@ -886,7 +932,15 @@ func (h *Handler) finishAccessVerification(w http.ResponseWriter, channel data.N
 	record := domainaccess.VerificationRecord{At: time.Now().UTC().Format(time.RFC3339Nano), Actor: identity.UserID, Level: level, Passed: passed, Reasons: reasons}
 	record.Basis = basis
 	if model, configured := unitModelFor(channel, server); configured && h.ems != nil && h.ems.Profiles != nil {
-		record.ProfileVersion, _ = h.ems.Profiles.Fingerprint(model.ProfileID)
+		record.ProfileVersion = model.ProfileVersion
+		if record.ProfileVersion == "" {
+			record.ProfileVersion, _ = h.ems.Profiles.Fingerprint(model.ProfileID)
+		}
+		record.MappingVersion = model.MappingVersion
+	}
+	if outcome, ok := response["command"].(contract.CommandOutcome); ok {
+		record.RequestID, record.DeviceID, record.CommandID = outcome.RequestID, outcome.DeviceID, outcome.CommandID
+		record.CommandState = outcome.State
 	}
 	record.Current = current
 	err = h.appendAccessVerification(channel, server, record, identity.UserID)

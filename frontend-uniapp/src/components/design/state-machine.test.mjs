@@ -1,6 +1,32 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { bindStateMachineDefinition, createStateMachineDefinition, executionStatusText, stateMachineSimulationPayload } from "./state-machine.ts"
+import { bindStateMachineDefinition, createStateMachineDefinition, executionStatusText, stateMachineSimulationPayload, stateMachineInputNumber, stateMachineCommandText } from "./state-machine.ts"
+
+test("uni numeric input preserves the explicit command parameter instead of substituting zero", () => {
+  assert.equal(stateMachineInputNumber({ detail: { value: "20" }, target: {} }), 20)
+  assert.equal(stateMachineInputNumber({ target: { value: "0" } }), 0)
+  assert.equal(Number.isNaN(stateMachineInputNumber({ detail: { value: "" } })), true)
+  const definition = createStateMachineDefinition("permit", "pump")
+  definition.transitions[0].actions[0].value = Number.NaN
+  assert.throws(() => bindStateMachineDefinition(definition, []), /有效数字/)
+})
+
+test("renaming an empty state removes only generated empty lifecycle rows", () => {
+  const definition = createStateMachineDefinition("", "")
+  definition.states = ["idle", "active"]
+  definition.initial_state = "idle"
+  definition.state_actions = { stopped: { entry: [], exit: [] }, running: { entry: [{ action_id: "must-resolve", value: 1 }] } }
+  const bound = bindStateMachineDefinition(definition, [])
+  assert.equal(bound.state_actions.stopped, undefined)
+  assert.equal(bound.state_actions.running.entry.length, 1, "never silently discard configured lifecycle effects")
+})
+
+test("declared command labels show bound parameters rather than the unused point value", () => {
+  const definition = createStateMachineDefinition("", "")
+  definition.command_bindings = { command: { device_id: "device", command_id: "set", parameters: { target: 20 } } }
+  assert.equal(stateMachineCommandText("command", definition, id => id === "device" ? "Pump" : id), "Pump · set（target=20）")
+  assert.equal(stateMachineCommandText("point", definition, id => id), undefined)
+})
 
 test("state machine definition binds only supplied real inputs and outputs", () => {
   const definition = createStateMachineDefinition("permit", "pump")
@@ -30,6 +56,15 @@ test("bindStateMachineDefinition binds only referenced points and maps businessI
   assert.deepEqual(bound.bindings.actions.pump, { node_id: "n-pump", point_type: "valueSet" })
   assert.equal(bound.bindings.points.other, undefined, "unreferenced points from other scopes must not be bound")
   assert.equal(bound.bindings.points["n-other-site"], undefined)
+})
+
+test("state entry and exit action bindings survive editing without hidden targets", () => {
+  const definition = createStateMachineDefinition("", "")
+  definition.state_actions = { stopped: { exit: [{ action_id: "pump", value: 0, readback: { timeout_ms: 100 } }] } }
+  definition.bindings.actions.pump = { node_id: "stable-pump", point_type: "valueSet" }
+  const bound = bindStateMachineDefinition(definition, [])
+  assert.equal(bound.bindings.actions.pump.node_id, "stable-pump")
+  assert.deepEqual(bound.state_actions, definition.state_actions)
 })
 
 test("simulation payload keeps zero and execution status never calls unknown success", () => {

@@ -1,0 +1,92 @@
+import assert from "node:assert/strict"
+import { chromium } from "playwright-core"
+
+const base = process.env.FASTIOT_MACHINE_URL || "http://127.0.0.1:18115"
+const fixture = await (await fetch(base + "/__fixture")).json()
+assert.equal(fixture.fixture, "ticket14-private-simulator")
+let browser
+try {
+  try { browser = await chromium.launch({ channel: "chrome", headless: true }) }
+  catch { browser = await chromium.launch({ channel: "msedge", headless: true }) }
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
+  page.setDefaultTimeout(12000)
+  const errors = []
+  page.on("pageerror", error => errors.push(error.message))
+  await page.addInitScript(token => localStorage.setItem("fastems-token", token), fixture.token)
+  const open = async () => {
+    await page.goto(base + "/uniapp/#/pages/design/index")
+    await page.locator(".design-ledger .node").filter({ hasText: "State machine fixture" }).click()
+    await page.locator(".stepper .step").filter({ hasText: "配策略" }).click()
+    await page.locator(".machine-panel").waitFor()
+  }
+  await open()
+  const panel = page.locator(".machine-panel")
+  const button = text => panel.locator("uni-button").filter({ hasText: new RegExp(`^${text}$`) })
+  const createdResponse = page.waitForResponse(response => response.url().endsWith('/api/state-machines') && response.request().method() === 'POST')
+  await button("＋ 新建状态机").click()
+  const machineID = (await (await createdResponse).json()).id
+  await panel.locator(".machine-summary").waitFor()
+  assert.match(await panel.innerText(), /尚未发布/)
+  await button("＋ 转移").first().click()
+  const transition = panel.locator(".transition").first()
+  await transition.locator(".transition-grid input").fill("start")
+  await transition.locator(".transition-grid select").nth(1).selectOption("running")
+  await transition.locator(".machine-action-editor uni-button").filter({ hasText: /^＋ 动作$/ }).click()
+  await transition.locator('[aria-label="动作类型"]').selectOption("command")
+  await transition.locator('[aria-label="声明设备命令"]').selectOption(JSON.stringify([fixture.device, "set"]))
+  const parameter = transition.locator(".action-row :is(label, uni-label)").filter({ hasText: "目标" }).first().locator("input")
+  await parameter.fill("20")
+  await button("保存草稿").click()
+  await panel.locator(".notice").filter({ hasText: "草稿已保存" }).waitFor()
+  assert.match(await panel.locator(".machine-table").innerText(), /set（target=20）/, "table must describe the declared parameter, not unused point value 0")
+  await button("发布草稿").click()
+  await button("确认发布").click()
+  await panel.locator(".notice").filter({ hasText: "发布成功" }).waitFor()
+  await button("模拟守卫").click()
+  await panel.locator(".execution-result").filter({ hasText: "可转移" }).waitFor()
+  assert.match(await panel.innerText(), /matched/)
+  let status = await (await fetch(base + "/__fixture")).json()
+  assert.equal((status.writes || []).length, 0, "save/publish/simulate must not write")
+  assert.equal(await button("执行事件").evaluate(element => element.hasAttribute("disabled") || element.getAttribute("aria-disabled") === "true"), true, "unchecked confirmation must not enable execution")
+  const unconfirmed = await fetch(base + `/api/state-machines/${machineID}/execute`, { method: "POST", headers: { Authorization: `Bearer ${fixture.token}`, "Content-Type": "application/json" }, body: JSON.stringify({ event: "start", request_id: "browser-unconfirmed" }) })
+  assert.equal(unconfirmed.status, 400)
+  assert.equal((await unconfirmed.json()).error, "confirmation_required")
+  assert.equal(((await (await fetch(base + "/__fixture")).json()).writes || []).length, 0)
+  await fetch(base + "/__drop_reply", { method: "POST" })
+  await panel.locator(".confirm uni-checkbox").click()
+  await button("执行事件").click()
+  await panel.locator(".error").waitFor()
+  status = await (await fetch(base + "/__fixture")).json()
+  assert.equal(status.writes.length, 1, "controlled event dispatches once")
+  assert.deepEqual(status.writes[0], [1, 10, 20], "the wire must carry the explicit input, not a default zero")
+  await page.reload()
+  await page.locator(".design-ledger .node").filter({ hasText: "State machine fixture" }).click()
+  await page.locator(".stepper .step").filter({ hasText: "配策略" }).click()
+  await panel.locator(".machine-summary").waitFor()
+  const records = await (await fetch(base + "/api/state-machines", { headers: { Authorization: `Bearer ${fixture.token}` } })).json()
+  const tab = records.state_machines.filter(item => item.parent === fixture.site).findIndex(item => item.id === machineID)
+  await panel.locator('.machine-tabs uni-button').nth(tab).click()
+  assert.match(await panel.innerText(), /过程状态 running（非设备反馈）/)
+  assert.match(await panel.locator(".execution-result").innerText(), /set（target=20）/, "execution label must use its immutable published source")
+  await panel.locator(".confirm uni-checkbox").click()
+  await panel.locator("uni-button").filter({ hasText: /^查询原事件 start$/ }).click()
+  await panel.locator(".notice").filter({ hasText: "事件已回读确认" }).waitFor()
+  status = await (await fetch(base + "/__fixture")).json()
+  assert.equal(status.writes.length, 1, "reload and lost-response retry must not duplicate commands")
+  const response = await fetch(base + "/api/state-machines", { headers: { Authorization: `Bearer ${fixture.token}` } })
+  assert.equal(response.status, 200)
+  const machine = (await response.json()).state_machines.find(item => item.id === machineID)
+  assert.equal(machine.current_state, "running")
+  assert.equal(machine.last_execution.version, 1)
+  assert.equal(machine.last_execution.commands[0].status, "confirmed")
+  assert.equal(Object.values(machine.applied.command_bindings)[0].parameters.target, 20)
+  for (const width of [1280, 375]) {
+    await page.setViewportSize({ width, height: 900 })
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `overflow at ${width}`)
+  }
+  assert.deepEqual(errors, [])
+  console.log(JSON.stringify({ realGo: true, privateSimulator: 18114, createEditPublish: true, simulationZeroWrites: true, persistedSourceVersion: true, lostResponseReloadRetry: true, physicalWrites: status.writes.length, errors }))
+} finally {
+  await browser?.close()
+  // The caller owns the preview server; leave it available for visual inspection.
+}

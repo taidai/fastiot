@@ -3,6 +3,7 @@ package appapi
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"fastiot/internal/audit"
 	"fastiot/internal/ems/command"
 	"fastiot/internal/ems/runtime"
@@ -202,6 +203,11 @@ func TestDeviceOperationRejectsBypasses(t *testing.T) {
 		{"viewer", url + "/commands", viewer, map[string]any{"request_id": "viewer", "command_id": "set", "parameters": map[string]float64{"target": 20}}, 403},
 		{"undeclared", url + "/commands", f.token, map[string]any{"request_id": "undeclared", "command_id": "start"}, 400},
 		{"range", url + "/commands", f.token, map[string]any{"request_id": "range", "command_id": "set", "parameters": map[string]float64{"target": 101}}, 409},
+		{"below range", url + "/commands", f.token, map[string]any{"request_id": "below-range", "command_id": "set", "parameters": map[string]float64{"target": -1}}, 409},
+		{"overflow", url + "/commands", f.token, map[string]any{"request_id": "overflow", "command_id": "set", "parameters": map[string]any{"target": json.RawMessage(`1e999`)}}, 400},
+		{"boolean", url + "/commands", f.token, map[string]any{"request_id": "boolean", "command_id": "set", "parameters": map[string]bool{"target": false}}, 400},
+		{"object", url + "/commands", f.token, map[string]any{"request_id": "object", "command_id": "set", "parameters": map[string]any{"target": map[string]any{}}}, 400},
+		{"array", url + "/commands", f.token, map[string]any{"request_id": "array", "command_id": "set", "parameters": map[string]any{"target": []int{0}}}, 400},
 		{"type", url + "/commands", f.token, map[string]any{"request_id": "type", "command_id": "set", "parameters": map[string]string{"target": "20"}}, 400},
 		{"unknown parameter", url + "/commands", f.token, map[string]any{"request_id": "extra", "command_id": "set", "parameters": map[string]float64{"other": 20}}, 409},
 		{"generic bypass", f.base + "/nodes/" + point + "/value", f.token, map[string]any{"request_id": "bypass", "value": 101}, 409},
@@ -213,6 +219,126 @@ func TestDeviceOperationRejectsBypasses(t *testing.T) {
 	}
 	if writes := sim.written(); len(writes) != 0 {
 		t.Fatalf("unauthorized/undeclared writes reached simulator: %v", writes)
+	}
+}
+
+func TestDeviceOperationRejectsNullParameter(t *testing.T) {
+	f, bus, sim := operationFixture(t)
+	url := f.base + "/modbus/" + bus + "/units/1/commands"
+	input := map[string]any{"request_id": "null-target", "command_id": "set", "parameters": map[string]any{"target": nil}}
+	status, body := call(t, http.MethodPost, url, f.token, input, nil)
+	if status == http.StatusOK {
+		waitFor(t, func() bool { return len(sim.written()) > 0 }, "accepted null parameter dispatch")
+	}
+	writes := sim.written()
+	t.Logf("target:null: HTTP %d %s writes=%v", status, body, writes)
+	if status != http.StatusBadRequest || len(writes) != 0 {
+		t.Errorf("null parameter must be rejected without writes: HTTP %d, writes=%v", status, writes)
+	}
+
+	input["request_id"] = "explicit-zero"
+	input["parameters"] = map[string]float64{"target": 0}
+	before := len(writes)
+	status, body = call(t, http.MethodPost, url, f.token, input, nil)
+	waitFor(t, func() bool { return len(sim.written()) > before }, "explicit zero dispatch")
+	writes = sim.written()
+	t.Logf("target:0: HTTP %d %s writes=%v", status, body, writes)
+	if status != http.StatusOK || len(writes) != 1 || writes[0] != [3]uint16{1, 10, 0} {
+		t.Errorf("explicit zero in declared [0,100] must write once: HTTP %d, writes=%v", status, writes)
+	}
+}
+
+func TestDeviceOperationDefaultParameterIdentity(t *testing.T) {
+	f, bus, sim := operationFixture(t)
+	url := f.base + "/modbus/" + bus + "/units/1/commands"
+	for _, tc := range []struct {
+		body string
+		want int
+	}{
+		{`{"request_id":"default","command_id":"set"}`, http.StatusOK},
+		{`{"request_id":"default","command_id":"set","parameters":{}}`, http.StatusOK},
+		{`{"request_id":"default","command_id":"set","parameters":null}`, http.StatusOK},
+		// An explicit default remains a different request identity, whereas
+		// a null member is invalid even when retrying an existing request.
+		{`{"request_id":"default","command_id":"set","parameters":{"target":10}}`, http.StatusConflict},
+		{`{"request_id":"default","command_id":"set","parameters":{"target":null}}`, http.StatusBadRequest},
+	} {
+		status, body := call(t, http.MethodPost, url, f.token, json.RawMessage(tc.body), nil)
+		if status != tc.want {
+			t.Errorf("%s: HTTP %d %s want %d", tc.body, status, body, tc.want)
+		}
+		waitFor(t, func() bool { return len(sim.written()) > 0 }, "declared default dispatch")
+		writes := sim.written()
+		t.Logf("%s: HTTP %d writes=%v", tc.body, status, writes)
+		if len(writes) != 1 || writes[0] != [3]uint16{1, 10, 10} {
+			t.Errorf("default/retry changed physical writes: %v", writes)
+		}
+	}
+}
+
+func TestRawUnboundOperationRequiresValue(t *testing.T) {
+	f := newPointConfigFixture(t)
+	f.handler.SetEMS(emsapi.New(f.runtime, time.Second))
+	sim := newOperationSimulator(t)
+	f.bridge = bridge.New(f.runtime, bridge.NewNodeSource(f.handler.nc), func(protocol, address string, timeout time.Duration) (channel.Bus, error) {
+		if protocol != "tcp" || address != "127.0.0.1:18108" {
+			return nil, fmt.Errorf("non-fixture address refused")
+		}
+		return modbusrt.OpenTCP(address, timeout)
+	})
+	var bus struct {
+		ID string `json:"id"`
+	}
+	status, body := call(t, http.MethodPost, f.base+"/modbus", f.token, ModbusConnectionInput{
+		Parent: snapshotRoot(t, f.base, f.token), Description: "Private raw command simulator",
+		Protocol: "TCP", URI: "127.0.0.1:18108", PollPeriod: 60000, Timeout: 100,
+	}, &bus)
+	if status != http.StatusOK {
+		t.Fatalf("bus: %d %s", status, body)
+	}
+	point := f.createPoint(t, bus.ID, ModbusIOInput{Description: "Unbound target", ServerID: 1, Address: 10, IOType: "modbusHoldingRegister", DataFormat: "uint16", Scale: 1})
+	if err := f.bridge.Sync(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return f.runtime.State.Health(bus.ID+"/1") == "healthy" }, "raw simulator first sample")
+	url := f.base + "/nodes/" + point + "/value"
+	for _, tc := range []struct {
+		name  string
+		input map[string]any
+		want  int
+	}{
+		{"null", map[string]any{"request_id": "raw-null", "value": nil}, http.StatusBadRequest},
+		{"missing", map[string]any{"request_id": "raw-missing"}, http.StatusBadRequest},
+		{"string", map[string]any{"request_id": "raw-string", "value": "0"}, http.StatusBadRequest},
+		{"boolean", map[string]any{"request_id": "raw-bool", "value": false}, http.StatusBadRequest},
+		{"object", map[string]any{"request_id": "raw-object", "value": map[string]any{}}, http.StatusBadRequest},
+		{"array", map[string]any{"request_id": "raw-array", "value": []int{0}}, http.StatusBadRequest},
+		{"overflow", map[string]any{"request_id": "raw-overflow", "value": json.RawMessage(`1e999`)}, http.StatusBadRequest},
+		{"zero", map[string]any{"request_id": "raw-zero", "value": 0}, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := len(sim.written())
+			status, body := call(t, http.MethodPost, url, f.token, tc.input, nil)
+			if err := f.bridge.Sync(time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			// Drain the real transport before asserting absence of writes; no
+			// sleep or race against the next scheduled polling cycle.
+			for _, ch := range f.runtime.Channels() {
+				ch.RunOnce(context.Background(), time.Now)
+			}
+			writes := sim.written()[before:]
+			t.Logf("%s: HTTP %d %s writes=%v", tc.name, status, body, writes)
+			if status != tc.want {
+				t.Errorf("HTTP %d want %d", status, tc.want)
+			}
+			if tc.want == http.StatusBadRequest && len(writes) != 0 {
+				t.Errorf("invalid value reached raw transport: %v", writes)
+			}
+			if tc.want == http.StatusOK && (len(writes) != 1 || writes[0] != [3]uint16{1, 10, 0}) {
+				t.Errorf("explicit zero must write once: %v", writes)
+			}
+		})
 	}
 }
 
