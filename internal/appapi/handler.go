@@ -503,6 +503,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.savePlan96Handler(w, identity, req)
+	case path == "overview/executions" && r.Method == http.MethodGet:
+		h.todayExecutions(w, r, identity)
 	case path == "overview/daily-stats" && r.Method == http.MethodGet:
 		h.dailyStats(w, r, identity)
 	case len(parts) == 3 && parts[0] == "nodes" && parts[2] == "daily-stats-config" && (r.Method == http.MethodGet || r.Method == http.MethodPut):

@@ -805,6 +805,12 @@ func (c *Client) recordCheck(outcome rule.Outcome, now time.Time, active *active
 	if text == c.lastCheck {
 		return nil
 	}
+	// Recovery is a projection of the prior execution, not new execution evidence.
+	if outcome.State != rule.StateAlreadyFired || active.sequence != nil {
+		if err := c.recordExecutionFact(report); err != nil {
+			return err
+		}
+	}
 	point := data.NewPointString("lastCheck", "", text)
 	point.Origin = c.config.ID
 	if err := siotclient.SendNodePoint(c.nc, c.config.ID, point, true); err != nil {

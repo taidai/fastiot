@@ -74,6 +74,9 @@ func (c *Client) reserveExecution(row string, now time.Time) (string, error) {
 	if err = client.SendNodePoint(c.nc, c.config.ID, data.NewPointString("lastExecution", "", string(encoded)), true); err != nil {
 		return "", err
 	}
+	if err := c.recordExecutionFact(CheckReport{RuleID: c.config.ID, SourceRevision: c.documentRevision(), ExecutionID: id, At: now, Row: row, State: "reserved"}); err != nil {
+		return "", err
+	}
 	return id, nil
 }
 

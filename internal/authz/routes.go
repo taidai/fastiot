@@ -100,6 +100,7 @@ var routeRequirements = []routeRequirement{
 	authenticatedRoute(http.MethodGet, "demand").queryTarget("site").inPackage(industry.EMSPackageID),
 	authenticatedRoute(http.MethodGet, "projects/plan96").queryTarget("site").inPackage(industry.EMSPackageID),
 	actionRoute(http.MethodPut, "projects/plan96", Configure, "admin_required").bodyTarget("site").inPackage(industry.EMSPackageID),
+	authenticatedRoute(http.MethodGet, "overview/executions").queryTarget("layer"),
 	authenticatedRoute(http.MethodGet, "overview/daily-stats").queryTarget("layer"),
 	authenticatedRoute(http.MethodGet, "nodes/*/daily-stats-config").pathTarget(1),
 	actionRoute(http.MethodPut, "nodes/*/daily-stats-config", Configure, "admin_required").pathTarget(1),
