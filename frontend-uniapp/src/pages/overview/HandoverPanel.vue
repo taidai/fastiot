@@ -19,8 +19,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from "vue"
+import { onBeforeUnmount, ref, watch } from "vue"
 import { request } from "../../api/client"
+import { projectContext } from "../../stores/projects"
+import { session } from "../../stores/session"
 
 type Handover = { layer_id: string; note: string; actor?: string; updated_at: string }
 const props = defineProps<{ layerId: string }>()
@@ -43,13 +45,14 @@ async function load() {
   const current = ++serial
   saveSerial += 1
   saving.value = false
-  if (!props.layerId) { record.value = null; return }
-  loading.value = true
+  loading.value = false
   loadError.value = ""
   saveError.value = ""
   saved.value = false
   record.value = null
   note.value = ""
+  if (!props.layerId) return
+  loading.value = true
   try {
     const result = await request<{ handover: Handover | null }>(`/overview/handover?layer=${encodeURIComponent(props.layerId)}`)
     if (current === serial) record.value = result.handover
@@ -63,6 +66,10 @@ async function save() {
   if (saving.value || !note.value.trim() || !props.layerId) return
   const layerId = props.layerId
   const current = ++saveSerial
+  // A GET started before this write cannot replace its newer server result.
+  serial++
+  loading.value = false
+  loadError.value = ""
   saving.value = true
   saveError.value = ""
   saved.value = false
@@ -81,7 +88,8 @@ async function save() {
     if (current === saveSerial) saving.value = false
   }
 }
-watch(() => props.layerId, () => { void load() }, { immediate: true })
+watch(() => [props.layerId, projectContext.generation, session.token], () => { void load() }, { immediate: true, flush: 'sync' })
+onBeforeUnmount(() => { serial++; saveSerial++ })
 </script>
 
 <style scoped>

@@ -921,6 +921,9 @@ func (h *Handler) alarmTarget(w http.ResponseWriter, access Access, id string) b
 }
 
 func (h *Handler) alarms(w http.ResponseWriter, r *http.Request, access Access) {
+	if !h.alarmEvidenceConfirmed(w) {
+		return
+	}
 	state := r.URL.Query().Get("state")
 	var configs []bridge.BusConfig
 	if h.Buses != nil {

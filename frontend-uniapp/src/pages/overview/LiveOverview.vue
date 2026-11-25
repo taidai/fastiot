@@ -67,12 +67,12 @@
 
       <aside class="side glass">
         <section>
-          <view class="card-title">待处理 <text class="alarm-num">{{ layerPendingAlarms.length }}</text></view>
-          <view v-for="alarm in layerPendingAlarms.slice(0, 3)" :key="alarm.id" class="alarm-mini">
-            <view class="title">{{ alarm.title }}</view><view class="meta">{{ alarm.severity }} · {{ shortTime(alarm.updated_at) }} · 待接手</view>
-            <button class="ack" :disabled="alarmBusy === alarm.id" @click="runAlarm('ack', alarm.id)">接手</button>
+          <view class="card-title">本层活动告警 <text class="alarm-num">{{ layerActiveAlarms.length }}</text></view>
+          <view v-for="alarm in layerActiveAlarms.slice(0, 3)" :key="alarm.id" class="alarm-mini">
+            <view class="title">{{ alarm.title }}</view><view class="meta">{{ alarm.severity }} · {{ shortTime(alarm.updated_at) }} · {{ alarm.state === 'acknowledged' ? '已接手，仍活动' : '待接手' }}</view>
+            <button v-if="alarm.state === 'active' && alarm.permissions?.ack !== false" class="ack" :disabled="!!alarmBusy" @click="runAlarm('ack', alarm.id)">接手</button>
           </view>
-          <view v-if="!layerPendingAlarms.length" class="side-empty">—</view>
+          <view v-if="!layerActiveAlarms.length" class="side-empty">—</view>
           <view v-if="alarmError" class="error">{{ alarmError }}</view>
         </section>
         <section>
@@ -84,7 +84,7 @@
       </aside>
     </view>
 
-    <AlarmCenter v-if="alarmOpen" :alarms="session.alarms" :busy-id="alarmBusy" :error="alarmError" @close="alarmOpen = false"
+    <AlarmCenter v-if="alarmOpen" :alarms="session.alarms" :busy-id="alarmBusy" :error="alarmError || session.runtimeError" @close="alarmOpen = false"
       @ack="runAlarm('ack', $event)" @close-alarm="runAlarm('close', $event)" @history="openHistory" @locate="locateDevice" />
     <view v-if="screenError" class="error page-error">{{ screenError }}</view>
     </template>
@@ -261,7 +261,7 @@ const syncMeta = computed(() => {
   return `最近观测 ${shortTime(observed)} · 查询于 ${shortTime(session.lastSync)} · 通道 ${scopedChannels.value.length} · 有效观测 ${goodValueCount.value}/${scopedValues.value.length}`
 })
 const unackedAlarms = computed(() => session.alarms.filter(alarm => alarm.active && alarm.state === "active"))
-const layerPendingAlarms = computed(() => unackedAlarms.value.filter(alarm => alarmInLayer(alarm, scopeNodeIds.value, scopedDeviceIds.value)))
+const layerActiveAlarms = computed(() => session.alarms.filter(alarm => alarm.active && alarmInLayer(alarm, scopeNodeIds.value, scopedDeviceIds.value)))
 const deviceRows = computed(() => scopedDevices.value.map(device => {
   const id = deviceKey(device)
   const quality = qualityDevices.value.find(item => item.device_id === id)
@@ -382,7 +382,10 @@ function selectLayer(key: string) {
 function selectDevice(id: string) { selectLayer(`device:${id}`) }
 function openHistory(pointId?: string) {
   const id = pointId || recentPointId.value
-  if (id) uni.navigateTo({ url: `/pages/history/index?point=${encodeURIComponent(id)}` })
+  if (id) {
+    alarmOpen.value = false
+    uni.navigateTo({ url: `/pages/history/index?point=${encodeURIComponent(id)}` })
+  }
 }
 function navigate(key: string) { if (key !== "overview") uni.navigateTo({ url: `/pages/${key}/index` }) }
 async function runAlarm(action: "ack" | "close", id: string) {
