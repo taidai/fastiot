@@ -105,18 +105,35 @@ type importProjectRequest struct {
 	Name    string          `json:"name"`
 }
 
+type projectImportEvidence struct {
+	ID                string    `json:"id"`
+	Actor             string    `json:"actor"`
+	SourcePackage     string    `json:"source_package"`
+	SourceVersion     string    `json:"source_version"`
+	SourceFingerprint string    `json:"source_fingerprint"`
+	Target            string    `json:"target"`
+	Time              time.Time `json:"time"`
+	Result            string    `json:"result"`
+	Reason            string    `json:"reason,omitempty"`
+	NodeIDs           []string  `json:"node_ids"`
+	Created           int       `json:"created"`
+	Channels          int       `json:"channels"`
+	Rules             int       `json:"rules"`
+}
+
 type importProjectResult struct {
-	SiteID    string         `json:"site_id"`
-	Name      string         `json:"name"`
-	Created   int            `json:"created"`
-	Model     int            `json:"model"`
-	Channels  int            `json:"channels"`
-	Rules     int            `json:"rules"`
-	Profiles  []string       `json:"profiles"`
-	VersionID string         `json:"version_id,omitempty"`
-	NodeIDs   []string       `json:"node_ids"`
-	Ignored   []packageStrip `json:"ignored"`
-	Warnings  []string       `json:"warnings"`
+	SiteID    string                `json:"site_id"`
+	Name      string                `json:"name"`
+	Created   int                   `json:"created"`
+	Model     int                   `json:"model"`
+	Channels  int                   `json:"channels"`
+	Rules     int                   `json:"rules"`
+	Profiles  []string              `json:"profiles"`
+	VersionID string                `json:"version_id,omitempty"`
+	NodeIDs   []string              `json:"node_ids"`
+	Ignored   []packageStrip        `json:"ignored"`
+	Warnings  []string              `json:"warnings"`
+	Evidence  projectImportEvidence `json:"evidence"`
 }
 
 // 现场绑定与运行状态不是工程资产：导出与导入都按这张表剥离。
@@ -1627,8 +1644,20 @@ func (h *Handler) importProjectPackage(identity Identity, pkg projectPackage, pa
 			result.Model++
 		}
 	}
+	actor := identity.Email
+	if actor == "" {
+		actor = identity.UserID
+	}
+	result.Evidence = projectImportEvidence{
+		ID: "pi-" + data.NewID(), Actor: actor, SourcePackage: pkg.ID,
+		SourceVersion: pkg.SourceVersion, SourceFingerprint: pkg.SourceFingerprint,
+		Target: result.SiteID, Time: time.Now().UTC(), Result: "success",
+		NodeIDs: append([]string(nil), result.NodeIDs...),
+		Created: result.Created, Channels: result.Channels, Rules: result.Rules,
+	}
 	// 导入即成为可版本化的项目：用既有项目版本机制冻结基线，便于复用与回退。
 	if version, err := h.snapshotSite(identity, result.SiteID, "由项目包导入"); err == nil {
+		version.Import = &result.Evidence
 		if err := h.saveVersion(version); err == nil {
 			result.VersionID = version.ID
 		} else {

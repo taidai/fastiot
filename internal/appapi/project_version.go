@@ -31,33 +31,35 @@ type versionNode struct {
 }
 
 type projectVersion struct {
-	ID          string           `json:"id"`
-	SiteID      string           `json:"site_id"`
-	SiteName    string           `json:"site_name"`
-	CreatedAt   time.Time        `json:"created_at"`
-	Operator    string           `json:"operator"`
-	Note        string           `json:"note,omitempty"`
-	Preflight   string           `json:"preflight_status,omitempty"`
-	PreflightID string           `json:"preflight_id,omitempty"`
-	Nodes       []versionNode    `json:"nodes"`
-	Deliverable bool             `json:"deliverable"`
-	Fingerprint string           `json:"fingerprint,omitempty"`
-	Integrity   string           `json:"integrity,omitempty"`
-	Report      *preflightReport `json:"report,omitempty"`
-	Package     *projectPackage  `json:"package,omitempty"`
+	ID          string                 `json:"id"`
+	SiteID      string                 `json:"site_id"`
+	SiteName    string                 `json:"site_name"`
+	CreatedAt   time.Time              `json:"created_at"`
+	Operator    string                 `json:"operator"`
+	Note        string                 `json:"note,omitempty"`
+	Preflight   string                 `json:"preflight_status,omitempty"`
+	PreflightID string                 `json:"preflight_id,omitempty"`
+	Nodes       []versionNode          `json:"nodes"`
+	Deliverable bool                   `json:"deliverable"`
+	Fingerprint string                 `json:"fingerprint,omitempty"`
+	Integrity   string                 `json:"integrity,omitempty"`
+	Report      *preflightReport       `json:"report,omitempty"`
+	Package     *projectPackage        `json:"package,omitempty"`
+	Import      *projectImportEvidence `json:"import,omitempty"`
 }
 
 type versionSummary struct {
-	ID          string    `json:"id"`
-	SiteID      string    `json:"site_id"`
-	SiteName    string    `json:"site_name"`
-	CreatedAt   time.Time `json:"created_at"`
-	Operator    string    `json:"operator"`
-	Note        string    `json:"note,omitempty"`
-	Preflight   string    `json:"preflight_status,omitempty"`
-	Nodes       int       `json:"nodes"`
-	Deliverable bool      `json:"deliverable"`
-	Fingerprint string    `json:"fingerprint,omitempty"`
+	ID          string                 `json:"id"`
+	SiteID      string                 `json:"site_id"`
+	SiteName    string                 `json:"site_name"`
+	CreatedAt   time.Time              `json:"created_at"`
+	Operator    string                 `json:"operator"`
+	Note        string                 `json:"note,omitempty"`
+	Preflight   string                 `json:"preflight_status,omitempty"`
+	Nodes       int                    `json:"nodes"`
+	Deliverable bool                   `json:"deliverable"`
+	Fingerprint string                 `json:"fingerprint,omitempty"`
+	Import      *projectImportEvidence `json:"import,omitempty"`
 }
 
 type rollbackResult struct {
@@ -219,6 +221,7 @@ func (h *Handler) listVersions(siteID string) ([]versionSummary, error) {
 			ID: version.ID, SiteID: version.SiteID, SiteName: version.SiteName,
 			CreatedAt: version.CreatedAt, Operator: version.Operator, Note: version.Note,
 			Preflight: version.Preflight, Nodes: len(version.Nodes), Deliverable: version.Deliverable, Fingerprint: version.Fingerprint,
+			Import: version.Import,
 		})
 	}
 	sort.Slice(summaries, func(i, j int) bool { return summaries[i].CreatedAt.After(summaries[j].CreatedAt) })

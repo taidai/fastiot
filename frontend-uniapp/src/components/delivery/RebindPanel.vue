@@ -48,7 +48,7 @@ type ChannelForm = {
   data_bits: number; parity: string; stop_bits: number; poll_period: number; timeout: number; disabled: boolean
 }
 const props = defineProps<{ snapshot: Snapshot | null; nodeIds: string[] }>()
-const emit = defineEmits<{ (event: "saved"): void }>()
+const emit = defineEmits<{ (event: "saved", channelID: string): void }>()
 const channels = ref<Channel[]>([])
 const selectedID = ref("")
 const form = ref<ChannelForm | null>(null)
@@ -120,7 +120,7 @@ async function save() {
     form.value = null
     notice.value = "现场连接已保存"
     await load()
-    emit("saved")
+    emit("saved", selectedID.value)
   } catch (cause) { error.value = deliveryError(cause) } finally { busy.value = false }
 }
 </script>

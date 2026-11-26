@@ -931,6 +931,7 @@ func (h *Handler) finishAccessVerification(w http.ResponseWriter, channel data.N
 	}
 	record := domainaccess.VerificationRecord{At: time.Now().UTC().Format(time.RFC3339Nano), Actor: identity.UserID, Level: level, Passed: passed, Reasons: reasons}
 	record.Basis = basis
+	record.DeviceID = fmt.Sprintf("%s/%d", channel.ID, server)
 	if model, configured := unitModelFor(channel, server); configured && h.ems != nil && h.ems.Profiles != nil {
 		record.ProfileVersion = model.ProfileVersion
 		if record.ProfileVersion == "" {
