@@ -24,12 +24,11 @@
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { request } from '../../api/client'
 import { projectContext } from '../../stores/projects'
-import { executionStatus, actionStatus } from './executions'
+import { executionStatus, actionStatus, buildExecutionQuery, localDate } from './executions'
 import type { ExecutionPage } from './executions'
 const props = defineProps<{ layerId: string }>()
 const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
-const now = new Date()
-const date = ref(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`)
+const date = ref(localDate())
 const source = ref(''), offset = ref(0), busy = ref(false), error = ref('')
 const page = ref<ExecutionPage | null>(null)
 const limit = 5
@@ -41,7 +40,7 @@ async function load(reset = false) {
  if (!props.layerId) return
  busy.value = true
  try {
-  const query = new URLSearchParams({ layer: props.layerId, date: date.value, timezone: zone, source: source.value, offset: String(offset.value), limit: String(limit) })
+  const query = buildExecutionQuery(props.layerId, { date: date.value, timezone: zone, source: source.value, offset: offset.value, limit })
   const result = await request<ExecutionPage>(`/overview/executions?${query}`)
   if (run === serial) page.value = result
  } catch (e) { if (run === serial) error.value = `执行记录读取失败：${e instanceof Error ? e.message : String(e)}` }

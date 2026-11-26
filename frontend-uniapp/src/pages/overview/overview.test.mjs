@@ -8,9 +8,11 @@ import {
   displaySample,
   formatPercent,
   healthLabel,
+  historyOpenQuery,
   isBusinessLayer,
   isTerminalCommandState,
   metricForPoint,
+  preferredHistoryPoint,
   qualityLabel,
   screenMetricTarget,
   summarizeSuccessRate,
@@ -44,6 +46,17 @@ const values = [
   { device_id: "channel/1", point_id: "pressure", value: { kind: "number", number: 0 }, quality: "good" },
   { device_id: "channel/1", point_id: "run", value: { kind: "bool", bool: true }, quality: "stale" },
 ]
+
+test("overview consumes history=1 in place and resolves a layer point", () => {
+  assert.deepEqual(historyOpenQuery(undefined), { open: false, point: "" })
+  assert.deepEqual(historyOpenQuery({ history: "0" }), { open: false, point: "" })
+  assert.deepEqual(historyOpenQuery({ history: "1" }), { open: true, point: "" })
+  assert.deepEqual(historyOpenQuery({ history: "1", point: "p2" }), { open: true, point: "p2" })
+  assert.equal(preferredHistoryPoint("", [{ id: "p1" }, { id: "p2" }]), "p1")
+  assert.equal(preferredHistoryPoint("p2", [{ id: "p1" }, { id: "p2" }]), "p2")
+  assert.equal(preferredHistoryPoint("missing", [{ id: "p1" }]), "p1")
+  assert.equal(preferredHistoryPoint("", []), "")
+})
 
 test("only business containers are ledger layers, not points or decision tables", () => {
   assert.equal(isBusinessLayer(snapshot.nodes[1]), true)

@@ -19,7 +19,10 @@
     <div v-if="rows.length" class="table-wrap"><table><thead><tr><th>行</th><th>设备</th><th>通道 / 站号</th><th>点位</th><th>结果</th></tr></thead><tbody>
       <tr v-for="row in rows" :key="row.line"><td>{{ row.line }}</td><td>{{ deviceName(row.device_id) || row.device }}</td><td>{{ channelName(row.channel_id) || row.channel }} / {{ row.station || '—' }}</td><td>{{ row.status === 'mapped' ? `${row.mapped} 已映射${row.missing.length ? `，缺 ${row.missing.length}` : ''}` : `${row.created_points} 个待创建` }}<details v-if="plans[row.line]" class="batch-diff"><summary>Profile 差异 / 创建计划</summary><p>当前缺失必需点：{{ plans[row.line].missing_required.join('、') || '无' }}；应用后仍需实际读值验证。</p><p v-for="point in plans[row.line].match.points" :key="point.name">{{ point.name }}：{{ point.reason || point.verdict }}</p><p v-for="point in plans[row.line].create_points" :key="point.description">新建 {{ point.description }} · 地址 {{ point.address }} · {{ point.data_format }} · 倍率 {{ point.scale }} · {{ point.units || '无单位' }} · {{ point.read_only ? '只读' : '可写（本次不写设备）' }}</p></details></td><td><span class="chip" :class="row.status === 'mapped' ? 'ok' : row.valid ? '' : 'warn'">{{ statusText(row) }}</span><small v-if="row.errors.length">{{ row.errors.join('；') }}</small></td></tr>
     </tbody></table></div>
-    <view class="panel-head"><strong>已保存映射 · 逐台验证</strong><span>读取同一设备模型及验证记录；应用映射不代表 L1/L2 通过。</span><button class="ghost" :disabled="busy !== ''" @click="refreshSaved">刷新已保存结果</button></view>
+    <view class="panel-head"><strong>已保存映射 · 逐台验证</strong><span>读取同一设备模型及验证记录；应用映射不代表 L1/L2 通过。</span><button class="ghost" :disabled="busy !== ''" @click="refreshSaved">刷新已保存结果</button><button class="primary" :disabled="readOnly || busy !== '' || !saved.length" @click="verifyAll">{{ busy === 'verify-all' ? '全部验证中…' : `全部验证（${saved.length} 台已套用）` }}</button></view>
+    <p v-if="batchProgress" class="notice" role="status">{{ batchProgress }}</p>
+    <p v-if="batchSummary" class="notice" role="status">{{ batchSummary.text }}</p>
+    <ul v-if="batchSummary?.failures.length" class="batch-failures" role="alert"><li v-for="failure in batchSummary.failures" :key="failure">{{ failure }}</li></ul>
     <p v-if="savedError" class="error" role="alert">{{ savedError }}</p>
     <div class="table-wrap saved-bindings"><table><thead><tr><th>设备 / 站号</th><th>保存结果与证据</th><th>只读验证</th></tr></thead><tbody>
       <tr v-for="item in saved" :key="bindingPath(item.device)"><td>{{ item.device.business_node_name || item.device.name }}<small>{{ channelName(item.device.channel_id) }} / {{ item.device.server_id }}</small></td><td><span>映射已保存 · {{ item.device.point_count }} 个物理点</span><small v-for="level in levels" :key="level">{{ batchVerificationText(item.records, level) }}</small><small v-if="item.error" class="error" role="alert">{{ item.error }}</small></td><td><button v-for="level in levels" :key="level" class="ghost" :disabled="readOnly || busy !== ''" @click="verify(item, level)">{{ level === 'L1' ? 'L1 只读验证' : 'L2 必需点验证' }}</button></td></tr>
@@ -33,8 +36,8 @@ import { computed, onMounted, ref, watch } from "vue"
 import { request } from "../../api/client"
 import { nameOf } from "../../types/api"
 import type { Snapshot } from "../../types/api"
-import { batchCSV, batchVerificationText } from "./access"
-import type { BatchAccessResponse, BatchBindingRow, BatchVerificationRecord, LedgerDevice, EmsChannel, Profile } from "./access"
+import { batchCSV, batchVerificationOutcome, batchVerificationText, summarizeBatchVerification } from "./access"
+import type { BatchAccessResponse, BatchBindingRow, BatchVerificationOutcome, BatchVerificationRecord, BatchVerificationSummary, LedgerDevice, EmsChannel, Profile } from "./access"
 import { boundBusinessIDs } from "./design"
 
 const props = withDefaults(defineProps<{ snapshot: Snapshot | null; channels: EmsChannel[]; profiles: Profile[]; selectedNodeIds?: string[]; readOnly?: boolean }>(), { selectedNodeIds: () => [], readOnly: false })
@@ -52,6 +55,8 @@ const plans = ref<NonNullable<BatchAccessResponse["plans"]>>({})
 type SavedBinding = { device: LedgerDevice; records: BatchVerificationRecord[]; error: string }
 const saved = ref<SavedBinding[]>([])
 const savedError = ref("")
+const batchSummary = ref<BatchVerificationSummary | null>(null)
+const batchProgress = ref("")
 const levels = ["L1", "L2"] as const
 const busy = ref("")
 const error = ref("")
@@ -78,7 +83,7 @@ function toggle(id: string) {
   checked.value = next
   invalidate()
 }
-function invalidate() { rows.value = []; plans.value = {}; previewedCSV.value = ""; previewVersion.value = ""; notice.value = "" }
+function invalidate() { rows.value = []; plans.value = {}; previewedCSV.value = ""; previewVersion.value = ""; notice.value = ""; batchSummary.value = null }
 function makeDraft() {
   if (!Number.isInteger(startStation.value) || startStation.value < 1 || startStation.value > 247) { error.value = "起始站号必须是 1–247 的整数"; return }
   const selected = devices.value.filter(device => checked.value.has(device.id) && !device.bound)
@@ -123,6 +128,7 @@ async function apply() { await run(false) }
 function bindingPath(device: LedgerDevice) { return `/modbus/${encodeURIComponent(device.channel_id)}/units/${device.server_id}` }
 async function loadSaved() {
   savedError.value = ""
+  batchSummary.value = null
   try {
     const result = await request<{ devices: LedgerDevice[] }>("/device-ledger")
     saved.value = await Promise.all((result.devices || []).filter(device => devices.value.some(item => item.id === device.business_node_id)).map(async device => {
@@ -137,17 +143,41 @@ async function loadSaved() {
   }
 }
 async function refreshSaved() { busy.value = "reload"; try { await loadSaved() } finally { busy.value = "" } }
+async function runVerification(item: SavedBinding, level: "L1" | "L2") {
+  await request(`${bindingPath(item.device)}/verify`, "POST", { level })
+  const history = await request<{ records: BatchVerificationRecord[] }>(`${bindingPath(item.device)}/verify`)
+  item.records = history.records || []
+}
+function verificationFailure(level: "L1" | "L2", cause: unknown) {
+  return `${level} 结果未确认：${cause instanceof Error ? cause.message : '请求失败'}；请刷新记录，不代表验证通过`
+}
 async function verify(item: SavedBinding, level: "L1" | "L2") {
   busy.value = `verify-${level}`
   item.error = ""
-  try {
-    await request(`${bindingPath(item.device)}/verify`, "POST", { level })
-    const history = await request<{ records: BatchVerificationRecord[] }>(`${bindingPath(item.device)}/verify`)
-    item.records = history.records || []
-  } catch (cause) {
-    item.records = []
-    item.error = `${level} 结果未确认：${cause instanceof Error ? cause.message : '请求失败'}；请刷新记录，不代表验证通过`
-  } finally { busy.value = "" }
+  batchSummary.value = null
+  try { await runVerification(item, level) }
+  catch (cause) { item.error = verificationFailure(level, cause) }
+  finally { busy.value = "" }
+}
+async function verifyAll() {
+  if (props.readOnly || !saved.value.length || busy.value !== "") return
+  busy.value = "verify-all"
+  batchSummary.value = null
+  const outcomes: BatchVerificationOutcome[] = []
+  for (const item of saved.value) {
+    item.error = ""
+    const device = item.device.business_node_name || item.device.name
+    for (const level of levels) {
+      batchProgress.value = `正在验证 ${device} · ${level}`
+      let error = ""
+      try { await runVerification(item, level) }
+      catch (cause) { error = verificationFailure(level, cause); item.error = error }
+      outcomes.push(batchVerificationOutcome(device, level, item.records, error))
+    }
+  }
+  batchProgress.value = ""
+  batchSummary.value = summarizeBatchVerification(outcomes)
+  busy.value = ""
 }
 onMounted(refreshSaved)
 </script>
@@ -159,5 +189,6 @@ td small { display: block; color: var(--faint); font-size: 10px; margin-top: 2px
 .batch-form { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 8px; align-items: end; }.batch-form label, .csv-label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 11px; }
 .batch-form select, .batch-form input, textarea { width: 100%; border: 1px solid var(--glass-border); border-radius: 8px; padding: 7px 9px; background: rgba(255,255,255,.62); }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; }.empty { color: var(--faint); }
+.batch-failures { margin: 4px 0 10px; padding-left: 18px; color: var(--amber); font-size: 11px; line-height: 1.7; }
 @media(max-width:900px){.batch-form{grid-template-columns:repeat(2,minmax(0,1fr))}}
 </style>

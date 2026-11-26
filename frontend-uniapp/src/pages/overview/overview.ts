@@ -66,6 +66,17 @@ export function screenMetricTarget(screen: OverviewScreen | null, pointID: strin
   return typeof target === "string" ? target.trim() : ""
 }
 
+// The design workbench deep link carries history=1; the overview consumes it
+// in place instead of navigating to the standalone history page.
+export function historyOpenQuery(query?: Record<string, unknown>) {
+  if (String(query?.history ?? "") !== "1") return { open: false, point: "" }
+  return { open: true, point: typeof query?.point === "string" ? query.point : "" }
+}
+
+export function preferredHistoryPoint(requested: string, options: { id: string }[]) {
+  return requested && options.some(option => option.id === requested) ? requested : options[0]?.id || ""
+}
+
 const businessTypes = new Set(["siteRoot", "site", "group", "area", "plant", "energyUnit", "energy_unit", "unit", "device", "modbus_device"])
 
 export function isBusinessLayer(node: ApiNode) {

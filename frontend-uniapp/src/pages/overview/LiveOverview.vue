@@ -32,6 +32,7 @@
 
     <AlarmCenter v-if="alarmOpen" :alarms="session.alarms" :busy-id="alarmBusy" :error="alarmError || session.runtimeError" @close="alarmOpen = false"
       @ack="runAlarm('ack', $event)" @close-alarm="runAlarm('close', $event)" @history="openHistory" @locate="locateDevice" />
+    <HistoryDrawer v-if="historyOpen" :point-options="historyPointOptions" :initial-point="historyPoint" @close="historyOpen = false" />
     <view v-if="screenError" class="error page-error">{{ screenError }}</view>
     </template>
     <view v-if="session.error" class="error page-error">{{ session.error }}</view>
@@ -54,6 +55,8 @@ import { kindLabel } from "../../components/design/design"
 import { memberRolesOf } from "../../components/design/members"
 import AlarmCenter from "../../components/AlarmCenter.vue"
 import HandoverPanel from "./HandoverPanel.vue"
+import HistoryDrawer from "./HistoryDrawer.vue"
+import type { HistoryPointOption } from "../history/history"
 import { ApiError, request } from "../../api/client"
 import {
   acknowledgeAlarm, closeAlarm, currentLayer as currentNode, layerPath,
@@ -63,14 +66,18 @@ import type { ScreenConfig } from "../../types/api"
 import {
   boundDevicesForLayer, descendantNodeIds, deviceKey, healthLabel,
   shortTime, valueInLayer, alarmInLayer, devicePointIds,
+  businessName, unitOf, historyOpenQuery, preferredHistoryPoint,
 } from "./overview"
 import type { LedgerDevice, OverviewScreen, QualityStats } from "./overview"
+import { isDerivedInput } from "../../components/design/strategy"
 import { DEFAULT_APPEARANCE, applyAppearanceDocument, normalizeAppearance } from "./appearance"
 import type { Appearance, AppearanceTheme } from "./appearance"
 
 const alarmOpen = ref(false)
 const alarmBusy = ref("")
 const alarmError = ref("")
+const historyOpen = ref(false)
+const historyPoint = ref("")
 const screen = ref<(ScreenConfig & OverviewScreen) | null>(null)
 const screenError = ref("")
 const ledger = ref<LedgerDevice[]>([])
@@ -118,6 +125,17 @@ const availablePointIds = computed(() => new Set([
   ...devicePointIds(session.snapshot?.nodes || [], scopedDevices.value),
   ...(session.snapshot?.nodes || []).filter(node => scopeNodeIds.value.has(node.id) && ['variable', 'calculationPoint'].includes(node.type)).map(node => node.id),
 ]))
+const historyPointOptions = computed<HistoryPointOption[]>(() => {
+  const nodes = session.snapshot?.nodes || []
+  const ids = [...new Set([
+    ...devicePointIds(nodes, scopedDevices.value),
+    ...nodes.filter(node => scopeNodeIds.value.has(node.id) && (['variable', 'modbusIo', 'opcuaPoint', 'mqttSub'].includes(node.type) || isDerivedInput(node))).map(node => node.id),
+  ])]
+  return ids.map(id => {
+    const node = nodes.find(item => item.id === id)
+    return { id, label: businessName(node), unit: unitOf(node) }
+  })
+})
 const screenDocument = computed(() => {
   const points = [...availablePointIds.value].map(id => ({ id, label: nameOf(session.snapshot!.nodes.find(node => node.id === id)!) }))
   const document = makeScreenDraft(screen.value, session.layer, layerName.value, currentNode.value ? kindLabel(currentNode.value) : '现场', points)
@@ -196,11 +214,9 @@ function selectLayer(key: string) {
 }
 function selectDevice(id: string) { selectLayer(`device:${id}`) }
 function openHistory(pointId?: string) {
-  const id = pointId
-  if (id) {
-    alarmOpen.value = false
-    uni.navigateTo({ url: `/pages/history/index?point=${encodeURIComponent(id)}` })
-  }
+  historyPoint.value = pointId || preferredHistoryPoint("", historyPointOptions.value)
+  historyOpen.value = true
+  alarmOpen.value = false
 }
 function navigate(key: string) { if (key !== "overview") uni.navigateTo({ url: `/pages/${key}/index` }) }
 async function runAlarm(action: "ack" | "close", id: string) {
@@ -223,8 +239,15 @@ watch(() => projectContext.generation, () => {
   ledgerError.value = ''; screenError.value = ''
 }, { flush: 'sync' })
 watch(() => session.snapshot, snapshot => { if (snapshot) void loadDevices() })
-watch(() => session.layer, () => { void loadLayer() }, { flush: 'sync' })
-onLoad(options => { selectedDeviceId.value = (options?.device as string) || "" })
+watch(() => session.layer, () => { historyOpen.value = false; void loadLayer() }, { flush: 'sync' })
+onLoad(options => {
+  selectedDeviceId.value = (options?.device as string) || ""
+  const request = historyOpenQuery(options as Record<string, unknown>)
+  if (request.open) {
+    historyPoint.value = request.point || preferredHistoryPoint("", historyPointOptions.value)
+    historyOpen.value = true
+  }
+})
 onMounted(() => {
   if (!requireAuth()) return
   applyAppearanceDocument(appearance.value)

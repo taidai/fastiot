@@ -6,7 +6,7 @@
         <view v-if="!applicable(block.type)" class="panel glass empty">{{ definition(block.type)?.label }} · 本层不适用，请重新配置</view>
         <view v-else-if="block.type === 'status'" class="status glass"><span>{{ runtimeError || onlineText }}</span><span>观测于 {{ latestObservation }} · 查询于 {{ shortTime(lastSync) }}</span></view>
         <view v-else-if="block.type === 'kpi'" class="metrics">
-          <view v-for="(metric, index) in metrics" :key="index" class="metric" :role="metric.id ? 'button' : undefined" :tabindex="metric.id ? 0 : -1" @click="history(metric.id)" @keydown.enter="history(metric.id)" @keydown.space.prevent="history(metric.id)">
+          <view v-for="(metric, index) in metrics" :key="index" class="metric">
             <view class="k"><svg viewBox="0 0 24 24" aria-hidden="true"><path :d="metricIcons[index]" /></svg>{{ metric.label }}</view><view class="v">{{ metric.value }}<text v-if="metric.unit">{{ metric.unit }}</text></view>
             <view class="metric-quality">{{ metric.quality }} · {{ metric.time }}<text v-if="metric.target"> · 目标 {{ metric.target }}</text></view>
           </view>
@@ -30,7 +30,7 @@
         <section v-else-if="block.type === 'alarm'" class="panel glass">
           <slot name="alarm" :layer-id="layerId"><view class="card-title">本层告警 <text>{{ layerAlarms.length }}</text></view><view v-for="alarm in layerAlarms.slice(0, 3)" :key="alarm.id" class="alarm-mini"><b>{{ alarm.title }}</b><view class="meta">{{ alarm.severity }} · {{ shortTime(alarm.updated_at) }} · {{ alarm.state === 'acknowledged' ? '已接手，仍活动' : '待接手' }}</view></view><view v-if="!layerAlarms.length" class="empty">没有待处理告警</view></slot>
         </section>
-        <section v-else-if="block.type === 'today'" class="panel glass screen-card"><slot name="today" :layer-id="layerId"><h5 class="card-title">今日执行</h5><TodayExecutions :layer-id="layerId" /></slot></section>
+        <section v-else-if="block.type === 'today'" class="panel glass screen-card"><slot name="today" :layer-id="layerId"><h5 class="card-title">今日执行</h5><TodayExecutionSummary :layer-id="layerId" /></slot></section>
         <section v-else-if="block.type === 'summary'" class="panel glass"><slot name="summary" :layer-id="layerId" :result="dailyStats"><view class="card-title">运行摘要</view><view v-if="dailyError" class="error" role="alert">{{ dailyError }}</view><OverviewDailyStats :layer-id="layerId" :result="dailyStats" /></slot></section>
         <section v-else-if="block.type === 'oplog'" class="panel glass"><view class="card-title">操作记录</view><view v-if="operationError" class="error">{{ operationError }}</view><view v-for="record in operations" :key="record.request_id" class="run"><span>{{ shortTime(record.updated_at || record.started_at) }} · {{ record.command_id }}</span><span>{{ commandStateText(record.state) }}</span></view><view v-if="!operationError && !operations.length" class="empty">暂无操作记录</view></section>
         <section v-else-if="block.type === 'trend'" class="panel glass screen-card"><h5 class="card-title">趋势 · {{ trendMetric.label }}</h5><OverviewTrend :records="trendRecords" :start="trendStart" :end="trendEnd" :unit="trendMetric.unit" :label="trendMetric.label" @select="history(trendMetric.id)" /><view v-if="trendError" class="error">{{ trendError }}</view><view v-else-if="!trendMetric.id" class="empty">未绑定或不在本层范围 · —</view></section>
@@ -48,7 +48,7 @@ import { ApiError } from '../../api/client'
 import { loadDailyStats } from '../../pages/overview/daily-stats-api'
 import { dailyMetricDetail, dailyMetricText } from '../../pages/overview/daily-stats'
 import type { DailyStats } from '../../pages/overview/daily-stats'
-import TodayExecutions from '../../pages/overview/TodayExecutions.vue'
+import TodayExecutionSummary from '../../pages/overview/TodayExecutionSummary.vue'
 import OverviewDailyStats from '../../pages/overview/OverviewDailyStats.vue'
 import type { EmsAlarm, Snapshot, StateValue, HistoryRecord } from '../../types/api'
 import { nameOf } from '../../types/api'
@@ -185,7 +185,6 @@ watch(() => [props.layerId, trendMetric.value.id] as const, async ([, id]) => {
 .status { display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; padding:8px 14px; font-size:11px; color:var(--muted); }
 .metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(95px,1fr)); gap:10px; }
 .metric { min-width:0; border:1px solid rgba(255,255,255,.9); border-radius:14px; padding:10px 12px 7px; background:rgba(255,255,255,.58); box-shadow:0 8px 24px rgba(54,92,120,.07),inset 0 0 12px rgba(255,255,255,.3); color:var(--ink); }
-.metric[role=button] { cursor:pointer; }
 .k, .metric-quality { color:var(--muted); font-size:10.5px; overflow-wrap:anywhere; }
 .k { display:flex; align-items:center; gap:7px; }
 .k svg { flex:none; width:16px; height:16px; fill:none; stroke:#3b8aa8; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }

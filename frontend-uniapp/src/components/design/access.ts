@@ -218,6 +218,52 @@ export function batchVerificationText(records: BatchVerificationRecord[], level:
   return `${level}：${record.current ? record.passed ? "通过" : "未通过" : "已失效"} · ${record.at} · ${record.actor}${record.reasons?.length ? ` · ${record.reasons.join("；")}` : ""}`
 }
 
+export type BatchVerificationOutcome = {
+  device: string
+  level: "L1" | "L2"
+  state: "passed" | "failed" | "unknown" | "unverified"
+  detail?: string
+}
+
+export function batchVerificationOutcome(device: string, level: "L1" | "L2", records: BatchVerificationRecord[], error = ""): BatchVerificationOutcome {
+  if (error) return { device, level, state: "unknown", detail: error }
+  const record = records.filter(item => item.level === level).slice(-1)[0]
+  if (!record) return { device, level, state: "unverified" }
+  if (!record.current) return { device, level, state: "unknown", detail: "记录已失效，需重新验证" }
+  if (record.passed) return { device, level, state: "passed", detail: record.at }
+  return { device, level, state: "failed", detail: [record.at, ...(record.reasons || [])].filter(Boolean).join(" · ") }
+}
+
+export type BatchVerificationSummary = {
+  total: number
+  passed: number
+  failed: number
+  unknown: number
+  unverified: number
+  text: string
+  failures: string[]
+}
+
+// ADR 0007: a batch summary must surface every failed or unconfirmed device;
+// counts alone must never read as an all-clear.
+export function summarizeBatchVerification(outcomes: BatchVerificationOutcome[]): BatchVerificationSummary {
+  const passed = outcomes.filter(item => item.state === "passed").length
+  const failed = outcomes.filter(item => item.state === "failed").length
+  const unknown = outcomes.filter(item => item.state === "unknown").length
+  const unverified = outcomes.filter(item => item.state === "unverified").length
+  const total = outcomes.length
+  const failures = outcomes.filter(item => item.state !== "passed").map(item => {
+    const state = item.state === "failed" ? "未通过" : item.state === "unknown" ? "结果未确认" : "未验证"
+    return `${item.device} · ${item.level}：${state}${item.detail ? `（${item.detail}）` : ""}`
+  })
+  const text = !total
+    ? "没有已套用设备，未执行验证。"
+    : passed === total
+      ? `全部验证完成：${total} 项全部通过。`
+      : `全部验证完成：${passed}/${total} 项通过；${failed} 项未通过，${unknown + unverified} 项未验证或结果未确认。逐台结果保留在下方，失败项不会被汇总掩盖。`
+  return { total, passed, failed, unknown, unverified, text, failures }
+}
+
 export function batchCSV(devices: { id: string; name: string }[], profileID: string, channelID: string, startStation: number) {
   const cell = (value: string | number) => {
     const text = String(value)

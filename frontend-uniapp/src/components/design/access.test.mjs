@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { automaticPointMap, batchCSV, canCommandAccess, canConfigureAccess, deviceAccessChipClass, deviceAccessLabel, deviceAccessState, prepareModelSave, safeVerificationCommands, verificationError } from "./access.ts"
+import { automaticPointMap, batchCSV, batchVerificationOutcome, canCommandAccess, canConfigureAccess, deviceAccessChipClass, deviceAccessLabel, deviceAccessState, prepareModelSave, safeVerificationCommands, summarizeBatchVerification, verificationError } from "./access.ts"
 
 const profile = {
   id: "vendor-v1",
@@ -105,4 +105,28 @@ test("canCommandAccess independently gates L3 from configure permission", () => 
   const snapshot = { user: { user_id: "u", policy: { admin: false, role: "implementer" }, actions: ["configure"] }, roots: [], nodes: [] }
   assert.equal(canCommandAccess(snapshot), false)
   assert.equal(canCommandAccess({ ...snapshot, user: { ...snapshot.user, actions: ["configure", "command"] } }), true)
+})
+
+test("batch verification summary keeps failed and unconfirmed devices visible", () => {
+  const record = (level, passed, current = true, reasons = []) => ({ at: "2026-11-26T08:00:00Z", actor: "张工", level, passed, current, reasons })
+  const outcomes = [
+    batchVerificationOutcome("1号泵", "L1", [record("L1", true)]),
+    batchVerificationOutcome("1号泵", "L2", [record("L2", true)]),
+    batchVerificationOutcome("2号泵", "L1", [record("L1", true)]),
+    batchVerificationOutcome("2号泵", "L2", [record("L2", false, true, ["必需点缺失"])]),
+    batchVerificationOutcome("3号泵", "L1", [], "L1 结果未确认：超时"),
+    batchVerificationOutcome("3号泵", "L2", [record("L2", true, false)]),
+  ]
+  const summary = summarizeBatchVerification(outcomes)
+  assert.equal(summary.total, 6)
+  assert.equal(summary.passed, 3)
+  assert.equal(summary.failed, 1)
+  assert.equal(summary.unknown, 2)
+  assert.match(summary.text, /3\/6 项通过/)
+  assert.match(summary.text, /未通过/)
+  assert.match(summary.text, /未验证或结果未确认/)
+  assert.doesNotMatch(summary.text, /全部通过/)
+  assert.ok(summary.failures.some(item => item.includes("2号泵") && item.includes("L2") && item.includes("必需点缺失")))
+  assert.ok(summary.failures.some(item => item.includes("3号泵") && item.includes("L1") && item.includes("结果未确认")))
+  assert.ok(summary.failures.some(item => item.includes("3号泵") && item.includes("L2") && item.includes("记录已失效")))
 })

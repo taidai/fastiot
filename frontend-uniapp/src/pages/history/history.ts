@@ -2,6 +2,7 @@ import type { HistoryRecord } from "../../types/api"
 
 export type HistoryScope = { type?: string; point: string; start: Date; end: Date; aggregate: string }
 export type HistoryCursor = { before: string; count: number }
+export type HistoryPointOption = { id: string; label: string; unit: string }
 
 // Export omits the page cursor, but uses the exact successful query window.
 export function buildHistoryQuery(scope: HistoryScope, cursor?: HistoryCursor) {
