@@ -139,7 +139,16 @@ try {
   await groups.nth(0).getByText('15分钟', { exact: true }).click()
   await groups.nth(1).getByText('1秒', { exact: true }).click()
   await drawer.locator('.table-wrap table').waitFor()
-  await page.waitForFunction(() => document.querySelectorAll('.history-drawer tbody tr').length > 0, null, { timeout: 30000 })
+  // A freshly seeded backend can still be filling the raw window; fall back to
+  // the wider range instead of weakening the assertion that rows must exist.
+  const hasRows = () => page.waitForFunction(() => document.querySelectorAll('.history-drawer tbody tr').length > 0, null, { timeout: 15000 })
+  try {
+    await hasRows()
+  } catch {
+    await groups.nth(0).getByText('24小时', { exact: true }).click()
+    await groups.nth(1).getByText('自动', { exact: true }).click()
+    await hasRows()
+  }
   await groups.nth(2).getByText('曲线', { exact: true }).click()
   await drawer.locator('.trend').waitFor()
   await drawer.locator('.trend-svg').waitFor({ timeout: 30000 })
@@ -208,6 +217,15 @@ try {
 
   await page.goto(`${origin}/uniapp/#/pages/design/index`, { waitUntil: 'domcontentloaded' })
   await page.locator('.design-ledger .node').first().waitFor({ timeout: 120000 })
+  // ADR 0007: an existing project opens on the first incomplete step. The seed
+  // has 搭台账 done and 接设备 pending, so the active step must be 接设备 — not
+  // the default 新建现场.
+  await page.waitForFunction(
+    () => document.querySelector('.stepper .step.active')?.textContent?.includes('接设备'),
+    null, { timeout: 60000 },
+  )
+  const openedStep = (await page.locator('.stepper .step.active').innerText()).replace(/\s+/g, '')
+  assert.match(openedStep, /接设备/, `design must open on the first incomplete step, got ${openedStep}`)
   const siteRow = page.locator('.design-ledger .node').filter({ hasText: '教学泵房' }).first()
   await siteRow.waitFor({ timeout: 60000 })
   await siteRow.click()
