@@ -163,6 +163,38 @@ export function moveRows<T>(rows: T[], index: number, direction: -1 | 1): T[] {
   return result
 }
 
+function conditionIdentity(condition: Condition): string {
+  return JSON.stringify([
+    condition.kind || "number",
+    condition.point_id || "",
+    condition.operator || "",
+    condition.value ?? null,
+    condition.text || "",
+    condition.start || "",
+    condition.end || "",
+    condition.weekday_mask || 0,
+    condition.join || "",
+  ])
+}
+
+// The condition set of a row includes its point conditions and its time window.
+// A time window alone is a meaningful difference, so it must not read as a
+// duplicate.
+function conditionSetKey(conditions: Condition[]): string {
+  return conditions.map(conditionIdentity).sort().join("\u0000")
+}
+
+// Rows that share a condition set are meaningless duplicates. Member order does
+// not matter, but a partial overlap with another row is not a duplicate.
+export function duplicateRowIndexes(rows: Pick<Row, "conditions">[]): Set<number> {
+  const keys = rows.map(row => conditionSetKey(row.conditions))
+  const counts = new Map<string, number>()
+  for (const key of keys) counts.set(key, (counts.get(key) || 0) + 1)
+  const duplicates = new Set<number>()
+  keys.forEach((key, index) => { if ((counts.get(key) || 0) > 1) duplicates.add(index) })
+  return duplicates
+}
+
 export function ruleWeekdayMask(event: unknown): number {
   const values = (event as { detail?: { value?: unknown } }).detail?.value
   if (!Array.isArray(values) || values.some(value => !/^[0-6]$/.test(String(value)))) throw new Error('星期选择无效')
