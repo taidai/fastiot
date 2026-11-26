@@ -134,10 +134,10 @@ try {
   assert.deepEqual(granules, ['自动', '1秒', '5秒', '30秒', '1分钟'], `history granularities: ${JSON.stringify(granules)}`)
   const views = await groups.nth(2).locator('uni-button').evaluateAll(nodes => nodes.map(node => node.textContent.trim()))
   assert.deepEqual(views, ['数据表', '曲线'], `history views: ${JSON.stringify(views)}`)
-  // A freshly seeded backend may hold only its first observation, so query the
-  // raw 24-hour range instead of a granular bucket that may still be open.
-  await groups.nth(0).getByText('24小时', { exact: true }).click()
-  await groups.nth(1).getByText('自动', { exact: true }).click()
+  // Read raw samples in the default window: an unclosed 24-hour bucket can be
+  // empty for the curve even while the table still shows the previous query.
+  await groups.nth(0).getByText('15分钟', { exact: true }).click()
+  await groups.nth(1).getByText('1秒', { exact: true }).click()
   await drawer.locator('.table-wrap table').waitFor()
   await page.waitForFunction(() => document.querySelectorAll('.history-drawer tbody tr').length > 0, null, { timeout: 30000 })
   await groups.nth(2).getByText('曲线', { exact: true }).click()
@@ -177,8 +177,11 @@ try {
   const profile = (unit.profiles || []).find(item => item.id === unit.model.profile_id) || (unit.profiles || [])[0]
   const pointMap = {}
   for (const spec of profile?.point_specs || []) if (pointByName.has(spec.name)) pointMap[spec.name] = pointByName.get(spec.name)
+  const current = await api(unitPath)
   const baseModel = { name: unit.model.name, profile_id: unit.model.profile_id, point_map: pointMap, business_node_id: unit.model.business_node_id }
-  await api(unitPath, { method: 'PUT', body: JSON.stringify(baseModel) })
+  // 改映射会改变映射指纹；已存在的模型必须回传当前版本号，否则 409 mapping_version_conflict。
+  const versions = model => (model?.mapping_version ? { mapping_version: model.mapping_version, profile_version: model.profile_version } : {})
+  await api(unitPath, { method: 'PUT', body: JSON.stringify({ ...baseModel, ...versions(current.model) }) })
   const afterMap = await api(unitPath)
   await api(unitPath, { method: 'PUT', body: JSON.stringify({
     ...baseModel, mapping_version: afterMap.model?.mapping_version, profile_version: afterMap.model?.profile_version,
@@ -195,6 +198,13 @@ try {
     const state = deviceAccessState(device)
     if (state === 'access') assert.ok(device.required_points > 0 && device.verified_points >= device.required_points, `no L2 evidence device read 已接入: ${JSON.stringify(device)}`)
   }
+
+  // The seeded project binds all three devices; add one unbound device so the
+  // access step must distinguish all three states on real data.
+  const snapshot = await api('/snapshot')
+  const area = (snapshot.nodes || []).find(node => node.type === 'area')
+  assert.ok(area, 'seeded snapshot must carry an area to hold the unbound device')
+  await api('/nodes', { method: 'POST', body: JSON.stringify({ parent: area.id, type: 'device', description: '待绑定设备（守卫）' }) })
 
   await page.goto(`${origin}/uniapp/#/pages/design/index`, { waitUntil: 'domcontentloaded' })
   await page.locator('.design-ledger .node').first().waitFor({ timeout: 120000 })
