@@ -8,7 +8,6 @@ import (
 	"fastiot/internal/ems/bridge"
 	"fastiot/internal/ems/channel"
 	"fastiot/internal/ems/profile"
-	"github.com/simpleiot/simpleiot/client"
 	"github.com/simpleiot/simpleiot/data"
 )
 
@@ -53,23 +52,30 @@ func probeProfileUnit(connection ModbusConnectionInput, server int, spec profile
 // Evidence binds the Profile content, model revision, connection and acquisition
 // revisions. Runtime samples/health never affect this configuration identity.
 func (h *Handler) accessBasis(channel data.NodeEdge, server int) string {
+	if h.ems == nil {
+		return ""
+	}
+	return accessBasisFromPoints(channel, server, h.unitPoints(channel.ID), h.ems.Profiles)
+}
+
+// accessBasisFromPoints is accessBasis for callers that already loaded the
+// channel's points, so listing many units does not repeat the same reads.
+func accessBasisFromPoints(channel data.NodeEdge, server int, points []unitModelPointView, registry *profile.Registry) string {
+	if points == nil || registry == nil {
+		return ""
+	}
 	model, configured := unitModelFor(channel, server)
-	if !configured || h.ems == nil || h.ems.Profiles == nil {
+	if !configured {
 		return ""
 	}
-	version, found := h.ems.Profiles.Fingerprint(model.ProfileID)
+	version, found := registry.Fingerprint(model.ProfileID)
 	if !found {
-		return ""
-	}
-	points, err := client.GetNodes(h.nc, channel.ID, "all", "", false)
-	if err != nil {
 		return ""
 	}
 	stamps := map[string]string{}
 	for _, point := range points {
-		station, _ := point.Points.ValueInt(data.PointTypeID, "")
-		if point.Type == data.NodeTypeModbusIO && station == server {
-			stamps[point.ID] = bridge.AcquisitionStamp(channel, point)
+		if point.ServerID == server {
+			stamps[point.ID] = point.ConfigStamp
 		}
 	}
 	revision, _ := channel.Points.Find(unitModelPoint, strconv.Itoa(server))

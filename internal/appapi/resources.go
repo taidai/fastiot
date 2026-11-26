@@ -932,6 +932,11 @@ func (h *Handler) finishAccessVerification(w http.ResponseWriter, channel data.N
 	record := domainaccess.VerificationRecord{At: time.Now().UTC().Format(time.RFC3339Nano), Actor: identity.UserID, Level: level, Passed: passed, Reasons: reasons}
 	record.Basis = basis
 	record.DeviceID = fmt.Sprintf("%s/%d", channel.ID, server)
+	if points, ok := response["points"].([]domainaccess.PointVerification); ok {
+		// Persist the same per-point evidence the operator saw, so later reads
+		// (ledger, history) can distinguish a partial L2 run from a full pass.
+		record.Points = points
+	}
 	if model, configured := unitModelFor(channel, server); configured && h.ems != nil && h.ems.Profiles != nil {
 		record.ProfileVersion = model.ProfileVersion
 		if record.ProfileVersion == "" {

@@ -58,6 +58,16 @@ func point(name string, function channel.Function, address uint16, format string
 	return PointSpec{Name: name, Function: function, Address: address, Format: format, Scale: scale, Offset: offset, Unit: unit, ReadOnly: readOnly, Role: role, Note: note}
 }
 
+// optional keeps a curated point in the Profile but excludes it from the
+// required set used by L2 and access verification. Only read-only diagnostics
+// are marked optional: a missing optional point is reported as a gap, never as
+// an exemption for a required measurement or control point.
+func optional(p PointSpec) PointSpec {
+	required := false
+	p.Required = &required
+	return p
+}
+
 func enjoPCS() Profile {
 	points := []PointSpec{
 		point("开机/关机指令", channel.HoldingRegister, 657, "int16", 1, 0, "", false, RoleSetpoint, "写 1 开机、0 关机；现场先确认写授权"),
@@ -70,10 +80,10 @@ func enjoPCS() Profile {
 		point("IGBT 温度", channel.HoldingRegister, 24664, "int16", 0.1, 0, "℃", true, RoleTelemetry, ""),
 		point("环境温度", channel.HoldingRegister, 24665, "int16", 0.1, 0, "℃", true, RoleTelemetry, ""),
 		point("工作状态", channel.HoldingRegister, 24663, "uint16", 1, 0, "", true, RoleStatus, "位域，按协议 §3.1 解释"),
-		point("硬件故障字 1", channel.HoldingRegister, 5888, "uint16", 1, 0, "", true, RoleStatus, "位域"),
-		point("硬件故障字 2", channel.HoldingRegister, 5889, "uint16", 1, 0, "", true, RoleStatus, "位域"),
-		point("电网故障字", channel.HoldingRegister, 5890, "uint16", 1, 0, "", true, RoleStatus, "位域"),
-		point("系统故障字", channel.HoldingRegister, 5893, "uint16", 1, 0, "", true, RoleStatus, "位域"),
+		optional(point("硬件故障字 1", channel.HoldingRegister, 5888, "uint16", 1, 0, "", true, RoleStatus, "位域")),
+		optional(point("硬件故障字 2", channel.HoldingRegister, 5889, "uint16", 1, 0, "", true, RoleStatus, "位域")),
+		optional(point("电网故障字", channel.HoldingRegister, 5890, "uint16", 1, 0, "", true, RoleStatus, "位域")),
+		optional(point("系统故障字", channel.HoldingRegister, 5893, "uint16", 1, 0, "", true, RoleStatus, "位域")),
 	}
 	commands := []CommandSpec{
 		{ID: "on", Name: "开机", Point: "开机/关机指令", Value: 1, Note: "写 1"},

@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	domainaccess "fastiot/internal/domain/access"
+	"fastiot/internal/ems/profile"
+
 	"github.com/simpleiot/simpleiot/data"
 )
 
@@ -194,4 +196,179 @@ func TestLedgerTemplateCopyBindingsAndScopePersist(t *testing.T) {
 	stop()
 	base, admin, _, _ = startInputServer(t, dir, password)
 	checkCopy()
+}
+
+// The ledger must expose required-point L2 facts without turning the manual
+// UnitModel sign-off into evidence: ADR 0011 needs 未绑定 / 待验证 / 已接入 to be
+// derivable from real records.
+func TestLedgerReportsRequiredPointVerificationFacts(t *testing.T) {
+	f, bus, device, _ := singleDeviceFixture(t)
+	bindSingleDevice(t, f, bus, device)
+
+	ledgerDevice := func() LedgerDevice {
+		t.Helper()
+		var ledger DeviceLedgerResponse
+		status, body := call(t, http.MethodGet, f.base+"/device-ledger", f.token, nil, &ledger)
+		if status != 200 {
+			t.Fatalf("ledger: %d %s", status, body)
+		}
+		for _, item := range ledger.Devices {
+			if item.ChannelID == bus && item.ServerID == 1 {
+				return item
+			}
+		}
+		t.Fatalf("ledger missing %s/1: %s", bus, body)
+		return LedgerDevice{}
+	}
+
+	// access-sim declares one required point (水箱液位) and one optional point
+	// (远程模式), so only the required point may ever be counted as verified.
+	noL2 := ledgerDevice()
+	if noL2.RequiredPoints != 1 || noL2.VerifiedPoints != 0 || noL2.L2VerifiedAt != "" {
+		t.Fatalf("without L2 evidence: %+v", noL2)
+	}
+	t.Logf("ledger without L2: required_points=%d verified_points=%d l2_verified_at=%q verified=%v",
+		noL2.RequiredPoints, noL2.VerifiedPoints, noL2.L2VerifiedAt, noL2.Verified)
+	if noL2.Verified {
+		t.Fatalf("manual sign-off invented without operator confirmation: %+v", noL2)
+	}
+
+	f.cycle(t)
+	waitAccessSample(t, f, bus, "水箱液位", "good")
+	var l1 struct {
+		Passed bool `json:"passed"`
+	}
+	status, body := call(t, http.MethodPost, f.base+"/modbus/"+bus+"/units/1/verify", f.token, map[string]any{"level": "L1"}, &l1)
+	if status != 200 || !l1.Passed {
+		t.Fatalf("L1: %d %s", status, body)
+	}
+	if afterL1 := ledgerDevice(); afterL1.VerifiedPoints != 0 || afterL1.L2VerifiedAt != "" {
+		t.Fatalf("L1 counted as point evidence: %+v", afterL1)
+	}
+
+	var l2 struct {
+		Passed bool `json:"passed"`
+	}
+	status, body = call(t, http.MethodPost, f.base+"/modbus/"+bus+"/units/1/verify", f.token, map[string]any{"level": "L2"}, &l2)
+	if status != 200 || !l2.Passed {
+		t.Fatalf("L2: %d %s", status, body)
+	}
+	passing := ledgerDevice()
+	if passing.RequiredPoints != 1 || passing.VerifiedPoints != 1 || passing.L2VerifiedAt == "" {
+		t.Fatalf("full L2 evidence: %+v", passing)
+	}
+	t.Logf("ledger after L2: required_points=%d verified_points=%d l2_verified_at=%q bound=%v verified=%v",
+		passing.RequiredPoints, passing.VerifiedPoints, passing.L2VerifiedAt, passing.Bound, passing.Verified)
+	if !passing.Bound {
+		t.Fatalf("complete mapping must stay bound: %+v", passing)
+	}
+	if passing.Verified {
+		t.Fatalf("L2 evidence must not fake the manual sign-off: %+v", passing)
+	}
+	var history struct {
+		Records []struct {
+			Level  string `json:"level"`
+			Passed bool   `json:"passed"`
+			Points []struct {
+				Name   string `json:"name"`
+				Passed bool   `json:"passed"`
+			} `json:"points"`
+		} `json:"records"`
+	}
+	status, body = call(t, http.MethodGet, f.base+"/modbus/"+bus+"/units/1/verify", f.token, nil, &history)
+	if status != 200 {
+		t.Fatalf("history: %d %s", status, body)
+	}
+	persisted := false
+	for _, record := range history.Records {
+		if record.Level != "L2" || record.Points == nil {
+			continue
+		}
+		persisted = true
+		if len(record.Points) != 1 || record.Points[0].Name != "水箱液位" || !record.Points[0].Passed {
+			t.Fatalf("persisted L2 point evidence: %s", body)
+		}
+	}
+	if !persisted {
+		t.Fatalf("L2 point evidence not persisted: %s", body)
+	}
+
+	// Changing the mapping changes the access basis, so the earlier L2 run
+	// stops counting until the new configuration is re-verified.
+	var view unitModelView
+	call(t, http.MethodGet, f.base+"/modbus/"+bus+"/units/1/model", f.token, nil, &view)
+	input := *view.Model
+	delete(input.PointMap, "水箱液位")
+	status, body = call(t, http.MethodPut, f.base+"/modbus/"+bus+"/units/1/model", f.token, input, nil)
+	if status != 200 {
+		t.Fatalf("mapping edit: %d %s", status, body)
+	}
+	stale := ledgerDevice()
+	if stale.RequiredPoints != 1 || stale.VerifiedPoints != 0 || stale.L2VerifiedAt != "" {
+		t.Fatalf("stale L2 evidence counted: %+v", stale)
+	}
+}
+
+// ledgerVerificationFacts must derive the counts from persisted L2 evidence
+// only: a pass proves every required point, a later failed run may prove only
+// some, and a record from an older access basis counts for nothing.
+func TestLedgerVerificationFactsUsesCurrentL2PointEvidence(t *testing.T) {
+	registry := profile.Default()
+	prof, ok := registry.Get("enjo-pcs")
+	if !ok {
+		t.Fatal("enjo-pcs profile missing")
+	}
+	required := domainaccess.RequiredPointSpecs(prof)
+	if len(required) < 2 {
+		t.Fatalf("required points = %d, need at least 2", len(required))
+	}
+	modelText, err := json.Marshal(unitModelConfig{ProfileID: "enjo-pcs"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	points := []unitModelPointView{}
+	channel := data.NodeEdge{ID: "bus-1", Type: data.NodeTypeModbus, Points: data.Points{
+		data.NewPointString(unitModelPoint, "1", string(modelText)),
+	}}
+	basis := accessBasisFromPoints(channel, 1, points, registry)
+	if basis == "" {
+		t.Fatal("empty access basis")
+	}
+	withHistory := func(records []domainaccess.VerificationRecord) data.NodeEdge {
+		t.Helper()
+		raw, err := json.Marshal(records)
+		if err != nil {
+			t.Fatal(err)
+		}
+		node := channel
+		node.Points = append(append(data.Points{}, channel.Points...), data.NewPointString(domainaccess.VerificationPoint, "1", string(raw)))
+		return node
+	}
+
+	if verified, at := ledgerVerificationFacts(channel, 1, required, points, registry); verified != 0 || at != "" {
+		t.Fatalf("no L2 records = %d/%q", verified, at)
+	}
+	l1Only := withHistory([]domainaccess.VerificationRecord{{Level: "L1", At: "l1-time", Basis: basis, Passed: true}})
+	if verified, at := ledgerVerificationFacts(l1Only, 1, required, points, registry); verified != 0 || at != "" {
+		t.Fatalf("L1 only = %d/%q", verified, at)
+	}
+	passedAt := "2026-11-26T10:00:00Z"
+	fullPass := withHistory([]domainaccess.VerificationRecord{{Level: "L2", At: passedAt, Basis: basis, Passed: true}})
+	if verified, at := ledgerVerificationFacts(fullPass, 1, required, points, registry); verified != len(required) || at != passedAt {
+		t.Fatalf("full pass = %d/%q", verified, at)
+	}
+	partial := []domainaccess.VerificationRecord{
+		{Level: "L2", At: passedAt, Basis: basis, Passed: true},
+		{Level: "L2", At: "failed-time", Basis: basis, Passed: false, Points: []domainaccess.PointVerification{
+			{Name: required[0].Name, Passed: true},
+			{Name: required[1].Name, Passed: false},
+		}},
+	}
+	if verified, at := ledgerVerificationFacts(withHistory(partial), 1, required, points, registry); verified != 1 || at != "" {
+		t.Fatalf("partial failure = %d/%q", verified, at)
+	}
+	staleBasis := append(append([]domainaccess.VerificationRecord{}, partial...), domainaccess.VerificationRecord{Level: "L2", At: "stale-time", Basis: "older-basis", Passed: true})
+	if verified, at := ledgerVerificationFacts(withHistory(staleBasis), 1, required, points, registry); verified != 1 || at != "" {
+		t.Fatalf("stale basis = %d/%q", verified, at)
+	}
 }

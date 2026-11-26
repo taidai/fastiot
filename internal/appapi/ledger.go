@@ -10,7 +10,9 @@ import (
 
 	"github.com/simpleiot/simpleiot/data"
 
+	domainaccess "fastiot/internal/domain/access"
 	"fastiot/internal/ems/channel"
+	"fastiot/internal/ems/profile"
 )
 
 type LedgerDevice struct {
@@ -35,6 +37,14 @@ type LedgerDevice struct {
 	Verifier         string  `json:"verifier,omitempty"`
 	VerifiedAt       string  `json:"verified_at,omitempty"`
 	DeviceSerial     string  `json:"device_serial,omitempty"`
+	// RequiredPoints/VerifiedPoints are the machine-readable L2 facts ADR 0011
+	// needs. Verified is the human UnitModel sign-off and stays independent:
+	// these counts never upgrade it and it never stands in for L2 evidence.
+	RequiredPoints int `json:"required_points"`
+	VerifiedPoints int `json:"verified_points"`
+	// L2VerifiedAt is when the latest current-configuration L2 run proved every
+	// required point. VerifiedAt above remains the manual verification date.
+	L2VerifiedAt string `json:"l2_verified_at,omitempty"`
 }
 
 type DeviceLedgerResponse struct {
@@ -122,20 +132,20 @@ func (h *Handler) ledgerDevices(identity Identity, siteID string) ([]LedgerDevic
 				item.Verifier = model.Verifier
 				item.VerifiedAt = model.VerifiedAt
 				item.DeviceSerial = model.DeviceSerial
-				if profile, ok := h.ems.Profiles.Get(model.ProfileID); ok {
-					item.Vendor = profile.Vendor
-					item.Model = profile.Model
-					item.CommandCount = len(profile.CommandSpecs)
+				if prof, ok := h.ems.Profiles.Get(model.ProfileID); ok {
+					item.Vendor = prof.Vendor
+					item.Model = prof.Model
+					item.CommandCount = len(prof.CommandSpecs)
+					required := domainaccess.RequiredPointSpecs(prof)
+					item.RequiredPoints = len(required)
 					item.Bound = model.BusinessNodeID != "" && len(model.PointMap) > 0
-					for _, spec := range profile.PointSpecs {
-						if !spec.RequiredPoint() {
-							continue
-						}
+					for _, spec := range required {
 						point, mapped := findPoint(byServer[server], model.PointMap[spec.Name])
 						if !mapped || point.Disabled || len(pointDifferences(spec, point)) != 0 {
 							item.Bound = false
 						}
 					}
+					item.VerifiedPoints, item.L2VerifiedAt = ledgerVerificationFacts(node, server, required, points, h.ems.Profiles)
 				}
 			}
 			deviceID := node.ID + "/" + strconv.Itoa(server)
@@ -162,4 +172,48 @@ func (h *Handler) ledgerDevices(identity Identity, siteID string) ([]LedgerDevic
 		return devices[i].ServerID < devices[j].ServerID
 	})
 	return devices, nil
+}
+
+// ledgerVerificationFacts reads persisted L2 history for one station. Only a
+// record produced under the current access basis counts: a Profile, mapping or
+// acquisition change invalidates earlier evidence. A full pass proves every
+// currently required point; a failed run can still report the required points
+// that passed, but never sets L2VerifiedAt. Records saved before per-point
+// evidence existed fall back to their overall Passed result.
+func ledgerVerificationFacts(channel data.NodeEdge, server int, required []profile.PointSpec, points []unitModelPointView, registry *profile.Registry) (int, string) {
+	if len(required) == 0 {
+		return 0, ""
+	}
+	basis := accessBasisFromPoints(channel, server, points, registry)
+	if basis == "" {
+		return 0, ""
+	}
+	records := accessVerificationHistory(channel, server)
+	var latest *domainaccess.VerificationRecord
+	for i := len(records) - 1; i >= 0; i-- {
+		if records[i].Level != "L2" || records[i].Basis != basis {
+			continue
+		}
+		latest = &records[i]
+		break
+	}
+	if latest == nil {
+		return 0, ""
+	}
+	if latest.Passed {
+		return len(required), latest.At
+	}
+	requiredNames := make(map[string]bool, len(required))
+	for _, spec := range required {
+		requiredNames[spec.Name] = true
+	}
+	verified, seen := 0, map[string]bool{}
+	for _, result := range latest.Points {
+		if !result.Passed || !requiredNames[result.Name] || seen[result.Name] {
+			continue
+		}
+		seen[result.Name] = true
+		verified++
+	}
+	return verified, ""
 }

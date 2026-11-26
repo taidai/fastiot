@@ -111,6 +111,10 @@ type VerificationRecord struct {
 	CommandID      string   `json:"command_id,omitempty"`
 	CommandState   string   `json:"command_state,omitempty"`
 	Current        bool     `json:"current"`
+	// Points is the per-required-point outcome of an L2 run. Older records
+	// predate this field; readers must treat an empty list as "only the overall
+	// Passed result is known".
+	Points []PointVerification `json:"points,omitempty"`
 }
 
 type PointVerification struct {

@@ -239,6 +239,58 @@ func wordsFor(text string) []uint16 {
 	return words
 }
 
+// The demo PCS Profile must mirror the prototype's required/optional split so
+// the UI can show "必需 N · 可选 M" for a built-in model. Optionality is limited
+// to read-only diagnostics: no writable setpoint or command target may be
+// exempted from L2/access verification.
+func TestEnjoPCSDeclaresRequiredAndOptionalPoints(t *testing.T) {
+	prof, ok := Default().Get("enjo-pcs")
+	if !ok {
+		t.Fatal("enjo-pcs profile missing")
+	}
+	byName := map[string]PointSpec{}
+	required, optional := []string{}, []string{}
+	for _, spec := range prof.PointSpecs {
+		byName[spec.Name] = spec
+		if spec.RequiredPoint() {
+			required = append(required, spec.Name)
+		} else {
+			optional = append(optional, spec.Name)
+		}
+	}
+	if len(required) != 10 || len(optional) != 4 {
+		t.Fatalf("required/optional = %d/%d, want 10/4 (%v)", len(required), len(optional), optional)
+	}
+	t.Logf("enjo-pcs required=%d optional=%d optional_names=%v", len(required), len(optional), optional)
+	for _, name := range []string{"硬件故障字 1", "硬件故障字 2", "电网故障字", "系统故障字"} {
+		spec, found := byName[name]
+		if !found {
+			t.Fatalf("optional point %s missing", name)
+		}
+		if spec.RequiredPoint() {
+			t.Fatalf("diagnostic point %s must be optional", name)
+		}
+		if !spec.ReadOnly {
+			t.Fatalf("optional point %s must stay read-only", name)
+		}
+	}
+	for _, spec := range prof.PointSpecs {
+		if !spec.ReadOnly && !spec.RequiredPoint() {
+			t.Fatalf("writable point %s must stay required", spec.Name)
+		}
+	}
+	for _, command := range prof.CommandSpecs {
+		if spec, found := byName[command.Point]; found && !spec.RequiredPoint() {
+			t.Fatalf("command target %s must stay required", command.Point)
+		}
+		for _, parameter := range command.Parameters {
+			if spec, found := byName[parameter.Point]; found && !spec.RequiredPoint() {
+				t.Fatalf("command parameter %s must stay required", parameter.Point)
+			}
+		}
+	}
+}
+
 func TestIdentifyRanksStrongAndWeakCandidates(t *testing.T) {
 	registry := &Registry{profiles: []Profile{
 		{ID: "yd", Probes: []Identity{{Function: channel.HoldingRegister, Address: 43904, Count: 8, TextContains: []string{"YD2037"}, Weight: 3, Label: "model"}}},
