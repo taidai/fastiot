@@ -161,7 +161,7 @@ func (h *Handler) deploymentAcquisition(siteID string, nodes []data.NodeEdge) ([
 			health := "unknown"
 			if h.ems != nil && h.ems.Service != nil {
 				if reported := h.ems.Service.State.Health(deviceID); reported != "" {
-					health = reported
+					health = string(reported)
 				}
 			}
 			var verified *deploymentAcquisitionEvidence
