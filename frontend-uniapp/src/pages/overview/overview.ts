@@ -148,6 +148,19 @@ export function healthLabel(health?: string) {
   return ({ healthy: "在线", degraded: "不稳定", offline: "离线", unknown: "未知" } as Record<string, string>)[health || ""] || health || "—"
 }
 
+// Device status combines the two signals we actually hold: communication health
+// and the running-feedback observation. Offline communication wins because
+// stale feedback cannot prove the device is running. With no usable running
+// feedback, show only the communication state (degraded still communicates, so
+// it reads as online; the 通信 column carries the instability). Anything else
+// stays "—" instead of guessing.
+export function deviceStatus(health?: string, running?: boolean) {
+  if (health === "offline") return "离线"
+  if (running !== undefined) return running ? "在线" : "停止"
+  if (health === "healthy" || health === "degraded") return "在线"
+  return "—"
+}
+
 export function displaySample(sample: Pick<StateValue, "value"> | undefined, label = "") {
   if (!sample) return "—"
   if (sample.value.bool !== undefined) {
@@ -270,6 +283,43 @@ export function unitPointsForServer<T extends Pick<UnitPoint, "server_id">>(poin
 
 export function writableUnitPoints<T extends Pick<UnitPoint, "io_type" | "read_only">>(points: T[]) {
   return points.filter(point => !point.read_only && ["modbusCoil", "modbusHoldingRegister"].includes(point.io_type))
+}
+
+export type RecentSeriesPoint = { id: string; unit: string; records: HistoryRecord[] }
+export type RecentTableRow = { time: number; cells: (string | null)[] }
+
+// Recent observations as a time-ordered table: one row per observation time,
+// one column per bound point. Each point's own observation times define the
+// row keys (grouped to the second the prototype shows), and a cell is filled
+// only when that point actually reported in that second. Values are never
+// interpolated or carried forward, so a gap reads "—".
+export function buildRecentTable(series: RecentSeriesPoint[], maxRows = 5): RecentTableRow[] {
+  const perPoint = series.map(point => {
+    const bySecond = new Map<number, { ms: number; text: string }>()
+    for (const record of point.records) {
+      if (record.kind === "quality_event") continue
+      const ms = Date.parse(record.source_time || record.received_time || "")
+      if (!Number.isFinite(ms)) continue
+      const text = recentValueText(record)
+      if (text === "") continue
+      const key = Math.floor(ms / 1000) * 1000
+      const previous = bySecond.get(key)
+      if (!previous || ms >= previous.ms) bySecond.set(key, { ms, text })
+    }
+    return bySecond
+  })
+  const times = new Set<number>()
+  for (const map of perPoint) for (const time of map.keys()) times.add(time)
+  return [...times].sort((a, b) => b - a).slice(0, Math.max(0, maxRows)).map(time => ({
+    time,
+    cells: perPoint.map(map => map.get(time)?.text ?? null),
+  }))
+}
+
+function recentValueText(record: Pick<HistoryRecord, "value" | "text">) {
+  if (record.text) return record.text
+  if (record.value === undefined || !Number.isFinite(record.value)) return ""
+  return String(Number(record.value.toPrecision(12)))
 }
 
 export type HourlyTrendBucket = {

@@ -36,7 +36,12 @@
           <DevicePanel v-if="devices[0]" :device="devices[0]" :values="scopedValues" :nodes="nodes" :allowed-tabs="block.binding.tabs" /><view v-else class="empty">没有已接入设备数据</view>
         </section>
         <section v-else-if="block.type === 'recent'" class="panel glass">
-          <view class="card-title">最近数据</view><view class="table-wrap"><table><thead><tr><th>点位</th><th v-for="column in block.binding.columns" :key="column">{{ recentColumnLabels[column] }}</th></tr></thead><tbody><tr v-for="id in block.binding.point_ids.slice(0, block.binding.rows)" :key="id"><td><button class="object-link" @click="history(availablePoints.has(id) ? id : '')">{{ resolvePoint(id).label }}</button></td><td v-for="column in block.binding.columns" :key="column">{{ recentColumn(id, column) }}</td></tr><tr v-if="!block.binding.point_ids.length"><td :colspan="block.binding.columns.length + 1" class="empty">未绑定点位 · —</td></tr></tbody></table></view>
+          <view class="card-title">最近数据 <button class="link" @click="openRecentHistory">查看全部</button></view>
+          <view class="table-wrap"><table><thead><tr><th>时间</th><th v-for="column in recentColumns" :key="column.id">{{ column.label }}<text v-if="column.unit"> {{ column.unit }}</text></th></tr></thead><tbody>
+            <tr v-for="row in recentRows" :key="row.time"><td class="num">{{ recentTime(row.time) }}</td><td v-for="(cell, index) in row.cells" :key="index" class="num">{{ cell ?? '—' }}</td></tr>
+            <tr v-if="!recentColumns.length"><td class="empty">未绑定点位 · —</td></tr>
+            <tr v-else-if="!recentRows.length"><td :colspan="recentColumns.length + 1" class="empty">{{ recentError || '暂无观测 · —' }}</td></tr>
+          </tbody></table></view>
         </section>
         <section v-else-if="block.type === 'alarm'" class="panel glass">
           <slot name="alarm" :layer-id="layerId"><view class="card-title">本层告警 <text>{{ layerAlarms.length }}</text></view><view v-for="alarm in layerAlarms.slice(0, 3)" :key="alarm.id" class="alarm-mini"><b>{{ alarm.title }}</b><view class="meta">{{ alarm.severity }} · {{ shortTime(alarm.updated_at) }} · {{ alarm.state === 'acknowledged' ? '已接手，仍活动' : '待接手' }}</view></view><view v-if="!layerAlarms.length" class="empty">没有待处理告警</view></slot>
@@ -65,7 +70,8 @@ import OverviewDailyStats from '../../pages/overview/OverviewDailyStats.vue'
 import type { EmsAlarm, Snapshot, StateValue, HistoryRecord } from '../../types/api'
 import { nameOf } from '../../types/api'
 import type { LedgerDevice, QualityStats } from '../../pages/overview/overview'
-import { alarmInLayer, boundDevicesForLayer, businessName, commandStateText, descendantNodeIds, displaySample, deviceKey, devicePointIds, healthLabel, isBusinessLayer, metricForPoint, shortTime, valueInLayer } from '../../pages/overview/overview'
+import { alarmInLayer, boundDevicesForLayer, buildRecentTable, businessName, commandStateText, descendantNodeIds, deviceStatus, deviceKey, devicePointIds, healthLabel, isBusinessLayer, metricForPoint, shortTime, valueInLayer } from '../../pages/overview/overview'
+import type { RecentTableRow } from '../../pages/overview/overview'
 import { loadHistory } from '../../stores/session'
 import { loadOperationRecords } from '../../pages/overview/operations'
 import type { OperationRecord } from '../../pages/overview/operations'
@@ -169,19 +175,52 @@ const heroMetrics = computed(() => props.hero && (props.document.slots.top || []
 const visibleSlots = computed(() => ['top', 'main', 'side'].filter(slot => slotBlocks(slot).length))
 const pointMetrics = computed(() => devices.value.flatMap(device => devicePointIds(nodes.value, [device]).slice(0, 1)).map(resolvePoint))
 const topology = computed(() => [...devices.value.map(device => { const id = devicePointIds(nodes.value, [device])[0]; const metric = id ? resolvePoint(id) : null; return { id:deviceKey(device), label:device.name, relation:`${layerName.value} → 设备绑定`, detail:metric ? `${metric.label} ${metric.value} ${metric.unit} · ${metric.quality}` : '无数据' } }), ...members.value.map(member => ({ id:`member:${member.role}`, label:member.node_id ? nodeName(member.node_id) : '未绑定成员', relation:member.role, detail:'成员引用，不代表能量流向' }))])
-const deviceColumnLabels: Record<string, string> = { type:'类型', state:'运行 / 维护', value:'主要值', communication:'通信', updated:'更新' }
-const recentColumnLabels: Record<string, string> = { value:'当前值', quality:'质量', time:'观测时间' }
+const deviceColumnLabels: Record<string, string> = { type:'类型', state:'状态', value:'主要值', communication:'通信', updated:'更新' }
+function runFeedback(device: LedgerDevice) {
+ const sample = scopedValues.value.find(value => value.device_id === deviceKey(device) && /运行反馈|运行状态/.test(businessName(nodes.value.find(node => node.id === value.point_id))))
+ return sample && sample.quality === 'good' && sample.value.bool !== undefined ? sample.value.bool : undefined
+}
 function deviceColumn(device: LedgerDevice, column: string) {
  if (column === 'type') return device.model || device.profile_id || '—'
  if (column === 'state') {
-  const sample = scopedValues.value.find(value => value.device_id === deviceKey(device) && /运行反馈|运行状态/.test(businessName(nodes.value.find(node => node.id === value.point_id))))
-  return `${!props.runtimeError && sample?.quality === 'good' ? displaySample(sample, businessName(nodes.value.find(node => node.id === sample.point_id))) : '未知'} / 未知`
+  if (props.runtimeError) return '—'
+  const health = qualityDevices.value.find(item => item.device_id === deviceKey(device))?.health
+  return deviceStatus(health, runFeedback(device))
  }
  if (column === 'communication') return props.runtimeError ? '查询不可用' : healthLabel(qualityDevices.value.find(item => item.device_id === deviceKey(device))?.health)
  const metric = resolvePoint(devicePointIds(nodes.value, [device])[0] || '')
  return column === 'updated' ? metric.time : `${metric.value} ${metric.unit}`
 }
-function recentColumn(id: string, column: string) { const metric = resolvePoint(id); return column === 'value' ? `${metric.value} ${metric.unit}` : column === 'quality' ? metric.quality : metric.time }
+const recentPointIds = computed(() => {
+ const recent = (props.document.blocks.find(block => block.type === 'recent')?.binding.point_ids || []) as string[]
+ const kpi = ((props.document.blocks.find(block => block.type === 'kpi')?.binding.metrics || []) as ScreenMetric[]).map(metric => metric.point_id).filter((id): id is string => !!id)
+ return [...new Set((recent.length ? recent : kpi))].slice(0, 5)
+})
+const recentColumns = computed(() => recentPointIds.value.map(id => { const metric = resolvePoint(id); return { id, label: metric.label, unit: metric.unit } }))
+const recentRows = ref<RecentTableRow[]>([])
+const recentError = ref('')
+let recentSerial = 0
+let recentTimer: ReturnType<typeof setInterval> | undefined
+function openRecentHistory() { emit('history', recentColumns.value.find(column => availablePoints.value.has(column.id))?.id || '') }
+function recentTime(time: number) { return shortTime(new Date(time).toISOString()) }
+async function refreshRecent() {
+ const serial = ++recentSerial
+ const block = props.document.blocks.find(item => item.type === 'recent')
+ const columns = recentColumns.value
+ recentError.value = ''
+ if (!block || !columns.length || props.runtimeError) { recentRows.value = []; return }
+ const now = new Date(); const start = new Date(now.getTime() - 10 * 60 * 1000)
+ const results = await Promise.all(columns.map(async column => {
+  if (!availablePoints.value.has(column.id)) return [] as HistoryRecord[]
+  try { const result = await loadHistory(column.id, start, now, 'raw'); return result.results[0]?.records || [] }
+  catch (error) { if (serial === recentSerial) recentError.value = `最近数据查询不可用：${error instanceof Error ? error.message : String(error)}`; return [] as HistoryRecord[] }
+ }))
+ if (serial !== recentSerial) return
+ recentRows.value = buildRecentTable(columns.map((column, index) => ({ id: column.id, unit: column.unit, records: results[index] })), Math.min(5, Number(block.binding.rows) || 5))
+}
+watch(() => [props.layerId, recentPointIds.value.join(','), projectContext.generation, props.runtimeError, props.document.blocks.some(block => block.type === 'recent')], () => { void refreshRecent() }, { immediate: true, flush: 'sync' })
+onMounted(() => { recentTimer = setInterval(() => { void refreshRecent() }, 10000) })
+onBeforeUnmount(() => { recentSerial++; clearInterval(recentTimer) })
 const operations = ref<OperationRecord[]>([])
 const operationError = ref('')
 let operationSerial = 0

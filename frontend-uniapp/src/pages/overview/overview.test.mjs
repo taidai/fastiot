@@ -4,8 +4,10 @@ import { readFileSync } from "node:fs"
 import {
   boundDevicesForLayer,
   buildHourlyTrend,
+  buildRecentTable,
   commandStateText,
   descendantNodeIds,
+  deviceStatus,
   displaySample,
   formatPercent,
   healthLabel,
@@ -122,6 +124,38 @@ test("quality, health and percentages distinguish unavailable statistics", () =>
   assert.equal(formatPercent(99.25, 12), "99.3%")
   assert.equal(summarizeSuccessRate([{ window_5m: { polls: 8, failures: 2 } }, { window_5m: { polls: 2, failures: 0 } }]), "80.0%")
   assert.equal(summarizeSuccessRate([{ window_5m: { polls: 0, failures: 0 } }]), "—")
+})
+
+test("device status composes communication with running feedback and never guesses", () => {
+  assert.equal(deviceStatus("offline", true), "离线", "offline communication wins over stale feedback")
+  assert.equal(deviceStatus("healthy", true), "在线")
+  assert.equal(deviceStatus("healthy", false), "停止")
+  assert.equal(deviceStatus("degraded", true), "在线")
+  assert.equal(deviceStatus("healthy"), "在线", "no feedback falls back to the communication state")
+  assert.equal(deviceStatus("unknown"), "—")
+  assert.equal(deviceStatus(undefined), "—")
+})
+
+test("recent data aligns points by observation time without interpolating", () => {
+  const rows = buildRecentTable([
+    { id: "pressure", unit: "MPa", records: [
+      { point_id: "pressure", source_time: "2026-11-22T21:34:10Z", value: 0.42, quality: "good", source: "modbus_runtime" },
+      { point_id: "pressure", source_time: "2026-11-22T21:34:05Z", value: 0.41, quality: "good", source: "modbus_runtime" },
+    ] },
+    { id: "level", unit: "%", records: [
+      { point_id: "level", source_time: "2026-11-22T21:34:10Z", value: 68, quality: "good", source: "modbus_runtime" },
+      { point_id: "level", source_time: "2026-11-22T21:34:07Z", value: 69, quality: "good", source: "modbus_runtime" },
+      { point_id: "level", source_time: "2026-11-22T21:34:05Z", quality: "stale", kind: "quality_event", source: "modbus_runtime" },
+    ] },
+  ], 5)
+  assert.equal(rows.length, 3, "union of real observation times, newest first")
+  assert.equal(rows[0].cells[0], "0.42")
+  assert.equal(rows[0].cells[1], "68")
+  assert.equal(rows[1].cells[0], null, "a missing point at that time stays empty")
+  assert.equal(rows[1].cells[1], "69")
+  assert.equal(rows[2].cells[0], "0.41")
+  assert.equal(rows[2].cells[1], null, "quality events are not values")
+  assert.equal(buildRecentTable([], 5).length, 0)
 })
 
 test("appearance reset restores the real light theme and 42 percent defaults", () => {
