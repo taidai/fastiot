@@ -145,6 +145,9 @@ type LayerScreenState = { screen: LayerScreen | null; error: boolean }
 
 const current = ref("site")
 const stepPinned = ref(false)
+// Declared before the immediate snapshot watcher: that watcher calls
+// loadLayerScreens() during setup, and a later `let` would be in its TDZ.
+let layerScreenRequest = 0
 onLoad(query => {
   const step = String(query?.step || "")
   if (["site", "tree", "access", "strategy", "ui", "delivery"].includes(step)) {
@@ -398,7 +401,6 @@ async function copySubtree(id: string, parent: string, name: string) {
     modelNotice.value = `已复制 ${result.created} 个对象${result.skipped ? `，跳过 ${result.skipped} 个连接/规则对象` : ""}${result.confirm?.length ? `；${result.confirm.length} 个外部成员引用需重新绑定` : ""}`
   } catch (cause) { modelError.value = cause instanceof Error ? cause.message : "子树复制失败" } finally { actionBusy.value = "" }
 }
-let layerScreenRequest = 0
 async function loadLayerScreens() {
   const requestID = ++layerScreenRequest
   const ids = screenLayers.value.map(row => row.node.id)

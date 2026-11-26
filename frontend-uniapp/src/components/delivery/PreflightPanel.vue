@@ -16,7 +16,7 @@
       <span class="chip" :class="report.status">总状态：{{ statusText(report.status) }}</span>
       <span class="chip ok">通过 {{ report.summary?.pass || 0 }}</span>
       <span class="chip warn">注意 {{ report.summary?.warn || 0 }}</span>
-      <span class="chip fail">阻断 {{ report.summary?.fail || 0 }}</span>
+      <span class="chip fail">失败 {{ report.summary?.fail || 0 }}</span>
     </view>
     <view v-else-if="!error" class="empty">正在读取实时门槛…</view>
     <view v-if="expanded" id="delivery-gate-details">
