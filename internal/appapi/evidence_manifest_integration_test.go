@@ -6,13 +6,19 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 
+	"fastiot/internal/ems/runtime"
+	"fastiot/internal/emsapi"
 	"github.com/simpleiot/simpleiot/client"
 	"github.com/simpleiot/simpleiot/data"
 )
 
 func TestAcceptanceEvidenceManifestScopesVersionsAndDeployments(t *testing.T) {
 	base, token, h, _ := startInputServer(t, t.TempDir(), data.NewID())
+	service := runtime.NewService(nil, time.Minute, time.Second, 100)
+	t.Cleanup(service.Close)
+	h.SetEMS(emsapi.New(service, time.Second))
 	root := snapshotRoot(t, base, token)
 	site := createNodeAPI(t, base, token, NodeTypeSite, root, "Evidence site", 0)
 	identity := Identity{UserID: "admin", Policy: AccessPolicy{Admin: true}, Anchors: []string{root}}
