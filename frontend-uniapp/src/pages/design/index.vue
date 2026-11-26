@@ -1,7 +1,7 @@
 <template>
   <view class="page">
-    <TopBar active="design" :project="projectName" meta="按步骤牵引，不使用演示配置" :pending="pendingAlarms.length" :alpha="42"
-      show-ems :ems-installed="emsInstalled" :ems-busy="industryBusy" @import-project="navigate('delivery')" @toggle-ems="toggleEms" @navigate="navigate" @bell="alarmOpen = true" @alpha="() => {}" />
+    <TopBar active="design" meta="按步骤牵引，不使用演示配置" :pending="pendingAlarms.length" :alpha="42"
+      show-ems :ems-installed="emsInstalled" :ems-busy="industryBusy" @toggle-ems="toggleEms" @navigate="navigate" @bell="alarmOpen = true" @alpha="() => {}" />
     <view v-if="session.error" class="error">{{ session.error }}</view>
     <IndustryGate v-if="industryBlocked" />
     <template v-else>

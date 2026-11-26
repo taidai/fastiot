@@ -45,7 +45,7 @@ try {
   const navigate = async label => {
     await page.locator('.workbench uni-button').filter({ hasText: label }).click()
     await page.locator('.workbench uni-button.active').filter({ hasText: label }).waitFor()
-    await page.waitForFunction(() => document.querySelector('.project-button')?.textContent.includes('FastIOT'))
+    await page.waitForFunction(() => document.querySelector('.project')?.textContent.includes('FastIOT'))
   }
   await page.locator('.headline h1').waitFor()
   for (const label of ['设计', '交付', '总览']) {
@@ -76,7 +76,7 @@ try {
     assert.equal(await page.locator('.industry-gate').count(), 0, 'activation recovers all workbenches')
   }
   await page.reload()
-  await page.locator('.project-button').filter({ hasText: 'FastIOT' }).waitFor()
+  await page.locator('.project').filter({ hasText: 'FastIOT' }).waitFor()
   assert.equal(await page.locator('.industry-gate').count(), 0)
   assert.deepEqual(errors, [])
   console.log('PASS real Go industry gate: ordinary IoT; dependent project in all workbenches; activation; refusal to erase dependency; reload')

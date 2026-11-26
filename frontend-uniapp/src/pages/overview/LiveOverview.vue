@@ -1,6 +1,6 @@
 <template>
   <view class="page" :class="appearance.theme === 'light' ? '' : `theme-${appearance.theme}`">
-    <TopBar active="overview" :project="projectName" :meta="syncMeta" :pending="unackedAlarms.length" :alpha="appearance.alpha"
+    <TopBar active="overview" :meta="syncMeta" :pending="unackedAlarms.length" :alpha="appearance.alpha"
       :theme="appearance.theme" themes show-appearance show-bell @navigate="navigate" @bell="alarmOpen = true" @alpha="setAlpha" @theme="setTheme" @reset="resetAppearance" />
 
     <IndustryGate v-if="industryBlocked" />

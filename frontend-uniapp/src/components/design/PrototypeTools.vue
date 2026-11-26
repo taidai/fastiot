@@ -24,7 +24,7 @@ const tools: Record<string, { label: string; question: string; note: string }> =
   channels: { label: "通道", question: "数据从哪来、连接通不通？", note: "一个端口一行；线路测试与扫描只读，不写设备。" },
   points: { label: "点位表", question: "这个数是什么含义、绑到哪个属性？", note: "批量新增、改缩放、CSV 预检与回滚都在这一页。" },
   profiles: { label: "型号库", question: "厂商型号与版本、点位/命令映射，换现场怎么复用？", note: "跨通道、跨项目复用；从设备绑定时也能选。" },
-  templates: { label: "模板库", question: "点表、策略、画面哪些能跨项目复用？", note: "点表、策略、画面三类模板；新建项目时可从这里选。" },
+  templates: { label: "模板库", question: "点表、策略、画面哪些能跨项目复用？", note: "点表、策略、画面三类模板；新建现场时可从这里选。" },
   verify: { label: "设备验证", question: "哪台设备的映射、读写方向与连通已经确认？", note: "一台设备一行；验证结论不等于项目可交付。" },
   aggregate: { label: "聚合计算", question: "多个点怎么合成一个值？", note: "聚合定义挂在节点上；这里只是跨节点列表。结果是对应节点上的只读聚合点，窗口值会标明滞后。" },
   calculations: { label: "计算点", question: "哪些值由公式算出、来源是什么？", note: "公式与来源可查；只读，不写设备。" },

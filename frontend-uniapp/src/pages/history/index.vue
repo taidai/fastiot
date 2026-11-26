@@ -1,6 +1,6 @@
 <template>
   <view class="page" :class="appearance.theme === 'light' ? '' : `theme-${appearance.theme}`">
-    <TopBar active="overview" :project="projectName" meta="历史数据" :pending="unackedAlarms.length" :alpha="appearance.alpha"
+    <TopBar active="overview" meta="历史数据" :pending="unackedAlarms.length" :alpha="appearance.alpha"
       :theme="appearance.theme" themes :show-workbench="false" show-appearance show-bell @navigate="navigate" @bell="alarmOpen = true" @alpha="setAlpha" @theme="setTheme" @reset="resetAppearance" />
     <view class="history glass">
       <HistoryPanel :point-options="pointOptions" :initial-point="point" :refresh-token="refreshToken" @back="back" @update:point="point = $event" />
@@ -19,7 +19,6 @@ import AlarmCenter from "../../components/AlarmCenter.vue"
 import HistoryPanel from "./HistoryPanel.vue"
 import type { HistoryPointOption } from "./history"
 import { acknowledgeAlarm, closeAlarm, requireAuth, session, startPolling, stopPolling } from "../../stores/session"
-import { currentProject } from "../../stores/projects"
 import { isDerivedInput } from '../../components/design/strategy'
 import { businessName, unitOf } from "../overview/overview"
 import { DEFAULT_APPEARANCE, applyAppearanceDocument, normalizeAppearance } from "../overview/appearance"
@@ -44,7 +43,6 @@ function setAlpha(value: number) { appearance.value = normalizeAppearance({ ...a
 function setTheme(value: AppearanceTheme) { appearance.value = normalizeAppearance({ ...appearance.value, theme: value }); persistAppearance(); applyAppearanceDocument(appearance.value) }
 function resetAppearance() { appearance.value = { ...DEFAULT_APPEARANCE }; persistAppearance(); applyAppearanceDocument(appearance.value) }
 
-const projectName = computed(() => currentProject.value?.name || "未选择项目")
 const unackedAlarms = computed(() => session.alarms.filter(alarm => alarm.active && alarm.state === "active"))
 const pointOptions = computed<HistoryPointOption[]>(() => (session.snapshot?.nodes || []).filter(node => ["variable", "modbusIo", "opcuaPoint", "mqttSub"].includes(node.type) || isDerivedInput(node)).map(node => ({
   id: node.id,

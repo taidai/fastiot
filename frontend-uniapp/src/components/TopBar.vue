@@ -1,12 +1,7 @@
 <template>
   <header class="topbar glass" :class="{ 'no-workbench': !showWorkbench, 'no-actions': !showAppearance && !showBell }">
     <view class="brand">FastIOT<text class="brand-sub">{{ activeLabel }}</text></view>
-    <view class="project" @keydown.esc.prevent="closeProjectMenu">
-      <button class="project-button" role="button" :tabindex="currentProject ? 0 : -1" :aria-expanded="projectOpen" aria-haspopup="menu" :disabled="!currentProject" @click="projectOpen = !projectOpen" @keydown.enter.prevent @keydown.space.prevent @keyup.enter.stop.prevent="openProjectMenu" @keyup.space.stop.prevent="openProjectMenu" @keydown.down.prevent="openProjectMenu">项目：<b>{{ currentProject?.name || '未选择项目' }}</b> ▾</button>
-      <view v-if="projectOpen" class="project-menu" role="menu" aria-label="授权项目" @keydown.down.prevent="moveProjectFocus(1)" @keydown.up.prevent="moveProjectFocus(-1)">
-        <button v-for="item in projectContext.projects" :key="item.id" role="menuitemradio" tabindex="0" :aria-checked="item.id === projectContext.id" @keydown.enter.prevent @keydown.space.prevent @keyup.enter.stop.prevent="chooseLiveProject(item.id)" @keyup.space.stop.prevent="chooseLiveProject(item.id)" @click="chooseLiveProject(item.id)">{{ item.name }}</button>
-      </view>
-    </view>
+    <view class="project">项目：<b>{{ currentProject?.name || '未选择项目' }}</b></view>
     <view v-if="showWorkbench" class="workbench" aria-label="工作台">
       <button v-for="item in tabs" :key="item.key" role="button" tabindex="0" :class="{ active: active === item.key }" :aria-current="active === item.key ? 'page' : undefined" @keydown.enter.prevent="$emit('navigate', item.key)" @keydown.space.prevent="$emit('navigate', item.key)" @click="$emit('navigate', item.key)">{{ item.label }}</button>
     </view>
@@ -31,13 +26,12 @@
 
 <script setup lang="ts">
 import NotificationInbox from './NotificationInbox.vue'
-import { computed, nextTick, ref } from "vue"
+import { computed, ref } from "vue"
 import { session } from '../stores/session'
 import { canAction } from './delivery/contracts'
-import { currentProject, projectContext, selectProject } from '../stores/projects'
+import { currentProject } from '../stores/projects'
 const props = withDefaults(defineProps<{
   active: string
-  project: string
   meta: string
   pending: number
   alpha: number
@@ -57,40 +51,10 @@ const emit = defineEmits<{
   (event: "theme", value: "light" | "dark" | "tint"): void
   (event: "reset"): void
   (event: "toggle-ems"): void
-  (event: "project-change", id: string): void
-  (event: "new-project"): void
-  (event: "import-project"): void
 }>()
 const displayEmsInstalled = computed(() => session.snapshot?.industry?.installed ?? props.emsInstalled)
 const canChangeIndustry = computed(() => (canAction(session.snapshot, 'site_settings') && !!currentProject.value && !!session.snapshot?.roots.includes(currentProject.value.root_id)))
 const open = ref(false)
-const projectOpen = ref(false)
-function closeProjectMenu() {
-  const trigger = document.activeElement?.closest('.project')?.querySelector<HTMLElement>('.project-button')
-  projectOpen.value = false
-  trigger?.focus()
-}
-async function openProjectMenu() {
-  // uni-app wraps keyboard event targets as data, not DOM elements.
-  const container = document.activeElement?.closest('.project')
-  projectOpen.value = true
-  await nextTick()
-  container?.querySelector<HTMLElement>('[role="menuitemradio"]')?.focus()
-}
-function moveProjectFocus(direction: number) {
-  const container = document.activeElement?.closest('[role="menu"]')
-  const items = Array.from(container?.querySelectorAll<HTMLElement>('[role="menuitemradio"]') || [])
-  const index = items.indexOf(document.activeElement as HTMLElement)
-  items[(index + direction + items.length) % items.length]?.focus()
-}
-// keyup.stop on menu items keeps the opening Enter from also confirming uni.showModal.
-async function chooseLiveProject(id: string) {
-  projectOpen.value = false
-  const changed = await selectProject(id, () => new Promise(resolve => {
-    uni.showModal({ title: '切换项目', content: '切换将放弃当前页面未保存的修改。已发出的写入仍属于原项目，请返回原项目核实结果。', confirmText: '放弃并切换', success: result => resolve(result.confirm), fail: () => resolve(false) })
-  }))
-  if (changed) uni.reLaunch({ url: `/pages/${props.active}/index` })
-}
 function onAlpha(event: Event) {
   const detail = (event as CustomEvent<{ value?: number }>).detail
   const value = Number(detail?.value ?? (event.target as HTMLInputElement).value)
@@ -118,13 +82,6 @@ const activeLabel = computed(() => tabs.find(tab => tab.key === props.active)?.l
 .brand { font-size: 16px; font-weight: 700; letter-spacing: .02em; }
 .brand-sub { margin-left: 8px; color: var(--muted); font-size: 11px; font-weight: 400; letter-spacing: .14em; }
 .project { position: relative; color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow: visible; }
-.project-button { min-height: 32px; margin: 0; padding: 6px 11px; border: 1px solid var(--glass-border); border-radius: 10px; background: rgba(255,255,255,.78); font-size: 12.5px; line-height: normal; }
-.project-menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 40; min-width: 210px; padding: 6px; background: var(--glass-strong, #fff); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 18px 40px rgba(31,46,58,.16); }
-.project-menu button { display: block; width: 100%; margin: 0; min-height: 34px; padding: 8px 10px; border: 0; border-radius: 8px; background: none; font-size: 13px; line-height: normal; text-align: left; }
-.project-menu button:hover { background: #f1f7fa; }
-.project-menu hr { border: 0; border-top: 1px solid var(--line); margin: 6px 4px; }
-.project-name { color: var(--ink); font-weight: 600; }
-.project-caret { margin-left: 6px; color: var(--muted); font-size: 11px; }
 .ems-toggle { display: flex; align-items: center; gap: 6px; min-height: 0; padding: 5px 10px; border: 1px dashed #b9c8d4; border-radius: 999px; background: rgba(255,255,255,.5); color: var(--muted); font-size: 12px; line-height: normal; }
 .ems-check { display: grid; place-items: center; width: 12px; height: 12px; border: 1px solid #8fa9b8; border-radius: 2px; background: #fff; color: #0e7c7b; font-size: 10px; line-height: 1; }
 .top-meta { color: var(--muted); font-size: 11px; text-align: right; white-space: nowrap; overflow: visible; }
