@@ -60,13 +60,13 @@ const rows = computed<Row[]>(() => {
 </script>
 
 <style scoped>
-.ledger { display: flex; flex-direction: column; padding: 16px 0; align-self: stretch; overflow: auto; }
-.ledger-title { display: flex; justify-content: space-between; padding: 0 18px 10px; color: var(--muted); font-size: 10px; letter-spacing: .18em; }
-.node { display: block; width: 100%; min-height: 0; border: 0; border-left: 3px solid transparent; background: transparent; color: var(--ink); padding: 9px 18px; text-align: left; font-size: 12.5px; line-height: 1.4; overflow: visible; border-radius: 0; cursor: pointer; }
-.node.active { border-left-color: var(--accent); color: #172c3b; background: rgba(255,255,255,.65); font-weight: 600; }
-.index { display: inline; color: var(--muted); font-size: 10.5px; font-variant-numeric: tabular-nums; margin-right: 8px; }
+.ledger { display: flex; flex-direction: column; padding: var(--ledger-pad); align-self: stretch; overflow: auto; }
+.ledger-title { display: flex; justify-content: space-between; padding: 0 18px 10px; color: var(--muted); font-size: var(--fs-note); letter-spacing: .18em; }
+.node { display: block; width: 100%; min-height: 0; border: 0; border-left: 3px solid transparent; background: transparent; color: var(--ink); padding: var(--ledger-row-pad); text-align: left; font-size: var(--fs-ledger); line-height: 1.4; overflow: visible; border-radius: 0; cursor: pointer; }
+.node.active { border-left-color: var(--accent); color: var(--ink); background: var(--ledger-active-bg); font-weight: 600; }
+.index { display: inline; color: var(--muted); font-size: var(--fs-label); font-variant-numeric: tabular-nums; margin-right: 8px; }
 .count { display: inline; float: right; color: var(--amber); font-size: 11px; }
-.ledger-note { margin: 14px 18px 2px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10.5px; line-height: 1.9; }
+.ledger-note { margin: 14px 18px 2px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: var(--fs-label); line-height: 1.9; }
 @media (max-width: 760px) {
   .ledger { position: sticky; top: 8px; z-index: 6; flex-direction: row; margin-bottom: 10px; padding: 6px; overflow-x: auto; border-radius: 14px; }
   .ledger-title, .ledger-note { display: none; }

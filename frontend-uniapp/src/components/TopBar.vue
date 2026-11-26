@@ -75,19 +75,19 @@ const activeLabel = computed(() => tabs.find(tab => tab.key === props.active)?.l
 
 <style scoped>
 .notification-actions { display: flex; align-items: center; gap: 8px; }
-.topbar { position: relative; z-index: 30; display: grid; grid-template-columns: 180px minmax(110px,1fr) auto minmax(180px,1.2fr) auto auto; align-items: center; gap: 20px; padding: 12px 18px; }
+.topbar { position: relative; z-index: 30; display: grid; grid-template-columns: 180px minmax(110px,1fr) auto minmax(180px,1.2fr) auto auto; align-items: center; gap: var(--topbar-gap); padding: var(--topbar-pad); }
 .topbar.no-workbench { grid-template-columns: 180px 1fr auto auto auto; }
 .topbar.no-actions { display: flex; gap: 14px; padding: 9px 18px; }
 .no-actions .workbench { margin-left: auto; }
 .brand { font-size: 16px; font-weight: 700; letter-spacing: .02em; }
 .brand-sub { margin-left: 8px; color: var(--muted); font-size: 11px; font-weight: 400; letter-spacing: .14em; }
 .project { position: relative; color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow: visible; }
-.ems-toggle { display: flex; align-items: center; gap: 6px; min-height: 0; padding: 5px 10px; border: 1px dashed #b9c8d4; border-radius: 999px; background: rgba(255,255,255,.5); color: var(--muted); font-size: 12px; line-height: normal; }
-.ems-check { display: grid; place-items: center; width: 12px; height: 12px; border: 1px solid #8fa9b8; border-radius: 2px; background: #fff; color: #0e7c7b; font-size: 10px; line-height: 1; }
+.ems-toggle { display: flex; align-items: center; gap: 6px; min-height: 0; padding: 5px 10px; border: 1px dashed var(--control-border); border-radius: 999px; background: var(--control-bg); color: var(--muted); font-size: 12px; line-height: normal; }
+.ems-check { display: grid; place-items: center; width: 12px; height: 12px; border: 1px solid var(--control-border); border-radius: 2px; background: var(--control-check-bg); color: var(--accent); font-size: 10px; line-height: 1; }
 .top-meta { color: var(--muted); font-size: 11px; text-align: right; white-space: nowrap; overflow: visible; }
 .workbench { display: flex; gap: 3px; padding: 3px; border: 1px solid var(--glass-border); border-radius: 11px; background: var(--control-bg, rgba(255,255,255,.24)); }
-.workbench button { min-height: 24px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); padding: 3px 14px; font-size: 12px; line-height: 1.2; }
-.workbench button.active { background: var(--control-active, rgba(255,255,255,.85)); color: var(--accent); font-weight: 600; box-shadow: 0 2px 8px rgba(31,46,58,.1); }
+.workbench button { min-height: 24px; border: 0; border-radius: var(--control-radius); background: transparent; color: var(--muted); padding: 3px 14px; font-size: 12px; line-height: 1.2; }
+.workbench button.active { background: var(--control-active, rgba(255,255,255,.85)); color: var(--accent); font-weight: 600; box-shadow: var(--control-shadow); }
 .appearance, .bell { min-height: 0; border: 1px solid var(--glass-border); background: var(--control-bg, rgba(255,255,255,.55)); padding: 6px 12px; font-size: 12px; line-height: normal; color: var(--ink); overflow: visible; backdrop-filter: blur(10px); }
 .appearance { display: inline-block !important; border-radius: 10px; color: var(--ink); font-size: 11px; }
 .bell { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 12px; background: var(--control-bg, rgba(255,255,255,.6)); white-space: nowrap; }

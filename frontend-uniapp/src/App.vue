@@ -3,5 +3,6 @@
 </script>
 <style>
 @import "./theme/glass.css";
+@import "./theme/prototype.css";
 body::after { animation: none !important; }
 </style>

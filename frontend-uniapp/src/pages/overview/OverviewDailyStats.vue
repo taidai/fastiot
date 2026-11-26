@@ -78,9 +78,9 @@ onBeforeUnmount(() => { serial++; clearInterval(timer) })
 .daily-stats.with-trend { grid-template-columns: repeat(4, minmax(0, 1fr)) 2fr; align-items: end; }
 .dfig { min-width: 0; padding: 2px 14px; border-left: 1px solid var(--line); }
 .dfig:first-child { border-left: 0; padding-left: 0; }
-.dfig > text { display: block; color: var(--muted); font-size: 10px; letter-spacing: .06em; }
-.dfig b { font-size: 21px; font-weight: 600; }
-.dfig b small { margin-left: 2px; color: var(--muted); font-size: 10px; font-weight: 400; }
-.stat-note { color: var(--muted); font-size: 9px; overflow-wrap: anywhere; }
+.dfig > text { display: block; color: var(--muted); font-size: var(--fs-daily-label); letter-spacing: .06em; }
+.dfig b { font-size: var(--fs-daily-value); font-weight: 600; }
+.dfig b small { margin-left: 2px; color: var(--muted); font-size: var(--fs-daily-label); font-weight: 400; }
+.stat-note { color: var(--muted); font-size: var(--fs-micro); overflow-wrap: anywhere; }
 @media (max-width: 760px) { .daily-stats, .daily-stats.with-trend { grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 0; } .daily-stats.with-trend :deep(.overview-trend) { grid-column: 1 / -1; margin-top: 8px; padding-left: 0; border-left: 0; } }
 </style>
