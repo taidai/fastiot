@@ -75,7 +75,10 @@ func TestTicket21BrowserBackend(t *testing.T) {
 	_, _, targetHandler, _ := startInputServer(t, targetDir, targetPassword)
 	targetService := runtime.NewService(nil, time.Minute, time.Second, 100)
 	t.Cleanup(targetService.Close)
-	targetHandler.SetEMS(emsapi.New(targetService, time.Second))
+	// 与真实服务一致：设备接入页读取已持久化的通道配置，而不只读运行中的实例。
+	targetEMS := emsapi.New(targetService, time.Second)
+	targetEMS.Buses = bridge.NewNodeSource(targetHandler.nc).Buses
+	targetHandler.SetEMS(targetEMS)
 	loadSingleDeviceProfile(t, targetHandler, l3Profile)
 	targetBridge := bridge.New(targetService, bridge.NewNodeSource(targetHandler.nc), func(protocol, address string, timeout time.Duration) (channel.Bus, error) {
 		if protocol != "tcp" || address != "127.0.0.1:18118" {

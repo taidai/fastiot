@@ -68,7 +68,7 @@ try {
   const rebind = page.locator(".rebind-panel")
   await rebind.getByText("地址未绑定", { exact: false }).waitFor()
   await button("编辑现场连接").click()
-  await rebind.locator('input[placeholder="127.0.0.1:1502"]').fill("127.0.0.1:18118")
+  await rebind.locator("uni-label").filter({ hasText: "TCP 目标地址" }).locator("input").fill("127.0.0.1:18118")
   await button("保存现场连接").click()
   await rebind.getByText("现场连接已保存", { exact: true }).waitFor()
 

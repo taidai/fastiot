@@ -57,8 +57,27 @@ const busy = ref(false)
 const error = ref("")
 const notice = ref("")
 const scope = computed(() => new Set(props.nodeIds))
-const scopedChannels = computed(() => channels.value.filter(channel => scope.value.has(channel.node_id || channel.id)))
+// 项目包按设计剥离连接地址，运行通道接口不会列出这类待重绑通道；
+// 因此以本次导入的通道节点为准，运行通道信息只作补充。
+const scopedChannels = computed(() => {
+  const result = new Map<string, Channel>()
+  for (const node of props.snapshot?.nodes || []) {
+    if (node.type === "modbus" && scope.value.has(node.id)) result.set(node.id, { id: node.id, node_id: node.id })
+  }
+  for (const channel of channels.value) {
+    const id = channel.node_id || channel.id
+    if (scope.value.has(id)) result.set(id, { id, node_id: id, protocol: channel.protocol, address: channel.address })
+  }
+  return [...result.values()]
+})
 const canConfigure = computed(() => canAction(props.snapshot, "configure"))
+
+watch(() => scopedChannels.value.map(channel => channel.id).join(","), () => {
+  if (!scopedChannels.value.some(channel => channel.id === selectedID.value)) {
+    selectedID.value = scopedChannels.value[0]?.id || ""
+    form.value = null
+  }
+}, { immediate: true })
 
 watch(() => props.nodeIds.join(","), () => { void load() }, { immediate: true })
 async function load() {
@@ -67,10 +86,6 @@ async function load() {
   try {
     const result = await request<{ channels: Channel[] }>("/ems/channels")
     channels.value = result.channels || []
-    if (!scopedChannels.value.some(channel => channel.id === selectedID.value)) {
-      selectedID.value = scopedChannels.value[0]?.id || ""
-      form.value = null
-    }
   } catch (cause) {
     channels.value = []
     error.value = deliveryError(cause)
