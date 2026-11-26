@@ -302,7 +302,7 @@ export function resolveDeliveryPreview(path: string, method: string, body?: unkn
     if (!rollbackVersion) return fail(404, "version_not_found")
     versions = [rollbackVersion, ...versions.filter(version => version !== rollbackVersion)]
     auditRecords.unshift({ time: "2026-11-24T10:34:00+08:00", actor: "王管理员", action: "项目回退", object: rollbackVersion.id, detail: "只回工程配置；历史与命令保留", result: "success" })
-    return ok({ version: rollbackVersion.id, updated: 11, created: 1, extra: 1, preflight_status: "pass" })
+    return ok({ version: rollbackVersion.id, baseline: `pv-preview-baseline-${rollbackVersion.id}`, updated: 11, created: 1, extra: 1, preflight_status: "pass" })
   }
   if (route === "/users" && verb === "GET") return ok({ users: clone(users), actions: ["configure", "write_value", "command", "rule_publish", "alarm_ack", "alarm_maintain", "delete", "export", "account_manage", "audit_view", "site_settings", "virtual_input_apply", "virtual_input_write", "calculation_apply"] })
   if (route === "/users" && verb === "POST") {

@@ -305,14 +305,10 @@ func skippedNodes(nodes []data.NodeEdge) map[string]bool {
 // orderByDepth 保证父节点先于子节点创建。
 func orderByDepth(nodes []data.NodeEdge) []data.NodeEdge {
 	byParent := make(map[string][]data.NodeEdge)
-	var roots []data.NodeEdge
 	for _, node := range nodes {
 		byParent[node.Parent] = append(byParent[node.Parent], node)
 	}
 	seen := make(map[string]bool)
-	if len(nodes) > 0 {
-		roots = append(roots, nodes[0])
-	}
 	ordered := make([]data.NodeEdge, 0, len(nodes))
 	var walk func(node data.NodeEdge)
 	walk = func(node data.NodeEdge) {
@@ -327,7 +323,7 @@ func orderByDepth(nodes []data.NodeEdge) []data.NodeEdge {
 			walk(child)
 		}
 	}
-	for _, root := range roots {
+	for _, root := range nodes {
 		walk(root)
 	}
 	return ordered

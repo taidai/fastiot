@@ -337,6 +337,23 @@ test('failed live login is visible, unauthenticated and does not redirect or sub
   assert.deepEqual(app.redirects, [])
 })
 
+test('rollback API failures retain structured blockers and baseline recovery details', async () => {
+  const app = await application()
+  const promise = app.api.request('/projects/rollback', 'POST', { site: 'site-a', version: 'pv-old' })
+  promise.catch(() => {})
+  while (!app.requests.length) await new Promise(resolve => setImmediate(resolve))
+  app.requests.shift().success({ statusCode: 409, data: {
+    error: 'calculation_rollback_unsupported', retryable: true,
+    blockers: [{ code: 'calculation_rollback_unsupported', scope: 'version', node_id: 'calc-23', node_type: 'calculation' }],
+  } })
+  await assert.rejects(promise, error => {
+    assert.equal(error.code, 'calculation_rollback_unsupported')
+    assert.equal(error.details.retryable, true)
+    assert.equal(error.details.blockers[0].node_id, 'calc-23')
+    return true
+  })
+})
+
 test('polling reports failures and stops on expiry without unhandled rejections', async context => {
   context.mock.timers.enable({ apis: ['setInterval'] })
   const app = await application()

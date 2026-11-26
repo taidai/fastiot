@@ -103,6 +103,7 @@ test("publish, preflight and rollback update the same preview version history", 
   const rollbackResult = data("/projects/rollback", "POST", { site: "site-pump", version: "v2026.11.19-1" })
   assert.equal(rollbackResult.version, "v2026.11.19-1")
   assert.ok(rollbackResult.updated > 0)
+  assert.match(rollbackResult.baseline, /^pv-preview-baseline-/)
   assert.equal(data("/projects/versions?site=site-pump").versions[0].id, rollbackResult.version)
 })
 

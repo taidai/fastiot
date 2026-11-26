@@ -96,6 +96,13 @@ const ERROR_LABELS: Record<string, string> = {
   target_parent_unavailable: "导入目标项目不可用或当前账号无权访问",
   invalid_package_format: "文件不是 FastIOT 项目包",
   version_not_found: "版本不存在或不属于当前 Site",
+  version_integrity_missing: "原始版本缺少完整性校验，未执行回退",
+  version_package_missing: "可交付版本缺少原项目包引用，未执行回退",
+  version_package_mismatch: "版本与项目包资源不一致，未执行回退",
+  rollback_baseline_failed: "回退前基线保存或回读失败；未写入配置，可修复存储后重试",
+  rollback_baseline_unrestorable: "当前工程不能形成可恢复基线；未写入配置",
+  rollback_failed_recovered: "回退写入失败，已恢复回退前基线",
+  rollback_recovery_failed: "回退失败且基线恢复未确认；当前配置不可视为完整版本",
 }
 
 function dependencyError(code: string, operation?: "import"): string {
@@ -117,8 +124,28 @@ function dependencyError(code: string, operation?: "import"): string {
   return ""
 }
 
+type RollbackErrorDetails = {
+  baseline?: string
+  retryable?: boolean
+  recovered?: boolean
+  blockers?: { code: string; scope: string; node_id: string; node_type: string }[]
+}
+
 export function deliveryError(error: unknown, operation?: "import"): string {
   const code = error && typeof error === "object" && "code" in error ? String(error.code || "") : ""
+  const details = error && typeof error === "object" && "details" in error
+    ? (error as { details?: RollbackErrorDetails }).details
+    : undefined
+  if ((code === "calculation_rollback_unsupported" || code === "virtual_input_rollback_unsupported") && details?.blockers?.length && ERROR_LABELS[code]) {
+    const resources = details.blockers.map(blocker => `${blocker.scope === "version" ? "目标版本" : "当前工程"} ${blocker.node_type} ${blocker.node_id}`).join("；")
+    return `${ERROR_LABELS[code]}；${resources}；未写入配置，可修复阻断后重试`
+  }
+  if (code === "rollback_failed_recovered" && details?.baseline) {
+    return `回退写入失败，已恢复回退前基线 ${details.baseline}；可排查原因后重试`
+  }
+  if (code === "rollback_recovery_failed" && details?.baseline) {
+    return `回退失败且基线 ${details.baseline} 的恢复未确认；当前配置不可视为完整版本，不要盲目重试`
+  }
   if (ERROR_LABELS[code]) return ERROR_LABELS[code]
   const dependency = dependencyError(code, operation)
   if (dependency) return dependency

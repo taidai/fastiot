@@ -73,6 +73,11 @@ test("rollback lists real versions before the prototype scope table", () => {
   const scope = page.match(/>回退范围<\/h5>([\s\S]*?)<\/table>/)?.[0] || ""
   assert.match(scope, /<table class="mini-table">/)
   for (const label of ["恢复", "保留", "不做", "后端限制"]) assert.match(scope, new RegExp(`<td>${label}<\\/td>`), label)
+  assert.match(scope, /非交付基线/)
+  assert.match(scope, /失败先恢复基线/)
+  assert.match(scope, /预览不模拟资源级阻断/)
+  assert.match(page, /result\.baseline/)
+  assert.match(page, /await refreshAll\(\)/)
 })
 
 test("accounts use a real account table and a separate permission matrix card", () => {

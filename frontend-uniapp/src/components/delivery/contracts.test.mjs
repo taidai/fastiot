@@ -91,3 +91,19 @@ test("deliveryError explains confirmation and rollback/package limits", () => {
   assert.equal(deliveryError({ status: 409, code: "package_in_use", message: "x" }), "行业配置仍在使用，后端已拒绝停用")
   assert.equal(deliveryError(new Error("网络失败")), "网络失败")
 })
+
+test("rollback errors retain resource blockers and recovery baselines", () => {
+  const blocked = {
+    code: "calculation_rollback_unsupported", message: "x",
+    details: { retryable: true, blockers: [{ code: "calculation_rollback_unsupported", scope: "version", node_id: "calc-23", node_type: "calculation" }] },
+  }
+  assert.equal(deliveryError(blocked), "当前版本或工程包含计算点，后端不支持回退；目标版本 calculation calc-23；未写入配置，可修复阻断后重试")
+  assert.equal(
+    deliveryError({ code: "rollback_failed_recovered", message: "x", details: { baseline: "pv-baseline-23", recovered: true, retryable: true } }),
+    "回退写入失败，已恢复回退前基线 pv-baseline-23；可排查原因后重试",
+  )
+  assert.equal(
+    deliveryError({ code: "rollback_recovery_failed", message: "x", details: { baseline: "pv-baseline-23", recovered: false, retryable: false } }),
+    "回退失败且基线 pv-baseline-23 的恢复未确认；当前配置不可视为完整版本，不要盲目重试",
+  )
+})

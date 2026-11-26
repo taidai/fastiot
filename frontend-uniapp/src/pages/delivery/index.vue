@@ -118,9 +118,9 @@
             <h5 class="rollback-scope">回退范围</h5>
             <table class="mini-table"><tbody>
               <tr><td>恢复</td><td class="src">节点、点位、画面、策略与依赖声明</td></tr>
-              <tr><td>保留</td><td class="src">运行历史、告警与审计；回退前自动发布当前配置</td></tr>
+              <tr><td>保留</td><td class="src">运行历史、告警、审计与命令；回退前保存非交付基线，失败先恢复基线</td></tr>
               <tr><td>不做</td><td class="src">不回放旧命令，不自动恢复控制输出，不等于部署</td></tr>
-              <tr><td>后端限制</td><td class="src">版本或当前工程包含计算点、虚拟输入点时拒绝回退</td></tr>
+              <tr><td>后端限制</td><td class="src">版本或当前工程包含计算点、虚拟输入点时拒绝回退；预览不模拟资源级阻断</td></tr>
             </tbody></table>
             <p class="note">回退只回工程，不回历史与命令。</p>
           </section>
@@ -160,7 +160,7 @@ type PreflightReport = { id?: string; site?: string; generated_at?: string; oper
 type VersionSummary = { id: string; site_id: string; site_name: string; created_at: string; operator: string; note?: string; preflight_status?: string; nodes: number; deliverable?: boolean; fingerprint?: string }
 type ProjectPackage = { id: string; name: string; source_version?: string; source_fingerprint?: string; point_count?: number; strategy_count?: number; screen_count?: number; dependencies?: { kind: string; id: string; version: string }[]; nodes?: unknown[]; screens?: unknown[]; stripped?: unknown[]; warnings?: string[] }
 type ImportResult = { site_id: string; name: string; created: number; channels: number; rules: number; node_ids?: string[]; version_id?: string; warnings?: string[] }
-type RollbackResult = { version: string; updated: number; created: number; extra: number; preflight_status?: string }
+type RollbackResult = { version: string; baseline: string; updated: number; created: number; extra: number; preflight_status?: string }
 
 const current = PREVIEW_MODE ? toRef(deliveryPreviewState, "current") : ref("package")
 const emsInstalled = ref<boolean | null>(null)
@@ -439,9 +439,15 @@ async function rollback(version: VersionSummary) {
   busy.value = "rollback"; rollbackMessage.value = ""
   try {
     const result = await request<RollbackResult>("/projects/rollback", "POST", { site, version: version.id })
-    rollbackMessage.value = `已回退到 ${result.version}：更新 ${result.updated}、创建 ${result.created}、保留多余 ${result.extra}；历史未回退，旧命令未回放，不等于部署`
+    rollbackMessage.value = `已回退到 ${result.version}：更新 ${result.updated}、创建 ${result.created}、保留多余 ${result.extra}；回退前基线 ${result.baseline}；历史未回退，旧命令未回放，不等于部署`
     rollbackTone.value = "success"; rollbackConfirm.value = ""
-    await loadVersions(site)
+    try {
+      await loadVersions(site)
+      await refreshAll()
+    } catch {
+      rollbackMessage.value += "；回退结果已确认，但页面刷新失败，请重新读取"
+      rollbackTone.value = "warn"
+    }
   } catch (error) { rollbackMessage.value = deliveryError(error); rollbackTone.value = "error" } finally { busy.value = "" }
 }
 function navigate(key: string) { if (key !== "delivery") uni.navigateTo({ url: `/pages/${key}/index` }) }
