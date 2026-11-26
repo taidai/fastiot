@@ -1,38 +1,6 @@
-.page.theme-dark, .page.theme-tint {
-  --ink: #e8f1f6;
-  --muted: rgba(232,241,246,.68);
-  --faint: rgba(232,241,246,.58);
-  --line: rgba(255,255,255,.14);
-  --accent: #4fd1c5;
-  --mint: #77d7bd;
-  --amber: #ffad78;
-  --danger: #ff8f82;
-  --glass-strong: rgba(12,22,30,.94);
-  --glass-border: rgba(255,255,255,.18);
-  --glass-shadow: 0 18px 50px rgba(0,0,0,.35);
-  --control-bg: rgba(255,255,255,.08);
-  --control-active: rgba(79,209,197,.16);
-  --metric-bg: rgba(255,255,255,.06);
-  --metric-vacant: rgba(255,255,255,.025);
-  --metric-ink: #e8f1f6;
-  --on-accent: #08272a;
-  color: var(--ink);
-}
-.page.theme-dark { background: radial-gradient(circle at 8% 10%, rgba(15,95,90,.5), transparent 42%), radial-gradient(circle at 91% 9%, rgba(29,63,122,.5), transparent 45%), #0a1219; }
-.page.theme-tint {
-  --accent: #7ce0d3;
-  --glass-strong: rgba(8,30,34,.94);
-  --glass-border: rgba(180,255,245,.24);
-  --glass-shadow: 0 18px 50px rgba(0,20,25,.45);
-  background: radial-gradient(circle at 12% 12%, rgba(31,143,134,.32), transparent 44%), radial-gradient(circle at 88% 15%, rgba(44,95,158,.32), transparent 45%), #0c2a30;
-}
-.page.theme-dark .metric, .page.theme-tint .metric {
-  border-color: var(--glass-border);
-  background: var(--metric-bg);
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,.04), inset 0 0 12px rgba(255,255,255,.03);
-}
-.page.theme-dark .metric.vacant, .page.theme-tint .metric.vacant { background: var(--metric-vacant); }
-.page.theme-dark .metric .v, .page.theme-tint .metric .v { color: var(--metric-ink); }
+/* Theme-dependent component details.
+   The palette itself lives in theme/prototype.css; this file only adjusts
+   elements that cannot be expressed with the shared tokens. */
 .page.theme-dark .chips button, .page.theme-tint .chips button,
 .page.theme-dark .ghost, .page.theme-tint .ghost,
 .page.theme-dark select, .page.theme-tint select {

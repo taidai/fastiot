@@ -1,0 +1,185 @@
+/*
+ * Prototype design tokens.
+ * Source: frontend/prototype/overview-hd/总览 · 玻璃磨砂.html
+ * Cross-checked against 设计 · 玻璃磨砂.html and 交付 · 玻璃磨砂.html.
+ *
+ * Light values are scoped to the customer workbench pages that render no
+ * .statebar (overview and history). Design/delivery keep their own material.
+ * --glass stays on :root because applyAppearanceDocument() writes it inline on
+ * <html>, which is how the transparency slider still works.
+ */
+:root {
+  --glass: rgba(255, 255, 255, .42);
+  --glass-blur: blur(32px) saturate(1.55) contrast(1.02);
+  --glass-inner: inset 0 1px 0 rgba(255, 255, 255, .95), inset 0 0 0 1px rgba(255, 255, 255, .28), inset 1px 0 0 rgba(255, 255, 255, .45), inset 0 -1px 0 rgba(255, 255, 255, .25), inset 0 0 18px rgba(255, 255, 255, .24);
+  --glass-border-width: 2px;
+  --glass-sheen: none;
+  --font-sans: "Helvetica Neue", Arial, "Microsoft YaHei", "PingFang SC", sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Roboto Mono", monospace;
+}
+
+.page:not(:has(> .statebar)) {
+  /* ink */
+  --ink: #172c3b;
+  --muted: rgba(23, 44, 59, .56);
+  --faint: rgba(23, 44, 59, .44);
+  --line: rgba(67, 104, 130, .13);
+  --accent: #0c7d84;
+  --mint: #23705f;
+  --amber: #b85b35;
+  --danger: #b23a32;
+  --blue: #2877b7;
+
+  /* glass panel */
+  --glass-strong: rgba(255, 255, 255, .72);
+  --glass-border: rgba(255, 255, 255, .78);
+  --glass-shadow: 0 22px 55px rgba(45, 83, 110, .15);
+
+  /* layout */
+  --radius: 20px;
+  --panel-radius: 20px;
+  --panel-pad: 14px 16px;
+  --page-pad: 16px;
+  --overview-gap: 14px;
+  --topbar-pad: 12px 18px;
+  --topbar-gap: 20px;
+  --hero-pad: 16px 20px 4px;
+  --daily-pad: 12px 18px;
+  --side-pad: 16px 18px;
+  --side-gap: 18px;
+  --ledger-pad: 16px 0;
+  --ledger-row-pad: 9px 18px;
+  --ledger-active-bg: rgba(255, 255, 255, .65);
+
+  /* typography */
+  --fs-hero: 34px;
+  --fs-value: 24px;
+  --fs-crumb: 11px;
+  --fs-online: 12px;
+  --fs-ledger: 12.5px;
+  --fs-label: 10.5px;
+  --fs-note: 10px;
+  --fs-micro: 9.5px;
+  --fs-daily-value: 21px;
+  --fs-daily-label: 10px;
+
+  /* metric cards (the light prototype turns the hero metrics into cards) */
+  --metric-gap: 6px;
+  --metric-bg: rgba(255, 255, 255, .58);
+  --metric-border: 1px solid rgba(255, 255, 255, .9);
+  --metric-radius: 14px;
+  --metric-shadow: 0 8px 24px rgba(54, 92, 120, .07), inset 0 0 0 1px rgba(255, 255, 255, .2), inset 0 0 12px rgba(255, 255, 255, .3);
+  --metric-pad: 10px 12px;
+  --metric-first-pad-left: 12px;
+  --metric-ink: #183247;
+  --metric-value-size: 24px;
+  --metric-value-color: #183247;
+  --metric-label-size: 10.5px;
+  --metric-icon-display: block;
+  --metric-icon-size: 16px;
+  --metric-icon-stroke: #3b8aa8;
+  --chart-from: #0c7d84;
+  --chart-to: #79bdba;
+
+  /* controls */
+  --control-bg: rgba(255, 255, 255, .55);
+  --control-active: rgba(255, 255, 255, .85);
+  --control-border: #b9c8d4;
+  --control-check-bg: #fff;
+  --control-shadow: 0 2px 8px rgba(31, 46, 58, .1);
+  --control-radius: 8px;
+  --on-accent: #fff;
+
+  color: var(--ink);
+}
+
+.page.theme-dark {
+  --ink: #e8f1f6;
+  --muted: rgba(232, 241, 246, .62);
+  --faint: rgba(232, 241, 246, .52);
+  --line: rgba(255, 255, 255, .12);
+  --accent: #4fd1c5;
+  --mint: #77d7bd;
+  --amber: #ff9b6b;
+  --danger: #ff8f82;
+  --blue: #7fb2ff;
+
+  --glass-strong: rgba(18, 30, 40, .72);
+  --glass-border: rgba(255, 255, 255, .14);
+  --glass-shadow: 0 18px 50px rgba(0, 0, 0, .35);
+  --glass-inner: inset 0 1px 0 rgba(255, 255, 255, .12), inset 0 0 0 1px rgba(255, 255, 255, .28), inset 1px 0 0 rgba(255, 255, 255, .45), inset 0 -1px 0 rgba(255, 255, 255, .25), inset 0 0 18px rgba(255, 255, 255, .24);
+  --glass-sheen: linear-gradient(112deg, rgba(255, 255, 255, .36) 0%, rgba(255, 255, 255, .09) 36%, rgba(255, 255, 255, .01) 62%, rgba(255, 255, 255, .18) 100%);
+
+  --radius: 18px;
+  --panel-radius: 18px;
+  --ledger-active-bg: rgba(255, 255, 255, .07);
+
+  --metric-gap: 0px;
+  --metric-bg: transparent;
+  --metric-border: 0;
+  --metric-radius: 0;
+  --metric-shadow: none;
+  --metric-pad: 4px 12px;
+  --metric-first-pad-left: 0;
+  --metric-ink: var(--ink);
+  --metric-value-size: 25px;
+  --metric-value-color: var(--ink);
+  --metric-icon-display: none;
+  --metric-icon-stroke: var(--accent);
+  --chart-from: var(--accent);
+  --chart-to: var(--mint);
+
+  --control-bg: rgba(255, 255, 255, .08);
+  --control-active: rgba(79, 209, 197, .16);
+  --control-border: var(--glass-border);
+  --control-check-bg: rgba(255, 255, 255, .06);
+  --control-shadow: 0 2px 8px rgba(0, 0, 0, .25);
+  --on-accent: #08272a;
+
+  background: radial-gradient(circle at 8% 10%, rgba(15, 95, 90, .5), transparent 42%), radial-gradient(circle at 91% 9%, rgba(29, 63, 122, .5), transparent 45%), #0a1219;
+}
+
+.page.theme-tint {
+  --ink: #e8f1f6;
+  --muted: rgba(232, 241, 246, .62);
+  --faint: rgba(232, 241, 246, .52);
+  --line: rgba(255, 255, 255, .12);
+  --accent: #7ce0d3;
+  --mint: #77d7bd;
+  --amber: #ffb08a;
+  --danger: #ff8f82;
+  --blue: #a8d8ff;
+
+  --glass-strong: rgba(8, 30, 34, .7);
+  --glass-border: rgba(180, 255, 245, .22);
+  --glass-shadow: 0 18px 50px rgba(0, 20, 25, .45);
+  --glass-inner: inset 0 1px 0 rgba(255, 255, 255, .18), inset 0 0 0 1px rgba(255, 255, 255, .28), inset 1px 0 0 rgba(255, 255, 255, .45), inset 0 -1px 0 rgba(255, 255, 255, .25), inset 0 0 18px rgba(255, 255, 255, .24);
+  --glass-sheen: linear-gradient(112deg, rgba(255, 255, 255, .36) 0%, rgba(255, 255, 255, .09) 36%, rgba(255, 255, 255, .01) 62%, rgba(255, 255, 255, .18) 100%);
+
+  --radius: 18px;
+  --panel-radius: 18px;
+  --ledger-active-bg: rgba(255, 255, 255, .07);
+
+  --metric-gap: 0px;
+  --metric-bg: transparent;
+  --metric-border: 0;
+  --metric-radius: 0;
+  --metric-shadow: none;
+  --metric-pad: 4px 12px;
+  --metric-first-pad-left: 0;
+  --metric-ink: var(--ink);
+  --metric-value-size: 25px;
+  --metric-value-color: var(--ink);
+  --metric-icon-display: none;
+  --metric-icon-stroke: var(--accent);
+  --chart-from: var(--accent);
+  --chart-to: var(--mint);
+
+  --control-bg: rgba(255, 255, 255, .08);
+  --control-active: rgba(124, 224, 211, .18);
+  --control-border: var(--glass-border);
+  --control-check-bg: rgba(255, 255, 255, .06);
+  --control-shadow: 0 2px 8px rgba(0, 20, 25, .3);
+
+  background: radial-gradient(circle at 12% 12%, rgba(31, 143, 134, .32), transparent 44%), radial-gradient(circle at 88% 15%, rgba(44, 95, 158, .32), transparent 45%), #0c2a30;
+}
