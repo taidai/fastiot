@@ -65,7 +65,7 @@ try {
   assert.equal(secondRecords[0].acquisition_gaps.length, 0)
   assert.equal(secondRecords[0].acquisition_evidence.length, 1)
   assert.equal(secondRecords[0].acquisition_evidence[0].health, "healthy")
-  assert.equal(secondRecords[0].acquisition_evidence[0].level, "L2")
+  assert.equal(secondRecords[0].acquisition_evidence[0].verification_level, "L2")
   assert.equal(secondRecords[1].id, firstRecords[0].id, "records are append-only")
 
   // Refresh keeps the records and the three-way distinction.
