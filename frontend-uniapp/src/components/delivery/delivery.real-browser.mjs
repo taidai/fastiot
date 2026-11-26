@@ -54,7 +54,7 @@ try {
   assert(evidence.length > 100)
 
   await button("部署记录").click()
-  await page.getByText(/后端没有独立的/).waitFor()
+  await page.getByText(/暂无部署记录/).waitFor()
   await button("版本回退").click()
   await page.getByText(/版本或当前工程包含计算点/).waitFor()
   await button("账号与权限").click()

@@ -57,10 +57,11 @@ test("import guide keeps all four prototype stages and only marks factual progre
   assert.doesNotMatch(pipeline, /运行中|已部署/)
 })
 
-test("deployment records keep the prototype table and expose the real backend gap", () => {
+test("deployment records keep the prototype table and derive status from backend evidence", () => {
   assert.match(page, /<template v-else-if="current === 'deploy'">\s*<view class="variant-head"><b>部署记录<\/b><span>它现在跑在哪个现场？<\/span><\/view>/)
   for (const heading of ["目标", "版本", "时间", "人", "状态"]) assert.match(page, new RegExp(`<th>${heading}<\\/th>`), heading)
-  assert.match(page, /<td colspan="5"[^>]*>[^<]*后端没有独立的“包版本 → 目标实例”部署记录 API/)
+  assert.match(page, /class="deploy-table"/)
+  assert.match(page, /部署记录由后端推导/)
   assert.match(page, /本次页面导入状态/)
   assert.doesNotMatch(page, /v2026\.11\.19-1|11-19 09:58|待部署/)
 })

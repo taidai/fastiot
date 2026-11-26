@@ -84,12 +84,28 @@
         <template v-else-if="current === 'deploy'">
           <view class="variant-head"><b>部署记录</b><span>它现在跑在哪个现场？</span></view>
           <section class="card glass">
+            <view v-if="deploymentMessage" class="notice" :class="deploymentTone">{{ deploymentMessage }}</view>
+            <view v-if="deploymentError" class="error" role="alert">{{ deploymentError }}</view>
             <view class="table-wrap"><table class="deploy-table"><thead><tr><th>目标</th><th>版本</th><th>时间</th><th>人</th><th>状态</th></tr></thead>
               <tbody>
                 <tr v-if="PREVIEW_MODE" v-for="record in DELIVERY_PREVIEW_DEPLOYMENTS" :key="record.target"><td>{{ record.target }}</td><td>{{ record.version }}</td><td>{{ record.time }}</td><td>{{ record.operator }}</td><td><span class="chip" :class="record.status === '运行中' ? 'ok' : 'warn'">{{ record.status }}</span></td></tr>
-                <tr v-else><td colspan="5" class="empty">暂无部署记录：后端没有独立的“包版本 → 目标实例”部署记录 API。发布、导入与回退都不能记成部署成功。</td></tr>
+                <template v-else>
+                <tr v-for="record in deployments" :key="record.id" class="deployment-row" :data-deployment-id="record.id">
+                  <td>{{ record.site_name }}<small>{{ record.project_id }}</small></td>
+                  <td>{{ record.version_id }}<small>{{ record.source_version }} · {{ (record.source_fingerprint || "").slice(0, 12) }}</small></td>
+                  <td>{{ clock(record.recorded_at) }}</td>
+                  <td>{{ record.actor }}</td>
+                  <td>
+                    <span class="chip" :class="record.status === 'running' ? 'ok' : 'warn'">{{ record.status === 'running' ? "运行中（采集已恢复）" : "配置已应用" }}</span>
+                    <small>控制未授权</small>
+                    <small v-if="record.acquisition_gaps?.length">缺口：{{ record.acquisition_gaps.join("；") }}</small>
+                  </td>
+                </tr>
+                <tr v-if="!deployments.length && !deploymentBusy"><td colspan="5" class="empty">暂无部署记录：记录由后端按版本与当前采集证据推导；发布、导入与回退都不会自动记成部署成功。</td></tr>
+                </template>
               </tbody>
             </table></view>
+            <view v-if="!PREVIEW_MODE" class="actions"><button class="ghost" :disabled="!selectedSite || !versions.length || !canConfigure || deploymentBusy" @click="recordDeployment()">{{ deploymentBusy ? "记录中…" : "记录本次部署" }}</button></view>
             <view class="session-import">
               <view class="row"><span>本次页面导入状态</span><span class="src">{{ importStatus }}</span></view>
               <template v-if="importResult">
@@ -99,7 +115,7 @@
                 <view v-if="importResult.warnings?.length" class="notice warn">{{ importResult.warnings.join("；") }}</view>
               </template>
             </view>
-            <p class="note">部署只应用工程内容，不自动授予控制权限；地址与凭据需在现场重新绑定。此处只显示本次真实导入响应，不显示“运行中”或“已部署”等后端没有记录的状态。</p>
+            <p class="note">部署记录由后端推导：配置已应用、采集已恢复、控制已授权是三件事；“运行中”只表示当前实例采集已恢复，不代表控制已授权。地址与凭据需在现场重新绑定。</p>
           </section>
         </template>
 
@@ -186,6 +202,39 @@ const messageTone = ref<"success" | "warn" | "error">("success")
 const rollbackMessage = ref("")
 const rollbackTone = ref<"success" | "warn" | "error">("success")
 const rollbackConfirm = ref("")
+type DeploymentRecord = {
+  id: string; project_id: string; site_name: string; version_id: string; source_version: string; source_fingerprint: string
+  actor: string; recorded_at: string; status: string; reason: string
+  configuration_applied: boolean; acquisition_restored: boolean; control_authorized: boolean
+  acquisition_gaps?: string[]
+}
+const deployments = ref<DeploymentRecord[]>([])
+const deploymentError = ref("")
+const deploymentBusy = ref(false)
+const deploymentMessage = ref("")
+const deploymentTone = ref<"success" | "warn" | "error">("success")
+async function loadDeployments(site: string) {
+  if (PREVIEW_MODE) return
+  deploymentError.value = ""
+  if (!site) { deployments.value = []; return }
+  try {
+    const result = await request<{ records: DeploymentRecord[] }>(`/delivery/deployments?site=${encodeURIComponent(site)}`)
+    if (site === selectedSite.value) deployments.value = result.records || []
+  } catch (error) { if (site === selectedSite.value) { deployments.value = []; deploymentError.value = deliveryError(error) } }
+}
+async function recordDeployment() {
+  const site = selectedSite.value, version = versions.value[0]?.id
+  if (!site || !version || deploymentBusy.value) return
+  deploymentBusy.value = true; deploymentError.value = ""; deploymentMessage.value = ""
+  try {
+    const record = await request<DeploymentRecord>("/delivery/deployments", "POST", { site, version })
+    deploymentMessage.value = record.status === "running"
+      ? `已记录部署到 ${record.site_name}：配置已应用、当前实例采集已恢复；控制未授权`
+      : `已记录部署到 ${record.site_name}：配置已应用，采集尚未恢复（${record.acquisition_gaps?.length || 0} 项缺口）；控制未授权`
+    deploymentTone.value = record.status === "running" ? "success" : "warn"
+    await loadDeployments(site)
+  } catch (error) { deploymentError.value = deliveryError(error) } finally { deploymentBusy.value = false }
+}
 const packageSummary = ref<ProjectPackage | null>(null)
 const packageError = ref("")
 const packageLoading = ref(false)
@@ -260,10 +309,15 @@ watch(selectedSite, () => {
   publishBlocked.value = false; rollbackConfirm.value = ""; packageSummary.value = null
   packageError.value = ""; packageLoading.value = false
   message.value = ""; rollbackMessage.value = ""
+  deploymentMessage.value = ""; deploymentError.value = ""; deployments.value = []
   void loadSiteData(selectedSite.value)
+  void loadDeployments(selectedSite.value)
 })
 watch(canExport, () => { void loadPackage(selectedSite.value) })
-watch(current, (next, previous) => { if (previous === "industry" && next !== "industry") void loadIndustryStatus() })
+watch(current, (next, previous) => {
+  if (previous === "industry" && next !== "industry") void loadIndustryStatus()
+  if (next === "deploy") void loadDeployments(selectedSite.value)
+})
 function queryFor(site: string) { return site ? `?site=${encodeURIComponent(site)}` : "" }
 async function loadIndustryStatus() {
   try {
