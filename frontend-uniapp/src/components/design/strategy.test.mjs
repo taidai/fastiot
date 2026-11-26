@@ -6,6 +6,7 @@ import {
   isRamped,
   conditionText,
   createSimulationPayload,
+  duplicateRowIndexes,
   isWritable,
   moveRows,
   parseDocument,
@@ -107,4 +108,47 @@ test("businessId and isWritable follow the existing node contract", () => {
   assert.equal(isWritable(nodes[0]), true)
   assert.equal(isWritable(nodes[1]), true)
   assert.equal(isWritable(nodes[2]), false)
+})
+
+test("duplicateRowIndexes flags identical condition sets regardless of member order", () => {
+  const rows = [
+    { conditions: [
+      { point_id: "pressure", operator: "gt", value: 0.5 },
+      { point_id: "level", operator: "lt", value: 20 },
+    ] },
+    { conditions: [
+      { point_id: "level", operator: "lt", value: 20 },
+      { point_id: "pressure", operator: "gt", value: 0.5 },
+    ] },
+  ]
+  assert.deepEqual([...duplicateRowIndexes(rows)].sort(), [0, 1])
+})
+
+test("duplicateRowIndexes does not flag partial overlap or a different member", () => {
+  const rows = [
+    { conditions: [{ point_id: "pressure", operator: "gt", value: 0.5 }] },
+    { conditions: [{ point_id: "pressure", operator: "gt", value: 0.6 }] },
+    { conditions: [{ point_id: "pressure", operator: "gt", value: 0.5 }, { point_id: "level", operator: "lt", value: 20 }] },
+    { conditions: [{ point_id: "level", operator: "lt", value: 20 }, { point_id: "pressure", operator: "ge", value: 0.5 }] },
+  ]
+  assert.deepEqual([...duplicateRowIndexes(rows)], [])
+})
+
+test("duplicateRowIndexes flags repeated empty condition groups", () => {
+  assert.deepEqual([...duplicateRowIndexes([])], [])
+  assert.deepEqual([...duplicateRowIndexes([{ conditions: [] }])], [])
+  assert.deepEqual([...duplicateRowIndexes([{ conditions: [] }, { conditions: [] }])].sort(), [0, 1])
+})
+
+test("duplicateRowIndexes keeps differing connectors and time windows distinct", () => {
+  const point = { point_id: "pressure", operator: "gt", value: 0.5 }
+  const other = { point_id: "level", operator: "lt", value: 20 }
+  assert.deepEqual([...duplicateRowIndexes([
+    { conditions: [point, { ...other, join: "AND" }] },
+    { conditions: [point, { ...other, join: "OR" }] },
+  ])], [])
+  assert.deepEqual([...duplicateRowIndexes([
+    { conditions: [point, { point_id: "", operator: "", value: 0, kind: "time", start: "08:00", end: "20:00" }] },
+    { conditions: [point, { point_id: "", operator: "", value: 0, kind: "time", start: "22:00", end: "06:00" }] },
+  ])], [])
 })

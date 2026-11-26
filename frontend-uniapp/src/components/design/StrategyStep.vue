@@ -55,6 +55,7 @@
                   <view v-for="(condition, conditionIndex) in pointConditions(row)" :key="conditionIndex" class="condition-summary">
                     {{ conditionIndex ? `${condition.join || (row.match === 'any' ? 'OR' : 'AND')} ` : '' }}{{ conditionText(condition, displayName) }}
                   </view>
+                  <span v-if="duplicateRows.has(rowIndex)" class="chip warn" title="与同一张决策表内另一行的条件组完全相同">重复</span>
                   <view v-if="!row.conditions.length && rowIndex < rows.length - 1" class="warning-text">其下规则不会执行</view>
                 </td>
                 <td class="num">{{ durationText(row.hold_ms) }} / {{ durationText(row.cooldown_ms) }}</td>
@@ -249,6 +250,7 @@ import {
   actionText,
   conditionText,
   createSimulationPayload,
+  duplicateRowIndexes,
   isWritable,
   isRamped,
   moveRows,
@@ -308,6 +310,7 @@ const ruleAccess = computed(() => getRuleAccess(selectedRule.value))
 const definitionRestricted = computed(() => selectedRule.value?.parent === strategyParent.value ? ruleAccess.value.draft_restricted : ruleAccess.value.applied_restricted)
 const readOnly = computed(() => props.readOnly || definitionRestricted.value || (!!selectedRule.value && selectedRule.value.parent !== strategyParent.value))
 const rows = computed(() => document.value.table.rows)
+const duplicateRows = computed(() => duplicateRowIndexes(rows.value))
 const referencedInputs = computed(() => [...new Set(rows.value.flatMap(row => row.conditions.filter(condition => condition.kind !== "time").map(condition => condition.point_id)))])
 const runtimeError = computed(() => selectedRule.value ? point(selectedRule.value, "error")?.text || "" : "")
 const lastMatchId = computed(() => selectedRule.value ? point(selectedRule.value, "lastMatch")?.text || "" : "")
