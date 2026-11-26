@@ -154,7 +154,15 @@ try {
   }
   // A just-seeded backend may hold a single observation; the curve only draws
   // once there is real history, so wait for a few rows before switching views.
-  await page.waitForFunction(() => document.querySelectorAll('.history-drawer tbody tr').length >= 3, null, { timeout: 30000 })
+  // The drawer does not auto-refresh, so 1-2 rows would wait forever: widen the
+  // range once, then accept whatever real rows exist.
+  try {
+    await page.waitForFunction(() => document.querySelectorAll('.history-drawer tbody tr').length >= 3, null, { timeout: 15000 })
+  } catch {
+    await groups.nth(0).getByText('24小时', { exact: true }).click()
+    await groups.nth(1).getByText('自动', { exact: true }).click()
+    await hasRows()
+  }
   await groups.nth(2).getByText('曲线', { exact: true }).click()
   await drawer.locator('.trend').waitFor()
   // A fresh seed may hold only invalid/expired samples, in which case the curve
