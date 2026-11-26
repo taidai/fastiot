@@ -95,7 +95,8 @@ func (h *Handler) deliveryEvidence(w http.ResponseWriter, r *http.Request, ident
 	fmt.Fprint(readme, "  05-预检记录.csv       当前实时门槛与最近一次持久化预检，分开标识\n")
 	fmt.Fprint(readme, "  06-映射差异.csv       Profile 与实际点位的逐点映射判定及差异\n")
 	fmt.Fprint(readme, "  07-审计记录.csv       有审计查看权时导出最近 2000 条；否则明确标未包含\n")
-	fmt.Fprint(readme, "  08-权限矩阵.csv       角色 × 动作 × 对象；无账号管理权时仅含当前账号\n\n")
+	fmt.Fprint(readme, "  08-权限矩阵.csv       角色 × 动作 × 对象；无账号管理权时仅含当前账号\n")
+	fmt.Fprint(readme, "  09-验收证据.json      机器可核对的清单：范围、版本与指纹、部署记录、采集证据分类\n\n")
 	fmt.Fprint(readme, "边界:\n")
 	fmt.Fprint(readme, "  - 通信统计为本次运行期间的轮询计数，进程重启后清零。\n")
 	fmt.Fprint(readme, "  - 证据包不包含密码、令牌等敏感信息。\n")
@@ -247,6 +248,25 @@ func (h *Handler) deliveryEvidence(w http.ResponseWriter, r *http.Request, ident
 		return
 	}
 	if !writeCSV("07-审计记录.csv", auditRows) || !writeCSV("08-权限矩阵.csv", permissionRows) {
+		fail()
+		return
+	}
+	manifest, err := h.acceptanceManifest(identity, nodes, now, actor)
+	if err != nil {
+		fail()
+		return
+	}
+	encodedManifest, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		fail()
+		return
+	}
+	manifestFile, err := archive.Create("09-验收证据.json")
+	if err != nil {
+		fail()
+		return
+	}
+	if _, err := manifestFile.Write(encodedManifest); err != nil {
 		fail()
 		return
 	}
