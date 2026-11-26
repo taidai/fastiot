@@ -475,6 +475,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.deliveryCheck(w, identity)
 	case path == "delivery/evidence" && r.Method == http.MethodGet:
 		h.deliveryEvidence(w, r, identity)
+	case path == "delivery/deployments" && r.Method == http.MethodGet:
+		h.listDeploymentRecords(w, r, identity)
+	case path == "delivery/deployments" && r.Method == http.MethodPost:
+		h.createDeploymentRecord(w, r, identity)
+	case len(parts) == 3 && parts[0] == "delivery" && parts[1] == "deployments" && r.Method == http.MethodGet:
+		h.readDeploymentRecord(w, r, identity, parts[2])
 	case path == "delivery/gates" && r.Method == http.MethodGet:
 		h.deliveryGates(w, identity, r.URL.Query().Get("site"))
 	case path == "delivery/preflight" && r.Method == http.MethodPost:
