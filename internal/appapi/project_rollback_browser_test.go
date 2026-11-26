@@ -124,7 +124,7 @@ func TestTicket23BrowserBackend(t *testing.T) {
 		t.Fatalf("browser account: %d %s", status, body)
 	}
 	browserToken := loginAPI(t, f.base, username, password)
-	created, err := f.handler.CreateRuleNotification(Identity{UserID: "fixture-admin", Policy: AccessPolicy{Admin: true}, Anchors: []string{root}}, notification.Request{
+	created, err := f.handler.CreateRuleNotification(notification.Request{
 		SourceRevision: "1", RuleID: "ticket23-rule", ExecutionID: "ticket23-execution", ActionID: "ticket23-action",
 		ScopeNodeID: site, RecipientIDs: []string{account.ID}, Title: "Ticket23 preserved notification", Body: "in-app only",
 	})

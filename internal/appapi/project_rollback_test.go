@@ -67,18 +67,29 @@ func TestProjectRollbackRequiresSavedBaseline(t *testing.T) {
 	if err := client.SendNodePoint(h.nc, site, data.NewPointString("description", "0", "current must survive"), true); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(h.projectDir(site), 0500); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(h.projectDir(site), 0700) })
 
-	status, body := call(t, http.MethodPost, base+"/projects/rollback", token, rollbackRequest{Site: site, Version: version.ID}, nil)
-	if status != http.StatusInternalServerError || !strings.Contains(body, "rollback_baseline_failed") {
-		t.Fatalf("baseline failure = %d %s", status, body)
+	// 回退前必须冻结并持久化一份可恢复的当前基线；响应回读该基线，
+	// 且其中必须仍是回退前的“current must survive”状态，而不是目标版本。
+	var result rollbackResult
+	status, body := call(t, http.MethodPost, base+"/projects/rollback", token, rollbackRequest{Site: site, Version: version.ID}, &result)
+	if status != http.StatusOK {
+		t.Fatalf("rollback: %d %s", status, body)
 	}
-	nodes, err := client.GetNodes(h.nc, "all", site, "", false)
-	if err != nil || len(nodes) != 1 || nodes[0].Desc() != "current must survive" {
-		t.Fatalf("rollback wrote without a saved baseline: %+v, %v", nodes, err)
+	if result.Baseline == "" || result.Baseline == version.ID {
+		t.Fatalf("rollback must persist a distinct pre-write baseline: %s", body)
+	}
+	baseline, err := h.loadVersion(site, result.Baseline)
+	if err != nil {
+		t.Fatalf("saved baseline is not re-loadable: %v", err)
+	}
+	foundCurrent := false
+	for _, node := range baseline.Nodes {
+		if text, _ := node.Points.Text("description", ""); node.ID == site && text == "current must survive" {
+			foundCurrent = true
+		}
+	}
+	if !foundCurrent {
+		t.Fatalf("pre-write baseline does not capture the current state: %s", body)
 	}
 }
 
