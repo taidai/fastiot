@@ -220,7 +220,7 @@ func (h *Handler) createDeploymentRecord(w http.ResponseWriter, r *http.Request,
 		}
 		return
 	}
-	currentNodes, err := h.collectProjectPackageNodes(input.Site)
+	currentNodes, _, _, err := h.collectProjectPackageNodes(input.Site)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
