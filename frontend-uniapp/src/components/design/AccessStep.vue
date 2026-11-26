@@ -1,6 +1,6 @@
 <template>
   <view class="access-step">
-    <view class="step-head"><b>第 3 步 · 接设备</b><span>型号 → 通道 → 点位 → 验证；已绑定 {{ boundBusinessCount }} / {{ businessDevices.length }}。</span></view>
+    <view class="step-head"><b>第 3 步 · 接设备</b><span>型号 → 通道 → 点位 → 验证；{{ accessStepSummary }}。</span></view>
     <section class="card glass step-card">
     <p v-if="directoryError" class="error" role="alert">{{ directoryError }}</p>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
@@ -17,7 +17,7 @@
 
     <view v-if="scopeMode && !batchOpen" class="ledger-panel">
       <view class="panel-head">
-        <h3>{{ selectedScopeName }} 的设备</h3><span class="tag">{{ scopeBoundCount }} / {{ scopeRows.length }} 已接入</span>
+        <h3>{{ selectedScopeName }} 的设备</h3><span class="tag">{{ scopeAccessCount }} / {{ scopeRows.length }} 已接入</span>
         <span class="spacer"></span><button class="ghost" :disabled="directoryLoading" @click="reload">{{ directoryLoading ? "读取中…" : "刷新" }}</button><button class="ghost" :disabled="busy !== ''" @click="startNewUnit">接入新站号</button><button class="ghost" :disabled="!canConfigure" @click="openBatch">批量接入</button>
       </view>
       <div v-if="scopeRows.length" class="table-wrap">
@@ -25,7 +25,7 @@
           <thead><tr><th>设备</th><th>状态</th><th>型号</th><th>通道</th><th>点位</th><th></th></tr></thead>
           <tbody><tr v-for="row in scopeRows" :key="row.id" :class="{ selected: row.device && deviceKey(row.device) === selectedKey }">
             <td><strong>{{ row.name }}</strong><small v-if="row.device">{{ row.device.name }}</small></td>
-            <td><span class="chip" :class="row.bound ? 'ok' : 'warn'">{{ row.bound ? "已接入" : "未绑定" }}</span></td>
+            <td><span class="chip" :class="deviceAccessChipClass(row.state)">{{ deviceAccessLabel(row.state) }}</span></td>
             <td>{{ row.device?.profile_id ? `${row.device.vendor || ""} ${row.device.model || row.device.profile_id}` : "未选择" }}</td>
             <td>{{ row.device ? `${row.device.channel_name || row.device.channel_id} · 站号 ${row.device.server_id}` : "未选择" }}</td>
             <td>{{ scopePointText(row) }}</td>
@@ -38,7 +38,7 @@
     </view>
 
     <template v-if="!scopeMode && !batchOpen">
-    <view class="panel-head"><h3>{{ activeDeviceName }}</h3><span class="tag">设备</span><span class="tag" :class="activeDeviceBound ? 'ok' : 'warn'">{{ activeDeviceBound ? '已接入' : '未绑定' }}</span><span class="src">{{ selectedProfile ? `${selectedProfile.vendor} ${selectedProfile.model}` : '未选择 Profile' }} · {{ selectedChannelID || '未选通道' }} · {{ mappedCount }}/{{ profilePoints.length }} 点位</span></view>
+    <view class="panel-head"><h3>{{ activeDeviceName }}</h3><span class="tag">设备</span><span class="tag" :class="deviceAccessChipClass(activeDeviceState)">{{ deviceAccessLabel(activeDeviceState) }}</span><span class="src">{{ selectedProfile ? `${selectedProfile.vendor} ${selectedProfile.model}` : '未选择 Profile' }} · {{ selectedChannelID || '未选通道' }} · {{ mappedCount }}/{{ profilePoints.length }} 点位</span></view>
     <view class="pipeline" aria-label="设备接入步骤">
       <template v-for="(item, index) in stages" :key="item.key">
         <button :disabled="busy !== ''" :class="{ active: stage === item.key, ok: stageComplete(item.key), cur: stage === item.key }" @click="stage = item.key">
@@ -54,7 +54,7 @@
         <view class="acc-card">
           <view class="card-title">1 · 选型号 <span>{{ profileID ? '待保存选择可预览差异' : '尚未选择' }}</span></view>
           <button v-for="profile in availableProfiles" :key="profile.id" class="pick" :class="{ active: profile.id === profileID }" :disabled="!canConfigure || busy !== ''" @click="selectProfile(profile.id)">
-            <strong>{{ profile.vendor }} {{ profile.model }}</strong><small>{{ profile.point_specs?.length || 0 }} 点位 · {{ profile.command_specs?.length || 0 }} 命令{{ profile.custom ? " · 自定义" : "" }}{{ profile.verified ? "" : " · 未现场验证" }}</small>
+            <strong>{{ profile.vendor }} {{ profile.model }}</strong><small>{{ profileCountsText(profile) }}</small>
           </button>
           <view v-if="!availableProfiles.length" class="empty">后端没有可用 Profile；不会用演示型号替代。</view>
           <view v-if="model?.profile_errors?.length" class="error">自定义 Profile 未加载：{{ model.profile_errors.join("；") }}</view>
@@ -66,7 +66,7 @@
         </view>
         <view class="acc-card profile-summary">
           <view class="card-title">Profile 声明</view>
-          <view class="row"><span>采集点</span><span class="src">{{ selectedProfile ? `${profilePoints.length} 个 · 必需 ${requiredSpecs.size}` : "—" }}</span></view>
+          <view class="row"><span>采集点</span><span class="src">{{ selectedProfile ? `${selectedPointCounts.total} 个 · 必需 ${selectedPointCounts.required} · 可选 ${selectedPointCounts.optional}` : "—" }}</span></view>
           <view class="row"><span>命令</span><span class="src">{{ selectedProfile?.command_specs?.length || 0 }} 个</span></view>
           <view class="row"><span>安全写点</span><span class="src">{{ safeCommands.map(command => command.name).join("、") || "未声明" }}</span></view>
           <view class="row"><span>约束</span><span class="src">未声明可写的点一律只读</span></view>
@@ -138,7 +138,7 @@
 
     <template v-else-if="stage === 'points'">
       <view class="acc-card wide">
-        <view class="card-title">3 · 核对点位 <span>当前站号 {{ serverPoints.length }} 个物理点 · Profile 已映射 {{ mappedCount }}/{{ profilePoints.length }} · 必需 {{ requiredSpecs.size }}</span></view>
+        <view class="card-title">3 · 核对点位 <span>当前站号 {{ serverPoints.length }} 个物理点 · Profile 已映射 {{ mappedCount }}/{{ profilePoints.length }} · 必需 {{ selectedPointCounts.required }} · 可选 {{ selectedPointCounts.optional }}</span></view>
         <view v-if="!profileID" class="empty">先在“选型号”段选择并应用 Profile。</view>
         <template v-else>
           <div class="table-wrap"><table class="mini-table"><thead><tr><th>点位</th><th>要求</th><th>地址</th><th>类型</th><th>倍率</th><th>单位</th><th>枚举</th><th>读写</th><th>状态</th></tr></thead>
@@ -245,9 +245,9 @@ import { ApiError, request } from "../../api/client"
 import { commandStateText } from "../../pages/overview/overview"
 import { nameOf, point, valueText } from "../../types/api"
 import type { Snapshot, StateValue, Node } from "../../types/api"
-import { automaticPointMap, requiredProfilePoints, canCommandAccess, canConfigureAccess, prepareModelSave, safeVerificationCommands, verificationError } from "./access"
-import { boundBusinessIDs } from "./design"
-import type { EmsChannel, LedgerDevice, Profile, ProfileApplyResponse, ProfileApplyResult, UnitModel, UnitModelConfig, UnitPoint } from "./access"
+import { automaticPointMap, requiredProfilePoints, canCommandAccess, canConfigureAccess, prepareModelSave, safeVerificationCommands, verificationError, deviceAccessState, deviceAccessLabel, deviceAccessChipClass, profilePointCounts } from "./access"
+import { boundBusinessIDs, businessBindingStates } from "./design"
+import type { EmsChannel, LedgerDevice, Profile, ProfileApplyResponse, ProfileApplyResult, UnitModel, UnitModelConfig, UnitPoint, DeviceAccessState } from "./access"
 
 const props = withDefaults(defineProps<{ snapshot: Snapshot | null; values: StateValue[]; selectedNodeId?: string; batchNodeIds?: string[] }>(), { selectedNodeId: "", batchNodeIds: () => [] })
 const emit = defineEmits<{
@@ -272,7 +272,7 @@ type VerificationResult = {
   command?: { request_id: string; state: string; reason?: string }
 }
 type VerificationRecord = { at: string; actor: string; level: string; passed: boolean; reasons?: string[]; current?: boolean; profile_version?: string; basis?: string; request_id?: string }
-type ScopeRow = { id: string; name: string; bound: boolean; device?: LedgerDevice }
+type ScopeRow = { id: string; name: string; state: DeviceAccessState; device?: LedgerDevice }
 
 const stages: { key: Stage; label: string }[] = [{ key: "profile", label: "选型号" }, { key: "channel", label: "选通道" }, { key: "points", label: "核对点位" }, { key: "verify", label: "验证" }]
 const channelDirectory = ref<EmsChannel[]>([])
@@ -325,26 +325,29 @@ const selectedBusinessDevice = computed(() => selectedBusinessNode.value?.type =
 const deviceDetailOpen = ref(false)
 const scopeMode = computed(() => !selectedUnit.value && !selectedBusinessDevice.value && !deviceDetailOpen.value)
 const selectedScopeName = computed(() => selectedBusinessNode.value ? nameOf(selectedBusinessNode.value) : "当前层")
+const persistedBindingStates = computed(() => businessBindingStates(props.snapshot?.nodes || []))
 const businessDevices = computed(() => (props.snapshot?.nodes || []).filter(node => node.type === "device" && node.parent !== "root"))
 const persistedBoundIDs = computed(() => boundBusinessIDs(props.snapshot?.nodes || []))
-const boundBusinessCount = computed(() => businessDevices.value.filter(node => isBusinessBound(node.id)).length)
+const accessBusinessCount = computed(() => businessDevices.value.filter(node => businessAccessState(node.id) === "access").length)
+const pendingBusinessCount = computed(() => businessDevices.value.filter(node => businessAccessState(node.id) === "pending").length)
+const accessStepSummary = computed(() => `已接入 ${accessBusinessCount.value} / ${businessDevices.value.length}${pendingBusinessCount.value ? ` · ${pendingBusinessCount.value} 台待验证` : ""}`)
 const scopeRows = computed<ScopeRow[]>(() => {
   const businessIDs = new Set(businessDevices.value.map(node => node.id))
   const rows = businessDevices.value.filter(node => inSelectedScope(node)).map(node => {
     const device = devices.value.find(item => item.business_node_id === node.id)
-    return { id: node.id, name: nameOf(node), bound: isBusinessBound(node.id), device }
+    return { id: node.id, name: nameOf(node), state: businessAccessState(node.id), device }
   })
   if (selectedBusinessNode.value?.id === props.snapshot?.roots[0]) {
     for (const device of devices.value) {
       if (device.business_node_id && businessIDs.has(device.business_node_id)) continue
-      rows.push({ id: deviceKey(device), name: device.business_node_name || device.name, bound: device.bound ?? !!device.profile_id, device })
+      rows.push({ id: deviceKey(device), name: device.business_node_name || device.name, state: deviceAccessState(device), device })
     }
   }
   return rows
 })
-const scopeBoundCount = computed(() => scopeRows.value.filter(row => row.bound).length)
+const scopeAccessCount = computed(() => scopeRows.value.filter(row => row.state === "access").length)
 const activeDeviceName = computed(() => selectedBusinessDevice.value ? nameOf(selectedBusinessDevice.value) : selectedDevice.value?.business_node_name || config.value.name || `站号 ${selectedServerID.value}`)
-const activeDeviceBound = computed(() => selectedBusinessDevice.value ? isBusinessBound(selectedBusinessDevice.value.id) : selectedDevice.value?.bound ?? !!selectedDevice.value?.profile_id)
+const activeDeviceState = computed<DeviceAccessState>(() => selectedBusinessDevice.value ? businessAccessState(selectedBusinessDevice.value.id) : selectedDevice.value ? deviceAccessState(selectedDevice.value) : "unbound")
 const selectedChannel = computed(() => channels.value.find(channel => channel.id === selectedChannelID.value) || null)
 const selectedDevice = computed(() => devices.value.find(device => device.channel_id === selectedChannelID.value && device.server_id === selectedServerID.value && (!selectedBusinessDevice.value || device.business_node_id === selectedBusinessDevice.value.id)) || null)
 const selectedKey = computed(() => selectedChannelID.value ? `${selectedChannelID.value}/${selectedServerID.value}` : "")
@@ -357,6 +360,7 @@ const serverPoints = computed(() => (model.value?.points || []).filter(point => 
 const mappedCount = computed(() => Object.values(config.value.point_map || {}).filter(Boolean).length)
 const mappedSpecs = computed(() => profilePoints.value.filter(spec => config.value.point_map[spec.name]))
 const requiredSpecs = computed(() => requiredProfilePoints(selectedProfile.value))
+const selectedPointCounts = computed(() => profilePointCounts(selectedProfile.value))
 const missingRequired = computed(() => [...new Set([
   ...(model.value?.missing || []),
   ...[...requiredSpecs.value].filter(name => !config.value.point_map[name]),
@@ -391,14 +395,21 @@ function stageComplete(key: Stage) {
   const latest = verificationHistory.value.filter(record => record.level === 'L2').slice(-1)[0]
   return !mappingDirty.value && !profileDirty.value && !!latest?.passed && !!latest?.current
 }
-function isBusinessBound(id: string) {
-  const device = devices.value.find(device => device.business_node_id === id)
-  return device ? device.bound ?? !!device.profile_id : persistedBoundIDs.value.has(id)
+function businessAccessState(id: string): DeviceAccessState {
+  const device = devices.value.find(item => item.business_node_id === id)
+  if (device) return deviceAccessState(device)
+  const persisted = persistedBindingStates.value.get(id)
+  return persisted ? deviceAccessState({ bound: persisted.bound, verified: persisted.verified }) : "unbound"
+}
+function isBusinessBound(id: string) { return businessAccessState(id) !== "unbound" }
+function profileCountsText(profile: Profile) {
+  const counts = profilePointCounts(profile)
+  return `${counts.total} 点位 · ${profile.command_specs?.length || 0} 命令 · 必需 ${counts.required} · 可选 ${counts.optional}${profile.custom ? " · 自定义" : ""}${profile.verified ? "" : " · 未现场验证"}`
 }
 function scopePointText(row: ScopeRow) { return row.device ? `${row.device.point_count} 个物理点` : "0 / 未映射" }
 function openScopeRow(row: ScopeRow) {
   if (row.device) { void openDevice(row.device); return }
-  if (row.bound) { void openBusinessBinding(row.id); return }
+  if (row.state !== "unbound") { void openBusinessBinding(row.id); return }
   beginUnbound(row.id)
 }
 function beginUnbound(id: string) {
@@ -492,7 +503,7 @@ async function loadDirectory() {
   }
   directoryError.value = errors.join("；")
   directoryLoading.value = false
-  emit("status", { channels: channels.value.length, devices: devices.value.length, bound: devices.value.filter(device => device.bound ?? !!device.profile_id).length, verified: devices.value.filter(device => device.verified).length })
+  emit("status", { channels: channels.value.length, devices: businessDevices.value.length, bound: businessDevices.value.filter(node => isBusinessBound(node.id)).length, verified: accessBusinessCount.value })
 }
 
 async function readStation() {

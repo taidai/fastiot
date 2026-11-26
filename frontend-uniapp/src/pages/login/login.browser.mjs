@@ -6,8 +6,6 @@ import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { chromium } from 'playwright-core'
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
 
 const root = fileURLToPath(new URL('../../../../internal/web/dist/uniapp/', import.meta.url))
 const requests = []
@@ -118,53 +116,19 @@ if (process.argv.includes('--serve')) {
     assert.equal(requests.length, afterExpiry, 'expired polling must stop')
     await page.reload()
     await page.locator('.login').waitFor()
-    // A valid live session survives preview login, actions, navigation and reload.
+    // A valid live session survives reload; the login page never renders a preview surface.
     await page.locator('.login input[type="text"]').fill('operator')
     await password.fill('valid-fixture')
     await page.keyboard.press('Enter')
     await page.getByText('HTTP 隔离验收现场', { exact: true }).first().waitFor()
     const liveToken = await page.evaluate(() => localStorage.getItem('fastems-token'))
-    await page.goto(`${base}#/pages/login/index`)
-    await page.getByRole('link', { name: '进入隔离原型预览' }).click()
-    await page.locator('.preview-page').waitFor()
-    await page.getByText('原型预览', { exact: true }).first().waitFor()
-    const beforePreview = requests.length
-    await page.locator('[data-layer="d1"]').click()
-    await page.locator('[data-op-open]').click()
-    await page.locator('[data-op="启动"]').click()
-    await page.locator('.drawer.open .x').click()
-    await page.locator('.topbar .workbench uni-button').filter({ hasText: '设计' }).click()
-    await page.locator('.stepper').waitFor()
-    await page.locator('.topbar .workbench uni-button').filter({ hasText: '交付' }).click()
-    await page.locator('.variant-head').first().waitFor()
     await page.reload()
-    await page.locator('.variant-head').first().waitFor()
-    await page.goto(`${base}?preview=1#/pages/login/index`)
-    await page.locator('.login input[type="text"]').fill('preview')
-    await password.fill('inert-fixture')
-    await page.keyboard.press('Enter')
-    await page.locator('.preview-page').waitFor()
-    assert.equal(await page.evaluate(() => window.liveTokenReads), 0, 'preview must not read a live credential')
+    await page.getByText('HTTP 隔离验收现场', { exact: true }).first().waitFor()
     assert.equal(await page.evaluate(() => localStorage.getItem('fastems-token')), liveToken)
-    assert.equal(requests.length, beforePreview, 'preview must send zero API requests, including physical writes')
-    await page.goto(`${base}?preview=1#/pages/login/index`)
-    await page.getByRole('link', { name: '返回真实登录' }).click()
-    await page.locator('.login').waitFor()
-    assert.equal(new URL(page.url()).searchParams.has('preview'), false)
-    assert.equal(await page.evaluate(() => localStorage.getItem('fastems-token')), liveToken)
+    assert.equal(await page.locator('.preview-page').count(), 0)
     assert.deepEqual(errors, [])
     assert.deepEqual(requests.filter(r => r.method !== 'GET' && r.path !== '/api/login'), [])
-    console.log(JSON.stringify({ ok: true, scenario, checks: ['default live routing', 'keyboard login and busy guard', '403/500/offline without fallback', 'HTTP bearer session', '401 expiry stops polling', 'explicit labelled preview', 'preview navigation/reload/login token isolation', 'zero physical writes'], requests: requests.length, heights }))
-    for (const [script, variable, route] of [
-      ['../overview/overview-preview.browser.mjs', 'PREVIEW_BASE_URL', 'overview'],
-      ['../../components/design/design-preview.browser.mjs', 'DESIGN_PREVIEW_URL', 'design'],
-      ['../../components/delivery/delivery-preview.browser.mjs', 'DELIVERY_PREVIEW_URL', 'delivery'],
-    ]) {
-      const { stdout } = await promisify(execFile)(process.execPath, [fileURLToPath(new URL(script, import.meta.url))], {
-        env: { ...process.env, [variable]: `${base}pages/${route}/index` },
-      })
-      process.stdout.write(stdout)
-    }
+    console.log(JSON.stringify({ ok: true, scenario, checks: ['default live routing', 'keyboard login and busy guard', '403/500/offline without fallback', 'HTTP bearer session', '401 expiry stops polling', 'live session survives reload', 'zero physical writes'], requests: requests.length, heights }))
   } finally {
     if (browser) await browser.close()
     await new Promise(resolve => server.close(resolve))

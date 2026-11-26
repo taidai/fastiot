@@ -30,7 +30,7 @@ try {
   const preflightResponse = page.waitForResponse(response => new URL(response.url()).pathname === "/api/delivery/preflight" && response.request().method() === "POST")
   await button("运行预检").click()
   assert.equal((await preflightResponse).status(), 200)
-  await page.getByText(/最近预检：(通过|注意|阻断)/).waitFor()
+  await page.getByText(/最近预检：(通过|注意|失败)/).waitFor()
   await page.waitForFunction(() => [...document.querySelectorAll("uni-button")].some(item => item.textContent === "导出验收证据" && !item.hasAttribute("disabled")))
 
   let projectPackage = null

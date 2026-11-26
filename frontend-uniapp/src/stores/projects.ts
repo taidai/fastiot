@@ -1,6 +1,5 @@
 import { computed, reactive } from 'vue'
 import { ApiError, request } from '../api/client'
-import { PREVIEW_MODE } from '../api/source'
 
 export type Project = {
   id: string
@@ -18,7 +17,7 @@ let ownerToken = ''
 
 function storageKey() { return `fastiot-project-context:${projectContext.user}` }
 function persist() {
-  if (!PREVIEW_MODE && projectContext.user) uni.setStorageSync(storageKey(), { project: projectContext.id, layer: projectContext.layer })
+  if (projectContext.user) uni.setStorageSync(storageKey(), { project: projectContext.id, layer: projectContext.layer })
 }
 function activate(id: string, layer = '') {
   projectContext.id = id
@@ -30,7 +29,7 @@ function activate(id: string, layer = '') {
 export function resetProjectContext() {
   loading = undefined
   // Establish ownership before notifying readers, including reentrant ones.
-  ownerToken = PREVIEW_MODE ? '' : (uni.getStorageSync('fastems-token') || '') as string
+  ownerToken = (uni.getStorageSync('fastems-token') || '') as string
   projectContext.projects = []
   projectContext.user = ''
   activate('')
@@ -38,7 +37,6 @@ export function resetProjectContext() {
 
 // The directory is authoritative. Browser memory is only a preference, never permission.
 export async function ensureProjectContext() {
-  if (PREVIEW_MODE) return
   const token = (uni.getStorageSync('fastems-token') || '') as string
   if (!token) throw new ApiError('会话已改变，请重新登录', 401, 'session_changed')
   if (ownerToken !== token) resetProjectContext()
@@ -63,7 +61,7 @@ export async function ensureProjectContext() {
 }
 
 export function rememberLayer(id: string) {
-  if (PREVIEW_MODE || !projectContext.id) return
+  if (!projectContext.id) return
   projectContext.layer = id
   persist()
 }
@@ -71,7 +69,7 @@ export function rememberLayer(id: string) {
 // Caller reloads the current workbench after this returns true: no old editor is reused.
 // Confirmation is intentionally conservative, including editors without dirty tracking.
 export async function selectProject(id: string, confirmDiscard: () => Promise<boolean>) {
-  if (PREVIEW_MODE || id === projectContext.id || !projectContext.projects.some(project => project.id === id)) return false
+  if (id === projectContext.id || !projectContext.projects.some(project => project.id === id)) return false
   const generation = projectContext.generation
   if (!await confirmDiscard() || generation !== projectContext.generation) return false
   activate(id)

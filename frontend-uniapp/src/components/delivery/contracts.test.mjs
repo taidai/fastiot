@@ -48,7 +48,7 @@ test("canAction prefers resolved snapshot actions and always allows admin", () =
 test("Chinese labels preserve unknown backend values", () => {
   assert.equal(statusText("pass"), "通过")
   assert.equal(statusText("warn"), "注意")
-  assert.equal(statusText("fail"), "阻断")
+  assert.equal(statusText("fail"), "失败")
   assert.equal(statusText("future"), "future")
   assert.equal(roleText("implementer"), "实施")
   assert.equal(actionText("account_manage"), "账号管理")

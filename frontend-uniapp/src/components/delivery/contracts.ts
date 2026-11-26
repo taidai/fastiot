@@ -47,7 +47,7 @@ export function canAction(snapshot: Snapshot | null, action: string): boolean {
   return resolveActions(user.policy).includes(action)
 }
 
-const STATUS_LABELS: Record<string, string> = { pass: "通过", warn: "注意", fail: "阻断" }
+const STATUS_LABELS: Record<string, string> = { pass: "通过", warn: "注意", fail: "失败" }
 const ROLE_LABELS: Record<string, string> = { admin: "管理员", implementer: "实施", operator: "操作员", viewer: "查看者" }
 const ACTION_LABELS: Record<string, string> = {
   configure: "工程配置",

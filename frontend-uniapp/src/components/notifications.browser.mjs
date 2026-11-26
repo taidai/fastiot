@@ -79,22 +79,6 @@ try {
   await page.locator('.inbox-item').waitFor()
   assert.match(await page.locator('.inbox-state').innerText(), /已读/, 'scope restoration must retain history')
 
-  const previewContext = await browser.newContext()
-  const preview = await previewContext.newPage()
-  const previewRequests = []
-  preview.on('request', request => { if (request.url().includes('/api/')) previewRequests.push(request.url()) })
-  await preview.goto(`${base}/uniapp/?preview=1#/pages/overview/index`)
-  await preview.locator('.inbox-trigger').click()
-  await preview.locator('.inbox-item').waitFor()
-  assert.match(await preview.locator('.inbox-state').innerText(), /未读/)
-  await preview.getByText('标记已读', { exact: true }).click()
-  await preview.waitForFunction(() => document.querySelector('.inbox-state')?.textContent.includes('已读'))
-  await preview.reload()
-  await preview.locator('.inbox-trigger').click()
-  await preview.locator('.inbox-item').waitFor()
-  assert.match(await preview.locator('.inbox-state').innerText(), /未读/)
-  assert.deepEqual(previewRequests, [], 'preview must not access live API')
-  assert.equal(await preview.evaluate(() => localStorage.getItem('fastems-token')), null)
   assert.deepEqual(errors, [])
-  console.log('PASS private real-Go inbox browser: actual login, Enter/Space operation, durable/restarted fixture, refresh, explicit own read, second account unread, outsider hidden, actual account-scope move/restore, literal text, 1440/1024/375; preview isolated and reset. Rule producer integration not tested here.')
+  console.log('PASS private real-Go inbox browser: actual login, Enter/Space operation, durable/restarted fixture, refresh, explicit own read, second account unread, outsider hidden, actual account-scope move/restore, literal text, 1440/1024/375. Rule producer integration not tested here.')
 } finally { await browser.close() }

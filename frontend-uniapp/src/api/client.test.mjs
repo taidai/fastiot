@@ -3,11 +3,11 @@ import assert from 'node:assert/strict'
 import { build } from 'esbuild'
 import { fileURLToPath } from 'node:url'
 
-// Bundle the actual application modules, including the preview resolver. Only
-// uni's host I/O is substituted; no API client, store or resolver is mocked.
+// Bundle the actual application modules. Only uni's host I/O is substituted;
+// no API client, store or resolver is mocked.
 let generation = 0
-async function application(preview = false, storage = new Map([['fastems-token', 'live-session']])) {
-  globalThis.location = new URL(`http://localhost/uniapp/${preview ? '?preview=1' : ''}`)
+async function application(storage = new Map([['fastems-token', 'live-session']])) {
+  globalThis.location = new URL('http://localhost/uniapp/')
   const storageReads = []
   const redirects = []
   const requests = []
@@ -111,7 +111,7 @@ test('project selection fences late reads and writes and persists only authorize
 
 test('refresh restores an authorized project and layer, and project change clears scoped data', async () => {
   const storage = new Map([['fastems-token', 'live-session'], ['fastiot-project-context:fixture-user', { project: 'project-b', layer: 'b-layer' }]])
-  const app = await application(false, storage)
+  const app = await application(storage)
   await app.api.ensureProjectContext()
   assert.equal(app.api.projectContext.id, 'project-b')
   app.api.session.snapshot = { roots: ['project-b'], nodes: [{ id: 'b-layer' }] }
@@ -121,7 +121,7 @@ test('refresh restores an authorized project and layer, and project change clear
   assert.equal(app.api.session.snapshot, null)
   assert.equal(app.api.session.layer, '')
   assert.deepEqual(app.api.session.values, [])
-  const reloaded = await application(false, storage)
+  const reloaded = await application(storage)
   await reloaded.api.ensureProjectContext()
   assert.equal(reloaded.api.projectContext.id, 'project-a')
   assert.equal(reloaded.api.projectContext.layer, '')
@@ -179,7 +179,7 @@ test('unavailable alarm query clears stale pending count instead of showing a cu
 
 test('refresh validates persisted layer against the authorized snapshot', async () => {
   for (const savedLayer of ['b-layer', 'a-layer']) {
-    const app = await application(false, new Map([['fastems-token', 'live-session'], ['fastiot-project-context:fixture-user', { project: 'project-b', layer: savedLayer }]]))
+    const app = await application(new Map([['fastems-token', 'live-session'], ['fastiot-project-context:fixture-user', { project: 'project-b', layer: savedLayer }]]))
     const refresh = app.api.refreshAll()
     await new Promise(resolve => setImmediate(resolve))
     const responses = {
@@ -203,18 +203,6 @@ test('directory failures remain visible and do not fetch unscoped business data'
   assert.equal(app.api.session.loading, false)
   assert.equal(app.api.session.snapshot, null)
   assert.deepEqual(paths, ['/api/projects'])
-})
-
-test('preview login, reads, writes and logout never touch live credentials or HTTP', async () => {
-  const app = await application(true)
-  assert.equal(app.api.session.token, '')
-  await app.api.login('preview', 'inert-fixture')
-  await app.api.request('/snapshot')
-  await assert.rejects(app.api.request('/unsupported-physical-write', 'POST', {}), { status: 501 })
-  app.api.logout()
-  assert.equal(app.storage.get('fastems-token'), 'live-session')
-  assert.deepEqual(app.storageReads, [])
-  assert.deepEqual(app.requests, [])
 })
 
 test('logout publishes one cleared context even when a synchronous subscriber reads with the old layer', async context => {

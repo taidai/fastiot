@@ -35,7 +35,7 @@
     "build:quickapp-webview-huawei": "uni build -p quickapp-webview-huawei",
     "build:quickapp-webview-union": "uni build -p quickapp-webview-union",
     "type-check": "vue-tsc --noEmit",
-    "test:auth": "node --test src/api/source.test.mjs src/api/client.test.mjs",
+    "test:auth": "node --test src/api/client.test.mjs",
     "test:auth:browser": "npm run build:h5 && node src/pages/login/login.browser.mjs"
   },
   "dependencies": {

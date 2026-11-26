@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { allowedChildTypes, boundBusinessIDs, flattenLedger, screenSummary, summarizeLedger } from "./design.ts"
+import { allowedChildTypes, boundBusinessIDs, firstIncompleteStep, flattenLedger, screenSummary, summarizeLedger } from "./design.ts"
 
 const snapshot = {
   roots: ["site-1"],
@@ -61,3 +61,17 @@ test("boundBusinessIDs reads only persisted UnitModel bindings from Modbus chann
   }]
   assert.deepEqual([...boundBusinessIDs(nodes)], ["device-1"])
 })
+
+test("firstIncompleteStep follows ADR 0007 instead of always reopening step one", () => {
+  const steps = [
+    { key: "site", done: true },
+    { key: "tree", done: true },
+    { key: "access", done: false },
+    { key: "strategy", done: false },
+  ]
+  assert.equal(firstIncompleteStep(steps), "access")
+  assert.equal(firstIncompleteStep([{ key: "site", done: false }, { key: "delivery", done: true }]), "site")
+  assert.equal(firstIncompleteStep(steps.map(step => ({ ...step, done: true }))), "strategy", "a finished project lands on the last step")
+  assert.equal(firstIncompleteStep([]), "")
+})
+

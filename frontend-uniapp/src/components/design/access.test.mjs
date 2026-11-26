@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { automaticPointMap, batchCSV, canCommandAccess, canConfigureAccess, prepareModelSave, safeVerificationCommands, verificationError } from "./access.ts"
+import { automaticPointMap, batchCSV, canCommandAccess, canConfigureAccess, deviceAccessChipClass, deviceAccessLabel, deviceAccessState, prepareModelSave, safeVerificationCommands, verificationError } from "./access.ts"
 
 const profile = {
   id: "vendor-v1",
@@ -63,6 +63,17 @@ test("canConfigureAccess follows resolved actions before role defaults", () => {
   assert.equal(canConfigureAccess(snapshot({ admin: false, role: "implementer", actions: ["export"] })), false)
   assert.equal(canConfigureAccess(snapshot({ admin: false, role: "viewer" }, ["configure"])), true)
   assert.equal(canConfigureAccess(snapshot({ admin: false, role: "viewer", actions: ["configure"] })), true)
+})
+
+test("deviceAccessState keeps unbound, bound-awaiting-verification and connected apart", () => {
+  assert.equal(deviceAccessState({ bound: false }), "unbound")
+  assert.equal(deviceAccessState({ bound: true, verified: false }), "pending")
+  assert.equal(deviceAccessState({ bound: true, verified: true }), "access")
+  assert.equal(deviceAccessState({ profile_id: "vendor-v1" }), "pending", "a persisted profile without an explicit bound flag is still bound")
+  assert.equal(deviceAccessLabel("unbound"), "未绑定")
+  assert.equal(deviceAccessLabel("pending"), "已绑定待验证")
+  assert.equal(deviceAccessLabel("access"), "已接入")
+  assert.equal(deviceAccessChipClass("pending"), "", "pending must not borrow the connected style")
 })
 
 test("verificationError rejects empty mappings and command-required gaps", () => {

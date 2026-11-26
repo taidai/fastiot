@@ -47,17 +47,48 @@ export function allowedChildTypes(parentType: string, parentIsRoot = false) {
   return []
 }
 
-export function boundBusinessIDs(nodes: Node[]) {
-  const result = new Set<string>()
+export type BusinessBindingState = { bound: boolean; verified: boolean }
+
+export function businessBindingStates(nodes: Node[]) {
+  const states = new Map<string, BusinessBindingState>()
   for (const node of nodes) {
     if (node.type !== "modbus") continue
     for (const point of node.points) {
       if (point.type !== "easyemsUnitModel" || (point.tombstone || 0) % 2 !== 0 || !point.text) continue
       try {
-        const model = JSON.parse(point.text) as { business_node_id?: string }
-        if (model.business_node_id) result.add(model.business_node_id)
+        const model = JSON.parse(point.text) as { business_node_id?: string; verified?: boolean }
+        if (!model.business_node_id) continue
+        const previous = states.get(model.business_node_id)
+        states.set(model.business_node_id, {
+          bound: true,
+          verified: (previous?.verified || false) || model.verified === true,
+        })
       } catch { /* Invalid persisted models remain unbound rather than guessed. */ }
     }
   }
-  return result
+  return states
+}
+
+export function boundBusinessIDs(nodes: Node[]) {
+  return new Set(businessBindingStates(nodes).keys())
+}
+
+export function deviceBindingProgress(nodes: Node[]) {
+  const progress = { devices: 0, bound: 0, verified: 0 }
+  const states = businessBindingStates(nodes)
+  for (const node of nodes) {
+    if (node.type !== "device" || node.parent === "root") continue
+    progress.devices++
+    const state = states.get(node.id)
+    if (!state) continue
+    progress.bound++
+    if (state.verified) progress.verified++
+  }
+  return progress
+}
+
+// ADR 0007: an existing project opens on the first unfinished step; a finished
+// project opens on delivery instead of restarting at step one.
+export function firstIncompleteStep(steps: readonly { key: string; done: boolean }[]) {
+  return (steps.find(step => !step.done) || steps[steps.length - 1])?.key || ""
 }

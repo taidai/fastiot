@@ -44,6 +44,7 @@ try {
   await page.waitForURL(/pages\/overview\/index/)
   await page.goto("http://127.0.0.1:5174/uniapp/?live=1#/pages/design/index")
   await page.locator(".stepper").waitFor()
+  await page.locator(".stepper uni-button").filter({ hasText: "新建现场" }).click()
 
   await page.locator(".tpl-card").filter({ hasText: "供水泵房" }).click()
   await page.locator(".template-outline .row").filter({ hasText: "区域泵房" }).waitFor()

@@ -57,7 +57,7 @@
           </template>
           <template v-else-if="editingBlock === 'trend'">
             <h5>序列（1 条）</h5><select v-model="trendBinding.point_id" aria-label="趋势序列"><option value="">未绑定</option><option v-for="option in pointOptions" :key="option.id" :value="option.id">{{ option.label }}</option></select>
-            <p class="note">{{ PREVIEW_MODE ? '原型趋势示意；可从客户预览进入历史。' : '预览只显示当前真实值；没有历史序列时显示 —，不生成演示曲线。' }}</p>
+            <p class="note">预览只显示当前真实值；没有历史序列时显示 —，不生成演示曲线。</p>
           </template>
           <template v-else-if="editingBlock === 'devices'">
             <h5>列（设备列固定）</h5><view class="catalog"><button v-for="column in deviceColumns" :key="column.key" class="chip" :class="{ ok: devicesBinding.columns.includes(column.key) }" @click="toggleRequiredValue(devicesBinding.columns, column.key)">{{ column.label }}</button></view>
@@ -97,7 +97,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue"
 import { projectContext } from "../../stores/projects"
-import { PREVIEW_MODE } from "../../api/source"
 import { request, ApiError } from "../../api/client"
 import { nameOf } from "../../types/api"
 import type { EmsAlarm, ScreenConfig, Snapshot, StateValue } from "../../types/api"

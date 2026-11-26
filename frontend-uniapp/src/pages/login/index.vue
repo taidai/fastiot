@@ -7,8 +7,7 @@
       <label>密码<input v-model="password" type="password" placeholder="密码" @blur="password = inputValue($event)" @confirm="password = inputValue($event); submit()" /></label>
       <button class="primary" :disabled="busy" @click="submit">{{ busy ? "登录中…" : "登录" }}</button>
       <view v-if="error" class="error">{{ error }}</view>
-      <view class="note">{{ PREVIEW_MODE ? "当前为原型预览模式；使用预览数据，不连接真实业务操作。" : "使用本实例账号；角色和对象范围由服务端决定。" }}</view>
-      <a :href="modeEntry.href">{{ PREVIEW_MODE ? "返回真实登录" : "进入隔离原型预览" }}</a>
+      <view class="note">使用本实例账号；角色和对象范围由服务端决定。</view>
     </view>
   </view>
 </template>
@@ -17,13 +16,6 @@
 import { ref } from "vue"
 import { login } from "../../api/client"
 import { startPolling, session } from "../../stores/session"
-import { PREVIEW_MODE } from "../../api/source"
-
-const modeEntry = new URL(location.href)
-modeEntry.searchParams.delete("live")
-modeEntry.searchParams.delete("preview")
-if (!PREVIEW_MODE) modeEntry.searchParams.set("preview", "1")
-modeEntry.hash = PREVIEW_MODE ? "/pages/login/index" : "/pages/overview/index"
 
 const email = ref("")
 const password = ref("")

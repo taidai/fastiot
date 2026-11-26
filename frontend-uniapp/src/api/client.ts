@@ -1,4 +1,3 @@
-import { PREVIEW_MODE } from "./source"
 import { ensureProjectContext, projectContext, resetProjectContext } from '../stores/projects'
 
 export type ApiErrorDetails = {
@@ -39,16 +38,6 @@ const ERROR_TEXTS: Record<string, string> = {
 let redirectingToLogin = false
 
 export async function request<T>(path: string, method = "GET", body?: unknown, responseType: 'text' | 'arraybuffer' = 'text'): Promise<T> {
-  if (PREVIEW_MODE) {
-    const { resolvePreview } = await import("./preview")
-    const preview = await resolvePreview(path, method, body)
-    if (preview.handled && (preview.status || 200) < 400) return preview.data as T
-    const payload = preview.data as ApiErrorDetails | undefined
-    const backendCode = payload?.error || ""
-    const code = preview.handled ? backendCode || "preview_request_failed" : "preview_unhandled"
-    const message = preview.handled ? ERROR_TEXTS[backendCode] || backendCode || `预览操作失败：${method} ${path}` : `预览接口未实现：${method} ${path}`
-    throw new ApiError(message, preview.status || 501, code, payload)
-  }
   const scoped = path !== '/login' && path !== '/projects' && path !== '/health'
   const entryGeneration = projectContext.generation
   const hadProject = !!projectContext.id
@@ -95,20 +84,16 @@ export async function request<T>(path: string, method = "GET", body?: unknown, r
 
 export async function login(email: string, password: string) {
   const result = await request<{ token: string }>("/login", "POST", { email, password })
-  if (!PREVIEW_MODE) {
-    uni.setStorageSync("fastems-token", result.token)
-    resetProjectContext()
-  }
+  uni.setStorageSync("fastems-token", result.token)
+  resetProjectContext()
   redirectingToLogin = false
   return result.token
 }
 
 export function logout() {
-  if (!PREVIEW_MODE) {
-    // Revoke credentials before synchronous context subscribers can read again.
-    uni.removeStorageSync("fastems-token")
-    resetProjectContext()
-  }
+  // Revoke credentials before synchronous context subscribers can read again.
+  uni.removeStorageSync("fastems-token")
+  resetProjectContext()
   uni.$emit("session-ended")
   if (redirectingToLogin) return
   redirectingToLogin = true

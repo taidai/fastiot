@@ -3,7 +3,7 @@
     <button class="inbox-trigger" role="button" tabindex="0" :aria-expanded="open" aria-haspopup="dialog" @keydown.enter.prevent @keydown.space.prevent @keyup.enter.stop.prevent="toggle" @keyup.space.stop.prevent="toggle" @click="toggle">站内通知</button>
     <section v-if="open" class="inbox-panel glass" role="dialog" aria-label="站内通知">
       <view class="inbox-heading"><strong>站内通知</strong><button role="button" tabindex="0" aria-label="关闭站内通知" @keydown.enter.prevent @keydown.space.prevent @keyup.enter.stop.prevent="close" @keyup.space.stop.prevent="close" @click="close">关闭</button></view>
-      <p class="inbox-note">{{ PREVIEW_MODE ? '隔离预览 · 刷新页面后重置' : '只显示发给本账号且当前有权查看的记录' }}</p>
+      <p class="inbox-note">只显示发给本账号且当前有权查看的记录</p>
       <p class="inbox-note">已记录不代表送达。打开此面板不会自动标记已读。</p>
       <view class="inbox-tools"><button role="button" :tabindex="busy ? -1 : 0" :disabled="busy" @keydown.enter.prevent @keydown.space.prevent @keyup.enter.stop.prevent="load()" @keyup.space.stop.prevent="load()" @click="load()">刷新</button><text v-if="busy" role="status">读取中…</text></view>
       <p v-if="error" role="alert" class="inbox-error">{{ error }}</p>
@@ -22,7 +22,6 @@
 import { nextTick, ref, watch } from 'vue'
 import { listNotifications, markNotificationRead } from '../api/notifications'
 import { ApiError } from '../api/client'
-import { PREVIEW_MODE } from '../api/source'
 import { session } from '../stores/session'
 import { projectContext } from '../stores/projects'
 import type { NotificationItem } from '../types/notification'

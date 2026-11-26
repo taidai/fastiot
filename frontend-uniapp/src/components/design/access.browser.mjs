@@ -106,7 +106,8 @@ try {
   await page.locator(".ledger-table tr").filter({ hasText: "泵 1" }).getByText("打开绑定 →").click()
   await page.locator(".card-title").filter({ hasText: "1 · 选型号" }).waitFor()
   await page.locator(".profile-summary").waitFor()
-  assert((await page.locator(".stepper uni-button").filter({ hasText: /接设备/ }).innerText()).includes("✓"), "bound devices complete the access step even before manual verification")
+  assert(!(await page.locator(".stepper uni-button").filter({ hasText: /接设备/ }).innerText()).includes("✓"), "a bound but unverified device does not complete the access step")
+  await page.locator(".panel-head .tag").filter({ hasText: "已绑定待验证" }).waitFor()
   await button("选通道").click()
   await button("＋ 新增通道").click()
   const channelInputs = page.locator(".editor-panel input")
@@ -153,7 +154,7 @@ try {
   assert(writes.some(write => write.path.endsWith("/units/apply") && write.body.dry_run === true), "Profile dry-run was requested")
   assert(writes.some(write => write.path.endsWith("/units/apply") && write.body.dry_run === false), "Profile apply was requested")
   assert(writes.some(write => write.path.endsWith("/model") && write.body.verified === true && write.body.device_serial === "SN-1"), "verification record was saved")
-  for (const [step, title] of [["建现场", "第 1 步 · 建现场"], ["搭台账", "第 2 步 · 搭台账"], ["配策略", "第 4 步 · 配策略"], ["配界面", "第 5 步 · 配界面"], ["交付", "第 6 步 · 交付"]]) {
+  for (const [step, title] of [["新建现场", "第 1 步 · 新建现场"], ["搭台账", "第 2 步 · 搭台账"], ["配策略", "第 4 步 · 配策略"], ["配界面", "第 5 步 · 配界面"], ["交付", "第 6 步 · 交付"]]) {
     await page.locator(".stepper uni-button").filter({ hasText: new RegExp(step) }).first().click()
     await page.getByText(title, { exact: true }).waitFor()
   }

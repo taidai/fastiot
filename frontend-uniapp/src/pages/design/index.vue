@@ -1,8 +1,8 @@
 <template>
   <view class="page">
-    <TopBar active="design" :project="projectName" :meta="PREVIEW_MODE ? '原型预览数据 · 操作仅保存在当前会话' : '按步骤牵引，不使用演示配置'" :pending="pendingAlarms.length" :alpha="42"
-      show-ems :ems-installed="PREVIEW_MODE ? previewWorkspace.emsEnabled : emsInstalled" :ems-busy="industryBusy" @project-change="changeProject" @new-project="newPreviewProject" @import-project="navigate('delivery')" @toggle-ems="toggleEms" @navigate="navigate" @bell="alarmOpen = true" @alpha="() => {}" />
-    <view v-if="!PREVIEW_MODE && session.error" class="error">{{ session.error }}</view>
+    <TopBar active="design" :project="projectName" meta="按步骤牵引，不使用演示配置" :pending="pendingAlarms.length" :alpha="42"
+      show-ems :ems-installed="emsInstalled" :ems-busy="industryBusy" @import-project="navigate('delivery')" @toggle-ems="toggleEms" @navigate="navigate" @bell="alarmOpen = true" @alpha="() => {}" />
+    <view v-if="session.error" class="error">{{ session.error }}</view>
     <IndustryGate v-if="industryBlocked" />
     <template v-else>
     <view class="statebar">
@@ -10,8 +10,7 @@
     </view>
     <view class="layout">
       <aside class="side design-ledger glass">
-        <p v-if="dependencyBlocked" class="note">此项目依赖 EMS，未启用时台账不可打开。</p>
-        <view v-else class="tree">
+        <view class="tree">
           <view class="tree-title"><span>{{ projectName }}</span><button class="tag" title="在站点下新建" aria-label="在站点下新建" :disabled="!canConfigure || !rootNode" @click="rootNode && openNewNode(rootNode.id, 'area')">＋</button></view>
           <button v-for="row in businessRows" :key="row.node.id" class="node" :class="{ active: session.layer === row.node.id }"
             :style="{ paddingLeft: `${8 + row.depth * 12}px` }" @click="selectNode(row.node.id)">
@@ -22,13 +21,12 @@
       </aside>
 
       <main class="stage">
-        <section v-if="dependencyBlocked" class="card glass step-card dependency-gate"><h3>项目依赖未满足</h3><p>此项目依赖 EMS，未启用时台账不可打开。</p><button class="primary" @click="toggleEms">启用 EMS</button></section>
-        <PrototypeTools v-else-if="activeTool" :tool="activeTool" :snapshot="session.snapshot" :selected-node-id="session.layer" :read-only="!canConfigure" @back="activeTool = ''" />
+        <PrototypeTools v-if="activeTool" :tool="activeTool" :snapshot="session.snapshot" :selected-node-id="session.layer" :read-only="!canConfigure" @back="activeTool = ''" />
         <template v-else>
         <view class="stepper-wrap">
           <view class="stepper">
             <template v-for="(step, index) in steps" :key="step.key">
-              <button class="step" :class="{ active: current === step.key, done: step.done }" @click="current = step.key">
+              <button class="step" :class="{ active: current === step.key, done: step.done }" @click="chooseStep(step.key)">
                 <i>{{ step.done ? '✓' : index + 1 }}</i>{{ step.label }}
               </button><em v-if="index < steps.length - 1">›</em>
             </template>
@@ -36,7 +34,7 @@
         </view>
 
         <template v-if="current === 'site'">
-          <view class="step-head"><b>第 1 步 · 建现场</b><span>先确定这是哪个现场，后面所有对象都挂在它下面。</span></view>
+          <view class="step-head"><b>第 1 步 · 新建现场</b><span>新建的现场挂在当前项目下，后面所有对象都挂在它下面。</span></view>
           <section class="card glass step-card">
             <view class="row"><span>项目</span><span>{{ projectName }}</span></view>
             <view class="row"><span>现场</span><span>{{ rootNode ? nameOf(rootNode) : '—' }}</span></view>
@@ -53,7 +51,7 @@
               </view>
               <p class="note">模板只带结构与默认策略，不带地址、凭据与运行数据。</p>
             </template>
-            <p v-else class="note">空白项目从第 2 步开始，一个对象一个对象地搭。</p>
+            <p v-else class="note">空白现场从第 2 步开始，一个对象一个对象地搭。</p>
             <div class="actions"><input v-model="siteName" class="site-name" placeholder="新现场名称" :disabled="!canConfigure || actionBusy !== ''"><button class="primary" :disabled="!canConfigure || !siteName.trim() || !selectedTemplate || actionBusy !== ''" @click="createSite">{{ actionBusy === 'site' ? '创建中…' : createSiteButtonText }}</button><button class="ghost" @click="navigate('delivery')">导入项目包</button></div>
             <p v-if="modelError" class="error" role="alert">{{ modelError }}</p><p v-if="modelNotice" class="notice" role="status">{{ modelNotice }}</p>
             <p v-if="!canConfigure" class="note">当前账号没有配置权限，模板、新建与复制已停用。</p>
@@ -71,7 +69,7 @@
             <section class="card glass step-card">
               <view class="panel-head"><h3>{{ projectName }}</h3><span class="tag">区域 {{ summary.areas }} · 单元 {{ summary.units }} · 设备 {{ summary.devices }}</span></view>
               <view class="check-strip">
-                <button class="chip" :class="accessSummary.devices && accessSummary.bound === accessSummary.devices ? 'ok' : 'warn'" @click="current = 'access'">{{ accessSummary.devices - accessSummary.bound > 0 ? `${accessSummary.devices - accessSummary.bound} 台设备未绑定` : accessSummary.devices ? '设备全部已绑定' : '还没有设备' }}</button>
+                <button class="chip" :class="accessBadge.ok ? 'ok' : 'warn'" @click="current = 'access'">{{ accessBadge.text }}</button>
                 <button class="chip" :class="everyLayerHasScreen ? 'ok' : ''" @click="current = 'ui'">{{ layerScreenSummary }}</button>
               </view>
               <div class="actions compact-actions"><button class="ghost" :disabled="!canConfigure || !allowedTypes.includes('area')" @click="openNewNode(session.layer, 'area')">＋ 区域</button><button class="ghost" :disabled="!canConfigure || !allowedTypes.some(type => type === 'unit' || type === 'energyUnit')" @click="openNewNode(session.layer, allowedTypes.includes('energyUnit') ? 'energyUnit' : 'unit')">＋ 业务单元</button><button class="ghost" :disabled="!canConfigure || !allowedTypes.includes('device')" @click="openNewNode(session.layer, 'device')">＋ 设备</button></div>
@@ -110,7 +108,6 @@
           @select="session.layer = $event" @saved="handleScreenSaved" @history="openPreviewHistory" />
 
         <DeliveryStep v-else :snapshot="session.snapshot" @navigate="navigate" @status="deliveryDone = $event" @tool="activeTool = $event" />
-        <view v-if="PREVIEW_MODE && (current === 'site' || current === 'tree')" class="tool-links">已有资产：<button class="link" @click="activeTool = 'templates'">模板库</button></view>
         </template>
       </main>
     </view>
@@ -132,11 +129,9 @@ import StrategyStep from "../../components/design/StrategyStep.vue"
 import UiStep from "../../components/design/UiStep.vue"
 import DeliveryStep from "../../components/design/DeliveryStep.vue"
 import { request, ApiError } from "../../api/client"
-import { PREVIEW_MODE } from "../../api/source"
-import { previewWorkspace, previewProjects } from '../../api/preview/workspace'
 import PrototypeTools from '../../components/design/PrototypeTools.vue'
 import { canConfigureAccess } from "../../components/design/access"
-import { allowedChildTypes, boundBusinessIDs, flattenLedger, summarizeLedger } from "../../components/design/design"
+import { allowedChildTypes, boundBusinessIDs, deviceBindingProgress, firstIncompleteStep, flattenLedger, summarizeLedger } from "../../components/design/design"
 import { acknowledgeAlarm, closeAlarm, descendantsOf, loadScreen, nameOf, pendingAlarms, refreshAll, requireAuth, session, startPolling, stopPolling } from "../../stores/session"
 import { kindOf } from "../../types/api"
 import type { ScreenConfig } from "../../types/api"
@@ -149,23 +144,23 @@ type LayerScreen = ScreenConfig & { inherited_from?: string; blocks?: unknown[];
 type LayerScreenState = { screen: LayerScreen | null; error: boolean }
 
 const current = ref("site")
+const stepPinned = ref(false)
 onLoad(query => {
   const step = String(query?.step || "")
-  if (["site", "tree", "access", "strategy", "ui", "delivery"].includes(step)) current.value = step
+  if (["site", "tree", "access", "strategy", "ui", "delivery"].includes(step)) {
+    current.value = step
+    stepPinned.value = true
+  }
 })
-const activeTool = ref('')
-const dependencyBlocked = computed(() => PREVIEW_MODE && !previewWorkspace.emsEnabled && !!previewProjects.find(p => p.id === previewWorkspace.projectId)?.requiresEms)
-async function changeProject() {
-  activeTool.value = ''; current.value = 'tree'; newNodeParent.value = ''; batchSelection.value = []
-  session.layer = previewWorkspace.projectId
-  layerScreens.value = {}; screen.value = null
-  await refreshDesign()
+function chooseStep(key: string) {
+  stepPinned.value = true
+  current.value = key
 }
-async function newPreviewProject() { await changeProject(); selectedTemplate.value = 'blank'; siteName.value = projectName.value; current.value = 'site' }
+const activeTool = ref('')
 function openPreviewHistory() { uni.navigateTo({ url: '/pages/overview/index?history=1' }) }
 const siteTemplates = ref<SiteTemplate[]>([])
-const selectedTemplate = ref(PREVIEW_MODE ? 'pump-house' : 'blank')
-const siteName = ref(PREVIEW_MODE ? previewProjects.find(p => p.id === previewWorkspace.projectId)?.name || '未命名项目' : '')
+const selectedTemplate = ref('blank')
+const siteName = ref('')
 const actionBusy = ref("")
 const modelError = ref("")
 const modelNotice = ref("")
@@ -174,6 +169,20 @@ const newNodeType = ref("area")
 const newNodeName = ref("")
 const batchSelection = ref<string[]>([])
 const accessSummary = ref({ channels: 0, devices: 0, bound: 0, verified: 0 })
+const persistedAccess = computed(() => deviceBindingProgress(session.snapshot?.nodes || []))
+const accessProgress = computed(() => accessSummary.value.devices > 0 ? accessSummary.value : persistedAccess.value)
+const accessDone = computed(() => accessProgress.value.devices > 0 && accessProgress.value.verified === accessProgress.value.devices)
+const accessBadge = computed(() => {
+  const progress = accessProgress.value
+  if (!progress.devices) return { text: "还没有设备", ok: false }
+  const unbound = progress.devices - progress.bound
+  const pending = progress.bound - progress.verified
+  if (!unbound && !pending) return { text: "设备全部已接入", ok: true }
+  const parts: string[] = []
+  if (unbound) parts.push(`${unbound} 台未绑定`)
+  if (pending) parts.push(`${pending} 台待验证`)
+  return { text: parts.join(" · "), ok: false }
+})
 const deliveryDone = ref(false)
 const alarmOpen = ref(false)
 const emsInstalled = ref<boolean | null>(null)
@@ -182,12 +191,12 @@ const industryBusy = ref(false)
 const screen = ref<ScreenConfig | null>(null)
 const layerScreens = ref<Record<string, LayerScreenState>>({})
 const treeQuery = ref("")
-const businessRows = computed(() => flattenLedger(session.snapshot).filter(row => !PREVIEW_MODE || row.kind !== '通道'))
+const businessRows = computed(() => flattenLedger(session.snapshot))
 const summary = computed(() => summarizeLedger(session.snapshot?.nodes || []))
 const boundIDs = computed(() => boundBusinessIDs(session.snapshot?.nodes || []))
 const activeBatchSelection = computed(() => batchSelection.value.filter(id => !boundIDs.value.has(id)))
 const rootNode = computed(() => session.snapshot?.nodes.find(node => node.id === session.snapshot?.roots[0]) || null)
-const projectName = computed(() => PREVIEW_MODE ? previewProjects.find(p => p.id === previewWorkspace.projectId)?.name || '未命名项目' : currentProject.value?.name || "未选择项目")
+const projectName = computed(() => currentProject.value?.name || "未选择项目")
 const canConfigure = computed(() => canConfigureAccess(session.snapshot))
 const selectedNode = computed(() => session.snapshot?.nodes.find(node => node.id === session.layer) || rootNode.value)
 const selectedRow = computed(() => businessRows.value.find(row => row.node.id === selectedNode.value?.id) || null)
@@ -204,7 +213,7 @@ const filteredTree = computed(() => filterRows(treeQuery.value))
 const reusableSiteTemplates = computed(() => siteTemplates.value.filter(template => template.id !== "blank"))
 const createSiteButtonText = computed(() => {
   const template = siteTemplates.value.find(item => item.id === selectedTemplate.value)
-  return template?.id === "blank" ? "建空白项目 →" : `按「${template?.name || "模板"}」建出来 →`
+  return template?.id === "blank" ? "建空白现场 →" : `按「${template?.name || "模板"}」建出来 →`
 })
 const everyLayerHasScreen = computed(() => screenLayers.value.length > 0 && screenLayers.value.every(row => !!layerScreens.value[row.node.id]?.screen))
 const screenLayers = computed(() => businessRows.value.filter(row => row.kind !== "通道"))
@@ -217,13 +226,20 @@ const layerScreenSummary = computed(() => {
   return defaults ? `${defaults} 层用默认块` : "每一层都已配界面"
 })
 const steps = computed(() => [
-  { key: "site", label: "建现场", done: !!session.snapshot },
+  { key: "site", label: "新建现场", done: !!session.snapshot },
   { key: "tree", label: "搭台账", done: businessRows.value.length > 1 },
-  { key: "access", label: "接设备", done: accessSummary.value.devices > 0 && accessSummary.value.bound === accessSummary.value.devices },
+  { key: "access", label: "接设备", done: accessDone.value },
   { key: "strategy", label: "配策略", done: rules.value.length > 0 },
   { key: "ui", label: "配界面", done: everyLayerHasScreen.value },
   { key: "delivery", label: "交付", done: deliveryDone.value },
 ])
+let initialStepResolved = false
+watch(() => session.snapshot, async snapshot => {
+  if (!snapshot || initialStepResolved || stepPinned.value) return
+  initialStepResolved = true
+  await loadLayerScreens()
+  if (!stepPinned.value) current.value = firstIncompleteStep(steps.value)
+}, { immediate: true })
 function filterRows(query: string) {
   const q = query.trim().toLowerCase()
   return q ? businessRows.value.filter(row => !!matchReason(row, q)) : businessRows.value
@@ -311,7 +327,6 @@ async function loadSiteTemplates() {
   try {
     const result = await request<{ site_templates: SiteTemplate[] }>("/templates")
     siteTemplates.value = result.site_templates || []
-    if (PREVIEW_MODE) siteTemplates.value.sort((a, b) => ['pump-house', 'storage', 'blank'].indexOf(a.id) - ['pump-house', 'storage', 'blank'].indexOf(b.id))
   } catch (cause) { modelError.value = cause instanceof Error ? `现场模板读取失败：${cause.message}` : "现场模板读取失败" }
 }
 async function loadIndustryStatus() {
@@ -323,7 +338,7 @@ async function loadIndustryStatus() {
   } catch { emsInstalled.value = null }
 }
 async function toggleEms() {
-  const installed = PREVIEW_MODE ? previewWorkspace.emsEnabled : emsInstalled.value
+  const installed = emsInstalled.value
   if (installed === null || industryBusy.value) return
   if (!installed && !emsVersion.value) { uni.showToast({ title: "未读取到 EMS 行业包版本", icon: "none" }); return }
   industryBusy.value = true

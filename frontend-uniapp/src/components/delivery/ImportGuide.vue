@@ -1,28 +1,5 @@
 <template>
-  <view v-if="PREVIEW_MODE" class="import-guide preview-import-guide">
-    <view class="pipeline" aria-label="原型导入到运行步骤">
-      <span class="ok">导出</span><i>→</i><span class="ok">导入</span><i>→</i><span :class="step === 'imported' ? 'current' : 'ok'">现场重绑</span><i>→</i><span :class="step === 'running' ? 'ok' : step === 'rebound' ? 'current' : ''">运行</span>
-    </view>
-    <template v-if="step === 'imported'">
-      <view class="row"><span>包版本</span><span class="src">{{ result.version_id }} · 依赖已锁定</span></view>
-      <view class="row"><span>必须重绑</span><span class="src">通道、设备地址与凭据；运行值不带入</span></view>
-      <view class="actions"><button class="primary" :disabled="previewBusy" @click="advance('rebind')">完成现场重绑</button></view>
-    </template>
-    <template v-else-if="step === 'rebound'">
-      <view class="row"><span>重绑结果</span><span class="src">Modbus TCP · 站号已重新分配 · 凭据未展示</span></view>
-      <view class="actions"><button class="primary" :disabled="previewBusy" @click="advance('run')">在新实例运行</button></view>
-    </template>
-    <template v-else-if="step === 'running'">
-      <view class="card-title">新实例运行</view>
-      <view class="row"><span>状态</span><span class="chip ok">运行中</span></view>
-      <view class="row"><span>采集</span><span class="src">采集恢复 · {{ runtimeValues.length }} 个演示样本 · 最新样本 {{ latestSampleTime }}</span></view>
-      <view class="row"><span>策略</span><span class="src">包内规则与状态机生效 · 未重放旧命令</span></view>
-      <p class="note">导入后的历史从本实例重新开始；原实例运行历史与审计不被覆盖。</p>
-    </template>
-    <view v-if="previewError" class="error">{{ previewError }}</view>
-    <p class="note">原型演练：仅更新内存中的交付状态，不连接现场，不执行真实控制。</p>
-  </view>
-  <view v-else class="import-guide">
+  <view class="import-guide">
     <view class="pipeline" aria-label="导入到运行步骤">
       <span class="ok">导出</span><i>→</i><span class="ok">导入</span><i>→</i><span class="current">现场重绑</span><i>→</i><span>运行</span>
     </view>
@@ -77,8 +54,6 @@
 import { computed, ref, watch } from "vue"
 import RebindPanel from "./RebindPanel.vue"
 import { request } from "../../api/client"
-import { PREVIEW_MODE } from "../../api/source"
-import { deliveryPreviewState } from "../../api/preview/delivery"
 import { selectLayer } from "../../stores/session"
 import type { Snapshot, StateValue } from "../../types/api"
 import { clock, deliveryError, statusText } from "./contracts"
@@ -101,17 +76,6 @@ const props = defineProps<{
   quality: { channels: unknown[]; devices: unknown[] }
 }>()
 const emit = defineEmits<{ (event: "refresh"): void }>()
-const step = computed(() => deliveryPreviewState.importStep)
-const previewBusy = ref(false)
-const previewError = ref("")
-async function advance(action: "rebind" | "run") {
-  if (!PREVIEW_MODE || previewBusy.value) return
-  previewBusy.value = true; previewError.value = ""
-  try {
-    await request(`/delivery/preview/${action}`, "POST")
-    emit("refresh")
-  } catch (error) { previewError.value = deliveryError(error) } finally { previewBusy.value = false }
-}
 const rebindOpen = ref(false)
 const refreshing = ref(false)
 const latestPreflight = ref<PreflightReport | null>(null)
@@ -155,12 +119,11 @@ watch(() => props.result.site_id, () => {
   void loadPreflight()
 }, { immediate: true })
 watch(importedChannels, channels => {
-  if (PREVIEW_MODE) return
   if (!channels.some(channel => channel.id === verificationChannel.value)) verificationChannel.value = channels[0]?.id || ""
   if (verificationChannel.value) void loadVerification(verificationChannel.value)
 }, { immediate: true })
 async function loadVerification(channelID: string) {
-  if (!channelID || PREVIEW_MODE) return
+  if (!channelID) return
   try {
     const result = await request<{ records?: VerificationRecord[] }>(`/modbus/${encodeURIComponent(channelID)}/units/1/verify`)
     if (verificationChannel.value === channelID) verificationRecord.value = result.records?.length ? result.records[result.records.length - 1] : null

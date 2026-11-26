@@ -19,17 +19,13 @@
       <p v-if="packageSummary?.warnings?.length" class="notice warn">{{ packageSummary.warnings.join("；") }}</p>
 
       <view class="section-heading"><h5 class="section-title">交付前检查</h5><button class="ghost" :disabled="!selectedSite || !canConfigure || !!busy" @click="runPreflight">{{ busy === "preflight" ? "预检中…" : "运行预检" }}</button></view>
-      <template v-if="PREVIEW_MODE">
-        <view v-for="check in previewChecks" :key="check.title" class="row"><span>{{ check.title }}</span><span class="chip" :class="check.status">{{ check.detail }}</span></view>
-      </template>
-      <template v-else-if="gates?.gates?.length">
+      <template v-if="gates?.gates?.length">
         <view v-for="gate in gates.gates" :key="gate.key" class="row"><span>{{ gate.title }}<small v-if="gate.detail">{{ gate.detail }}</small></span><span class="chip" :class="gate.status">{{ statusText(gate.status) }}</span></view>
       </template>
       <view v-else class="row"><span>预检</span><span class="src">{{ gateError || "后端尚未返回检查项" }}</span></view>
 
       <h5 class="section-title">部署记录</h5>
-      <div class="table-wrap"><table class="mini-table deploy-table"><thead><tr><th>目标</th><th>版本</th><th>时间</th><th>人</th><th>状态</th></tr></thead><tbody><tr v-if="PREVIEW_MODE" v-for="record in DELIVERY_PREVIEW_DEPLOYMENTS" :key="record.target"><td>{{ record.target }}</td><td>{{ record.version }}</td><td>{{ record.time }}</td><td>{{ record.operator }}</td><td>{{ record.status }}</td></tr><tr v-else><td colspan="5" class="empty">暂无部署记录：后端没有独立的“包版本 → 目标实例”部署记录 API。发布、导入与回退都不能记成部署成功。</td></tr></tbody></table></div>
-      <template v-if="PREVIEW_MODE && versions.length"><h5 class="section-title">版本差异</h5><view class="row"><span>v2026.11.17-1 → 当前</span><span class="src">+1 设备 · +1 画面 · 规则 2 → 3</span></view></template>
+      <div class="table-wrap"><table class="mini-table deploy-table"><thead><tr><th>目标</th><th>版本</th><th>时间</th><th>人</th><th>状态</th></tr></thead><tbody><tr><td colspan="5" class="empty">暂无部署记录：后端没有独立的“包版本 → 目标实例”部署记录 API。发布、导入与回退都不能记成部署成功。</td></tr></tbody></table></div>
       <view class="tool-line"><span>历史留多久</span><button class="ghost" @click="emit('tool', 'retention')">数据保留 →</button></view>
       <p class="note">发布只冻结工程配置，不改变运行配置，也不等于部署；跨实例导入后必须重新绑定地址与凭据。</p>
       <p v-if="message" class="notice" :class="messageTone" role="status">{{ message }}</p>
@@ -45,8 +41,6 @@ import { ApiError, downloadText, request } from "../../api/client"
 import { nameOf } from "../../types/api"
 import type { Snapshot } from "../../types/api"
 import { canAction, deliveryError, statusText } from "../delivery/contracts"
-import { PREVIEW_MODE } from "../../api/source"
-import { DELIVERY_PREVIEW_DEPLOYMENTS } from "../../api/preview/delivery"
 
 type Gate = { key: string; title: string; status: string; detail: string; object?: string; next_step?: string; informational?: boolean }
 type PreflightReport = { id?: string; site?: string; generated_at?: string; operator?: string; status: string; summary: Record<string, number>; gates: Gate[]; fingerprint?: string }
@@ -57,7 +51,7 @@ const props = defineProps<{ snapshot: Snapshot | null }>()
 const emit = defineEmits<{ (event: "navigate", value: "delivery"): void; (event: "status", value: boolean): void; (event: "tool", value: string): void }>()
 const selectedSite = ref("")
 const versions = ref<VersionSummary[]>([])
-const currentVersion = computed(() => versions.value.find(version => PREVIEW_MODE || version.deliverable))
+const currentVersion = computed(() => versions.value.find(version => version.deliverable))
 const packageSummary = ref<ProjectPackage | null>(null)
 const gates = ref<PreflightReport | null>(null)
 const versionError = ref("")
@@ -81,14 +75,6 @@ const packageDependencies = computed(() => {
   return packageSummary.value.dependencies?.length ? packageSummary.value.dependencies.map(item => `${item.kind === "industry" ? "行业包" : "Profile"} ${item.id}@${item.version}`).join("；") : "无行业包或 Profile 依赖"
 })
 
-const previewChecks = computed(() => [
-  { title: "通道", detail: "2 条在线", status: "ok" },
-  { title: "点位", detail: `${packageSummary.value?.point_count || 0} 个点位`, status: "ok" },
-  { title: "策略", detail: `${packageSummary.value?.strategy_count || 0} 条规则 · 已发布`, status: "ok" },
-  { title: "界面", detail: `${packageSummary.value?.screens?.length || 0} 层本层已配 · 其余继承或默认`, status: packageSummary.value?.screens?.length ? "ok" : "warn" },
-  { title: "依赖", detail: packageDependencies.value, status: "ok" },
-])
-
 watch(sites, list => { if (!list.some(node => node.id === selectedSite.value)) selectedSite.value = list[0]?.id || "" }, { immediate: true })
 watch(selectedSite, site => {
   versions.value = []; packageSummary.value = null; gates.value = null
@@ -110,9 +96,9 @@ async function loadPackage(site: string) {
   const versionID = currentVersion.value?.id
   packageSummary.value = null
   try {
-    const result = await request<ProjectPackage>(`/projects/export${queryFor(site)}${!PREVIEW_MODE && versionID ? `&version=${encodeURIComponent(versionID)}` : ""}`)
-    if (site === selectedSite.value && (PREVIEW_MODE || currentVersion.value?.id === versionID)) { packageSummary.value = result; packageError.value = "" }
-  } catch (error) { if (site === selectedSite.value && (PREVIEW_MODE || currentVersion.value?.id === versionID)) { packageSummary.value = null; packageError.value = deliveryError(error) } }
+    const result = await request<ProjectPackage>(`/projects/export${queryFor(site)}${versionID ? `&version=${encodeURIComponent(versionID)}` : ""}`)
+    if (site === selectedSite.value && currentVersion.value?.id === versionID) { packageSummary.value = result; packageError.value = "" }
+  } catch (error) { if (site === selectedSite.value && currentVersion.value?.id === versionID) { packageSummary.value = null; packageError.value = deliveryError(error) } }
 }
 async function loadGates(site: string) {
   if (!site) { gates.value = null; return }
@@ -139,7 +125,7 @@ async function publish() {
   if (!site) return
   busy.value = "publish"; message.value = ""
   try {
-    const result = await request<VersionSummary>("/projects/publish", "POST", { site, note: "", confirm: false, ...(!PREVIEW_MODE ? { expected_fingerprint: gates.value?.fingerprint } : {}) })
+    const result = await request<VersionSummary>("/projects/publish", "POST", { site, note: "", confirm: false, expected_fingerprint: gates.value?.fingerprint })
     message.value = `已冻结版本 ${result.id}（${result.nodes} 个节点）；未改变运行配置，不等于部署`
     messageTone.value = "success"; publishBlocked.value = false
     await loadVersions(site)
@@ -152,11 +138,11 @@ async function publish() {
 async function exportPackage() {
   const site = selectedSite.value
   const versionID = currentVersion.value?.id
-  if (!site || !PREVIEW_MODE && !versionID) return
+  if (!site || !versionID) return
   busy.value = "export"; message.value = ""; packageError.value = ""
   try {
-    const result = await request<ProjectPackage>(`/projects/export${queryFor(site)}${!PREVIEW_MODE && versionID ? `&version=${encodeURIComponent(versionID)}` : ""}`)
-    if (site !== selectedSite.value || !PREVIEW_MODE && currentVersion.value?.id !== versionID) return
+    const result = await request<ProjectPackage>(`/projects/export${queryFor(site)}${versionID ? `&version=${encodeURIComponent(versionID)}` : ""}`)
+    if (site !== selectedSite.value || currentVersion.value?.id !== versionID) return
     const filename = `${(result.name || selectedSiteName.value || "project").replace(/[\\/:*?"<>|]/g, "-")}.package.json`
     downloadText(filename, JSON.stringify(result, null, 2))
     packageSummary.value = result

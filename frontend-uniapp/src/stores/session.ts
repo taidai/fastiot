@@ -1,12 +1,11 @@
 import { computed, reactive, watch } from "vue"
 import { ensureProjectContext, projectContext, rememberLayer } from './projects'
 import { ApiError, logout, request } from "../api/client"
-import { PREVIEW_MODE } from '../api/source'
 import { kindOf, nameOf } from "../types/api"
 import type { EmsAlarm, HistoryQueryResponse, Node, ScreenConfig, Snapshot, StateValue } from "../types/api"
 
 export const session = reactive({
-  token: PREVIEW_MODE ? "" : uni.getStorageSync("fastems-token") as string,
+  token: uni.getStorageSync("fastems-token") as string,
   snapshot: null as Snapshot | null,
   values: [] as StateValue[],
   alarms: [] as EmsAlarm[],
@@ -43,7 +42,7 @@ watch(() => session.layer, id => {
   if (session.snapshot?.nodes.some(node => node.id === id)) rememberLayer(id)
 }, { flush: 'sync' })
 
-export const industryBlocked = computed(() => !PREVIEW_MODE && session.snapshot?.industry?.blocked === true)
+export const industryBlocked = computed(() => session.snapshot?.industry?.blocked === true)
 
 export const pendingAlarms = computed(() => session.alarms.filter(alarm => alarm.active && alarm.state === "active"))
 export const currentLayer = computed(() => {
@@ -94,7 +93,7 @@ async function refreshSnapshot() {
   const snapshot = await request<Snapshot>("/snapshot")
   session.snapshot = snapshot
   if (!session.layer || !snapshot.nodes.some(node => node.id === session.layer)) {
-    const restored = !PREVIEW_MODE ? projectContext.layer : ''
+    const restored = projectContext.layer
     session.layer = snapshot.nodes.some(node => node.id === restored) ? restored : snapshot.roots[0] || snapshot.nodes[0]?.id || ""
   }
 }
@@ -183,7 +182,6 @@ export function stopPolling() {
 }
 
 export function requireAuth() {
-  if (PREVIEW_MODE) return true
   if (!session.token) {
     logout()
     return false

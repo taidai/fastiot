@@ -51,6 +51,8 @@ try {
   await page.locator('.login input[type="password"]').fill('ledger-browser-test-only')
   await page.keyboard.press('Enter')
   await page.locator('.workbench uni-button').filter({ hasText: '设计' }).click()
+  await page.locator('.stepper').waitFor()
+  await page.locator('.stepper uni-button').filter({ hasText: '新建现场' }).click()
   await page.locator('.tpl-card').filter({ hasText: '供水泵房' }).first().click()
   await page.locator('.site-name input, input.site-name').first().fill('Ledger acceptance')
   await page.locator('uni-button').filter({ hasText: '按「供水泵房」建出来' }).click()

@@ -38,6 +38,7 @@ func main() {
 	rtuBus := flag.String("rtu-bus", "", "serial address (port@baud) the sample channel polls; requires -sim-rtu")
 	controlAddr := flag.String("control", "127.0.0.1:15021", "simulator control address for fault/local injection")
 	password := flag.String("password", envOr("FASTEMS_ADMIN_PASSWORD", "pumphouse-demo-2026"), "admin password (at least 12 characters)")
+	project := flag.Bool("project", true, "also build the full teaching project (site, area, devices, unit, screens, rule, state machine, published version)")
 	flag.Parse()
 
 	if len(*password) < 12 {
@@ -100,11 +101,19 @@ func main() {
 			"If %s already holds another project, point -data at an empty directory or pass its admin password.", err, *dataDir)
 	}
 	api := &apiClient{base: base, token: token, http: &http.Client{Timeout: 10 * time.Second}}
-	sample, err := seedSample(api, channelProtocol, channelAddress)
-	if err != nil {
-		log.Fatalf("build the pump house sample: %v", err)
+	if *project {
+		teaching, err := seedTeachingProject(api, fmt.Sprintf("127.0.0.1:%d", *simPort))
+		if err != nil {
+			log.Fatalf("build the teaching project: %v", err)
+		}
+		printProjectSummary(teaching, *httpPort)
+	} else {
+		sample, err := seedSample(api, channelProtocol, channelAddress)
+		if err != nil {
+			log.Fatalf("build the pump house sample: %v", err)
+		}
+		printSummary(api, sample, *httpPort)
 	}
-	printSummary(api, sample, *httpPort)
 	if rtuStation != nil {
 		log.Printf("  RTU link faults: curl -X POST http://%s/link -d '{\"mute\":true}' (also delay_ms, corrupt_response_crc, corrupt_request_crc; GET for faults and counters)", *controlAddr)
 	}
@@ -270,35 +279,12 @@ func seedSample(api *apiClient, protocol, address string) (sampleIDs, error) {
 		return sampleIDs{}, err
 	}
 
-	request, err := http.NewRequest(http.MethodPost, api.base+"/modbus/"+channel.ID+"/io/import",
-		bytes.NewReader(pumphouse.PointTableCSV(1)))
+	if err := importPointTable(api, channel.ID, pumphouse.PointTableCSV(1)); err != nil {
+		return sampleIDs{}, err
+	}
+	pointIDs, err := unitPointIDs(api, channel.ID)
 	if err != nil {
 		return sampleIDs{}, err
-	}
-	request.Header.Set("Authorization", "Bearer "+api.token)
-	request.Header.Set("Content-Type", "text/csv; charset=utf-8")
-	response, err := api.http.Do(request)
-	if err != nil {
-		return sampleIDs{}, err
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		payload, _ := io.ReadAll(response.Body)
-		return sampleIDs{}, fmt.Errorf("import point table: %d %s", response.StatusCode, strings.TrimSpace(string(payload)))
-	}
-
-	var model struct {
-		Points []struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
-		} `json:"points"`
-	}
-	if err := api.json(http.MethodGet, "/modbus/"+channel.ID+"/units/1/model", nil, &model); err != nil {
-		return sampleIDs{}, err
-	}
-	pointIDs := map[string]string{}
-	for _, point := range model.Points {
-		pointIDs[point.Name] = point.ID
 	}
 	if len(pointIDs) != len(pumphouse.SamplePoints) {
 		return sampleIDs{}, fmt.Errorf("point table has %d points, want %d", len(pointIDs), len(pumphouse.SamplePoints))
@@ -339,6 +325,500 @@ func seedSample(api *apiClient, protocol, address string) (sampleIDs, error) {
 		return sample, err
 	}
 	return sample, nil
+}
+
+// The teaching project mirrors the prototype's shape: Site → Area → Devices,
+// a Unit on the Site, and a published rule/state machine/screen per layer. It
+// is built only through the product HTTP API, never by writing store nodes.
+const (
+	projectSiteName    = "教学泵房"
+	projectAreaName    = "泵房"
+	projectUnitName    = "供水单元"
+	projectPump1       = "1号泵"
+	projectPump2       = "2号泵"
+	projectTank        = "水箱"
+	projectRuleName    = "供水低液位启动 1号泵"
+	projectMachine     = "1号泵过程状态机"
+	projectVersionNote = "教学泵房初始工程（设备、策略、画面）"
+)
+
+type projectResult struct {
+	Site      string
+	Area      string
+	Unit      string
+	Devices   map[string]string
+	Channels  []string
+	RuleID    string
+	MachineID string
+	VersionID string
+	Existing  bool
+}
+
+// seedTeachingProject builds the full teaching project above the legacy sample
+// group. It is idempotent at the project level: if the Site already exists the
+// whole project is left untouched.
+func seedTeachingProject(api *apiClient, simAddress string) (projectResult, error) {
+	var snapshot struct {
+		Roots []string        `json:"roots"`
+		Nodes []data.NodeEdge `json:"nodes"`
+	}
+	if err := api.json(http.MethodGet, "/snapshot", nil, &snapshot); err != nil {
+		return projectResult{}, err
+	}
+	if len(snapshot.Roots) != 1 {
+		return projectResult{}, fmt.Errorf("expected one project root, got %d", len(snapshot.Roots))
+	}
+	root := snapshot.Roots[0]
+	for _, node := range snapshot.Nodes {
+		if node.Type == "site" && node.Desc() == projectSiteName {
+			log.Printf("teaching project %q already exists in this data directory; leaving it unchanged (already exists)", projectSiteName)
+			return projectResult{Site: node.ID, Existing: true}, nil
+		}
+	}
+
+	site, err := createBusinessNode(api, root, "site", projectSiteName)
+	if err != nil {
+		return projectResult{}, err
+	}
+	area, err := createBusinessNode(api, site, "area", projectAreaName)
+	if err != nil {
+		return projectResult{}, err
+	}
+	devices := map[string]string{}
+	for _, name := range []string{projectPump1, projectPump2, projectTank} {
+		id, err := createBusinessNode(api, area, "device", name)
+		if err != nil {
+			return projectResult{}, err
+		}
+		devices[name] = id
+	}
+	unit, err := createBusinessNode(api, site, "unit", projectUnitName)
+	if err != nil {
+		return projectResult{}, err
+	}
+	if err := api.json(http.MethodPatch, "/nodes/"+unit, map[string]any{
+		"description":     projectUnitName,
+		"members_version": 0,
+		"members": []map[string]any{
+			{"role": "驱动泵", "node_id": devices[projectPump1], "required": true},
+			{"role": "备用泵", "node_id": devices[projectPump2], "required": false},
+			{"role": "液位反馈", "node_id": devices[projectTank], "required": true},
+		},
+	}, nil); err != nil {
+		return projectResult{}, err
+	}
+
+	// One live channel per device. The simulated station answers only station 1,
+	// so three channels to the same station keep every device online while still
+	// giving each device its own unit model and point map.
+	pump1, err := buildProjectChannel(api, site, simAddress, "泵站模拟器 · 1号泵（模拟设备）", "1号泵（模拟）", devices[projectPump1],
+		[]string{pumphouse.PointPump1Current, pumphouse.PointPump1Command, pumphouse.PointPump1Starts,
+			pumphouse.PointPump1Run, pumphouse.PointPump1Remote, pumphouse.PointPump1Fault})
+	if err != nil {
+		return projectResult{}, err
+	}
+	pump2, err := buildProjectChannel(api, site, simAddress, "泵站模拟器 · 2号泵（模拟设备）", "2号泵（模拟）", devices[projectPump2],
+		[]string{pumphouse.PointPump2Current, pumphouse.PointPump2Command, pumphouse.PointPump2Starts,
+			pumphouse.PointPump2Run, pumphouse.PointPump2Remote, pumphouse.PointPump2Fault})
+	if err != nil {
+		return projectResult{}, err
+	}
+	tank, err := buildProjectChannel(api, site, simAddress, "泵站模拟器 · 水箱（模拟设备）", "水箱（模拟）", devices[projectTank],
+		[]string{pumphouse.PointLevel, pumphouse.PointPressure})
+	if err != nil {
+		return projectResult{}, err
+	}
+
+	levelID := tank.Points[pumphouse.PointLevel]
+	pressureID := tank.Points[pumphouse.PointPressure]
+	// Safety conditions are validated against the command point's own channel
+	// subtree, so each pump uses the level point imported on its channel.
+	for command, safetyLevel := range map[string]string{
+		pump1.Points[pumphouse.PointPump1Command]: pump1.Points[pumphouse.PointLevel],
+		pump2.Points[pumphouse.PointPump2Command]: pump2.Points[pumphouse.PointLevel],
+	} {
+		if err := api.json(http.MethodPut, "/safety", map[string]any{
+			"node": command, "safety": pumphouse.StartSafety(safetyLevel),
+		}, nil); err != nil {
+			return projectResult{}, err
+		}
+	}
+
+	metrics := []map[string]any{
+		{"point_id": levelID, "label": "水箱液位", "target": "≥ 20"},
+		{"point_id": pressureID, "label": "出口压力", "target": "0.35"},
+		{"point_id": pump1.Points[pumphouse.PointPump1Run], "label": "1号泵运行", "target": ""},
+		{"point_id": pump2.Points[pumphouse.PointPump2Run], "label": "2号泵运行", "target": ""},
+	}
+	recentIDs := []string{levelID, pressureID, pump1.Points[pumphouse.PointPump1Run], pump2.Points[pumphouse.PointPump2Run]}
+	// Match frontend defaultScreen: 现场 uses flow, 区域 uses children; both
+	// otherwise share the same nine blocks.
+	if err := saveProjectScreen(api, site, projectSiteName, "flow", metrics, recentIDs, levelID); err != nil {
+		return projectResult{}, err
+	}
+	if err := saveProjectScreen(api, area, projectAreaName, "children", metrics, recentIDs, levelID); err != nil {
+		return projectResult{}, err
+	}
+
+	ruleID, err := seedProjectRule(api, site, levelID, pump1.Points[pumphouse.PointPump1Command])
+	if err != nil {
+		return projectResult{}, err
+	}
+	machineID, err := seedProjectMachine(api, site, devices[projectPump1])
+	if err != nil {
+		return projectResult{}, err
+	}
+
+	if err := waitForProjectValues(api, []string{
+		levelID, pressureID,
+		pump1.Points[pumphouse.PointPump1Run], pump1.Points[pumphouse.PointPump1Command],
+		pump2.Points[pumphouse.PointPump2Run], pump2.Points[pumphouse.PointPump2Command],
+	}); err != nil {
+		return projectResult{}, err
+	}
+
+	versionID, err := publishProjectVersion(api, site)
+	if err != nil {
+		return projectResult{}, err
+	}
+	return projectResult{
+		Site: site, Area: area, Unit: unit, Devices: devices,
+		Channels: []string{pump1.ChannelID, pump2.ChannelID, tank.ChannelID},
+		RuleID:   ruleID, MachineID: machineID, VersionID: versionID,
+	}, nil
+}
+
+func createBusinessNode(api *apiClient, parent, nodeType, description string) (string, error) {
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := api.json(http.MethodPost, "/nodes", map[string]any{
+		"parent": parent, "type": nodeType, "description": description,
+	}, &created); err != nil {
+		return "", err
+	}
+	if created.ID == "" {
+		return "", fmt.Errorf("create %s %q returned no id", nodeType, description)
+	}
+	return created.ID, nil
+}
+
+type projectChannel struct {
+	ChannelID string
+	Points    map[string]string
+}
+
+// buildProjectChannel creates a live Modbus TCP channel to the simulated
+// station and binds its unit model to one business device. The model is saved
+// three times: profile+map, then the business binding, then an explicit
+// simulated-device verification that clears the binding's "verify again" gate.
+func buildProjectChannel(api *apiClient, parent, address, description, modelName, deviceID string, pointNames []string) (projectChannel, error) {
+	var channel struct {
+		ID string `json:"id"`
+	}
+	if err := api.json(http.MethodPost, "/modbus", map[string]any{
+		"parent": parent, "protocol": "TCP", "uri": address,
+		"poll_period": 1000, "timeout": 1000, "description": description,
+	}, &channel); err != nil {
+		return projectChannel{}, err
+	}
+	if channel.ID == "" {
+		return projectChannel{}, errors.New("create modbus channel returned no id")
+	}
+	if err := importPointTable(api, channel.ID, pumphouse.PointTableCSV(1)); err != nil {
+		return projectChannel{}, err
+	}
+	ids, err := unitPointIDs(api, channel.ID)
+	if err != nil {
+		return projectChannel{}, err
+	}
+	pointMap := make(map[string]string, len(pointNames))
+	for _, name := range pointNames {
+		if ids[name] == "" {
+			return projectChannel{}, fmt.Errorf("channel %q: point %q missing after import", description, name)
+		}
+		pointMap[name] = ids[name]
+	}
+	path := "/modbus/" + channel.ID + "/units/1/model"
+	base := map[string]any{"name": modelName, "profile_id": pumphouse.ProfileID, "point_map": pointMap}
+	if err := api.json(http.MethodPut, path, base, nil); err != nil {
+		return projectChannel{}, err
+	}
+	bound := map[string]any{"name": modelName, "profile_id": pumphouse.ProfileID, "point_map": pointMap, "business_node_id": deviceID}
+	if err := api.json(http.MethodPut, path, bound, nil); err != nil {
+		return projectChannel{}, err
+	}
+	// Binding the business node changes the mapping hash, so the follow-up save
+	// that clears the re-verification gate has to echo the stored mapping and
+	// profile versions.
+	mappingVersion, profileVersion, err := unitModelVersions(api, channel.ID)
+	if err != nil {
+		return projectChannel{}, err
+	}
+	verified := map[string]any{
+		"name": modelName, "profile_id": pumphouse.ProfileID, "point_map": pointMap, "business_node_id": deviceID,
+		"mapping_version": mappingVersion, "profile_version": profileVersion,
+		"verified": true, "verifier": "pumphouse-sample", "verified_at": time.Now().UTC().Format("2006-01-02"),
+		"device_serial": "SIM-" + channel.ID, "verification": "软件模拟设备自检（地址/缩放/回读一致）；不代表真机验证",
+	}
+	if err := api.json(http.MethodPut, path, verified, nil); err != nil {
+		return projectChannel{}, err
+	}
+	return projectChannel{ChannelID: channel.ID, Points: ids}, nil
+}
+
+func unitModelVersions(api *apiClient, channelID string) (string, string, error) {
+	var view struct {
+		Model struct {
+			MappingVersion string `json:"mapping_version"`
+			ProfileVersion string `json:"profile_version"`
+		} `json:"model"`
+	}
+	if err := api.json(http.MethodGet, "/modbus/"+channelID+"/units/1/model", nil, &view); err != nil {
+		return "", "", err
+	}
+	if view.Model.MappingVersion == "" {
+		return "", "", errors.New("unit model returned no mapping_version")
+	}
+	return view.Model.MappingVersion, view.Model.ProfileVersion, nil
+}
+
+func importPointTable(api *apiClient, channelID string, csv []byte) error {
+	request, err := http.NewRequest(http.MethodPost, api.base+"/modbus/"+channelID+"/io/import", bytes.NewReader(csv))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Authorization", "Bearer "+api.token)
+	request.Header.Set("Content-Type", "text/csv; charset=utf-8")
+	response, err := api.http.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		payload, _ := io.ReadAll(response.Body)
+		return fmt.Errorf("import point table: %d %s", response.StatusCode, strings.TrimSpace(string(payload)))
+	}
+	return nil
+}
+
+func unitPointIDs(api *apiClient, channelID string) (map[string]string, error) {
+	var model struct {
+		Points []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"points"`
+	}
+	if err := api.json(http.MethodGet, "/modbus/"+channelID+"/units/1/model", nil, &model); err != nil {
+		return nil, err
+	}
+	ids := map[string]string{}
+	for _, point := range model.Points {
+		ids[point.Name] = point.ID
+	}
+	return ids, nil
+}
+
+// saveProjectScreen writes the same nine-block default layout the screen
+// configurator creates for a Site/Area, so this seed never replaces a complete
+// default with a partial one. The layer-specific middle block is "flow" for a
+// Site and "children" for an Area, matching defaultScreen.
+func saveProjectScreen(api *apiClient, layerID, title, middleBlock string, metrics []map[string]any, recentIDs []string, trendID string) error {
+	middleBinding := map[string]any{}
+	if middleBlock == "flow" {
+		middleBinding["detail"] = true
+	}
+	return api.json(http.MethodPut, "/ems/screen/"+layerID, map[string]any{
+		"layer": layerID, "version": 0, "title": title, "columns": 2, "point_ids": []string{},
+		"slots": map[string]any{
+			"top":  []string{"status", "kpi"},
+			"main": []string{middleBlock, "devices", "recent"},
+			"side": []string{"alarm", "today", "trend", "summary"},
+		},
+		"blocks": []any{
+			map[string]any{"type": "status", "binding": map[string]any{}, "span": 2},
+			map[string]any{"type": "kpi", "binding": map[string]any{"metrics": metrics}, "span": 2},
+			map[string]any{"type": middleBlock, "binding": middleBinding, "span": 2},
+			map[string]any{"type": "devices", "binding": map[string]any{"columns": []string{"type", "state", "value", "communication", "updated"}}, "span": 2},
+			map[string]any{"type": "recent", "binding": map[string]any{"point_ids": recentIDs, "columns": []string{"value", "quality", "time"}, "rows": 5}, "span": 2},
+			map[string]any{"type": "alarm", "binding": map[string]any{}, "span": 2},
+			map[string]any{"type": "today", "binding": map[string]any{}, "span": 2},
+			map[string]any{"type": "trend", "binding": map[string]any{"point_id": trendID}, "span": 2},
+			map[string]any{"type": "summary", "binding": map[string]any{}, "span": 2},
+		},
+	}, nil)
+}
+
+func seedProjectRule(api *apiClient, siteID, levelID, pump1CommandID string) (string, error) {
+	document := map[string]any{
+		"scope": "descendants",
+		"table": map[string]any{"rows": []any{
+			map[string]any{
+				"row_id": "low-level-start-pump1",
+				"match":  "all",
+				"conditions": []any{
+					map[string]any{"point_id": "level", "operator": "lt", "value": 20.0, "kind": "number"},
+				},
+				"actions": []any{
+					map[string]any{"action_id": "start_pump_1", "value": 1.0, "delay_ms": 0},
+				},
+			},
+		}},
+		"bindings": map[string]any{
+			"points": map[string]any{
+				"level": map[string]any{"node_id": levelID, "point_type": "value"},
+			},
+			"actions": map[string]any{
+				"start_pump_1": map[string]any{"node_id": pump1CommandID, "point_type": "valueSet", "command_id": "start-1"},
+			},
+		},
+	}
+	var created struct {
+		ID       string `json:"id"`
+		Revision string `json:"revision"`
+	}
+	if err := api.json(http.MethodPost, "/rules", map[string]any{
+		"parent": siteID, "description": projectRuleName, "document": document,
+	}, &created); err != nil {
+		return "", err
+	}
+	if created.ID == "" || created.Revision == "" {
+		return "", errors.New("create rule returned no id/revision")
+	}
+	document["revision"] = created.Revision
+	if err := api.json(http.MethodPost, "/rules/"+created.ID+"/publish", document, nil); err != nil {
+		return "", err
+	}
+	if err := api.json(http.MethodPost, "/rules/"+created.ID+"/enable", map[string]any{"enabled": true}, nil); err != nil {
+		return "", err
+	}
+	return created.ID, nil
+}
+
+func seedProjectMachine(api *apiClient, siteID, pump1DeviceID string) (string, error) {
+	definition := map[string]any{
+		"initial_state": "停止",
+		"scope":         "subtree",
+		"states":        []string{"停止", "运行"},
+		"transitions": []any{
+			map[string]any{
+				"transition_id": "start", "from": "停止", "event": "启动", "to": "运行", "match": "all",
+				"conditions": []any{},
+				"actions":    []any{map[string]any{"action_id": "pump_start", "value": 1.0}},
+			},
+		},
+		"bindings": map[string]any{"points": map[string]any{}, "actions": map[string]any{}},
+		"command_bindings": map[string]any{
+			"pump_start": map[string]any{"device_id": pump1DeviceID, "command_id": "start-1"},
+		},
+	}
+	var created struct {
+		ID       string `json:"id"`
+		Revision uint64 `json:"revision"`
+	}
+	if err := api.json(http.MethodPost, "/state-machines", map[string]any{
+		"parent": siteID, "name": projectMachine, "definition": definition,
+	}, &created); err != nil {
+		return "", err
+	}
+	if created.ID == "" || created.Revision == 0 {
+		return "", errors.New("create state machine returned no id/revision")
+	}
+	if err := api.json(http.MethodPost, "/state-machines/"+created.ID+"/publish", map[string]any{
+		"revision": created.Revision,
+	}, nil); err != nil {
+		return "", err
+	}
+	return created.ID, nil
+}
+
+func waitForProjectValues(api *apiClient, pointIDs []string) error {
+	wanted := make(map[string]bool, len(pointIDs))
+	for _, id := range pointIDs {
+		wanted[id] = true
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		var state struct {
+			Values []struct {
+				PointID string `json:"point_id"`
+				Quality string `json:"quality"`
+				Value   struct {
+					Number *float64 `json:"number"`
+					Bool   *bool    `json:"bool"`
+				} `json:"value"`
+			} `json:"values"`
+		}
+		if err := api.json(http.MethodGet, "/ems/state", nil, &state); err == nil {
+			good := 0
+			for _, value := range state.Values {
+				if wanted[value.PointID] && value.Quality == "good" && (value.Value.Number != nil || value.Value.Bool != nil) {
+					good++
+				}
+			}
+			if good == len(wanted) {
+				return nil
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return errors.New("the teaching project channels produced no fresh values; check the simulated station")
+}
+
+func publishProjectVersion(api *apiClient, siteID string) (string, error) {
+	var gates struct {
+		Status      string `json:"status"`
+		Fingerprint string `json:"fingerprint"`
+		Gates       []struct {
+			Key    string `json:"key"`
+			Status string `json:"status"`
+			Detail string `json:"detail"`
+		} `json:"gates"`
+	}
+	if err := api.json(http.MethodGet, "/delivery/gates?site="+siteID, nil, &gates); err != nil {
+		return "", err
+	}
+	if gates.Status == "fail" {
+		blocked := make([]string, 0, len(gates.Gates))
+		for _, gate := range gates.Gates {
+			if gate.Status == "fail" {
+				blocked = append(blocked, gate.Key+"："+gate.Detail)
+			}
+		}
+		return "", fmt.Errorf("preflight blocked publication: %s", strings.Join(blocked, "；"))
+	}
+	if gates.Fingerprint == "" {
+		return "", errors.New("delivery gates returned no fingerprint")
+	}
+	var version struct {
+		ID string `json:"id"`
+	}
+	if err := api.json(http.MethodPost, "/projects/publish", map[string]any{
+		"site": siteID, "note": projectVersionNote, "confirm": true, "expected_fingerprint": gates.Fingerprint,
+	}, &version); err != nil {
+		return "", err
+	}
+	return version.ID, nil
+}
+
+func printProjectSummary(project projectResult, port string) {
+	log.Printf("teaching project ready (three devices across the simulated station, NOT real hardware)")
+	log.Printf("  open http://127.0.0.1:%s/ and sign in as admin", port)
+	if project.Existing {
+		log.Printf("  project already exists in this data directory; nothing was created again")
+		log.Printf("  site: %s", project.Site)
+	} else {
+		log.Printf("  site=%s area=%s unit=%s", project.Site, project.Area, project.Unit)
+		log.Printf("  devices: %s=%s %s=%s %s=%s",
+			projectPump1, project.Devices[projectPump1], projectPump2, project.Devices[projectPump2],
+			projectTank, project.Devices[projectTank])
+		log.Printf("  live channels: %s", strings.Join(project.Channels, ", "))
+		log.Printf("  site screen: GET http://127.0.0.1:%s/api/ems/screen/%s", port, project.Site)
+		log.Printf("  rule=%s state-machine=%s published-version=%s", project.RuleID, project.MachineID, project.VersionID)
+	}
+	log.Printf("  fault injection: curl -X POST http://127.0.0.1:15021/pump/1/fault -d '{\"active\":true}'")
+	log.Printf("  local mode:      curl -X POST http://127.0.0.1:15021/pump/1/local -d '{\"active\":true}'")
+	log.Printf("  simulator state: curl http://127.0.0.1:15021/state")
 }
 
 // waitForValues waits until the runtime has polled the station once.

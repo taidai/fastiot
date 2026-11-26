@@ -23,7 +23,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { request } from '../../api/client'
-import { PREVIEW_MODE } from '../../api/source'
 import { projectContext } from '../../stores/projects'
 import { executionStatus, actionStatus } from './executions'
 import type { ExecutionPage } from './executions'
@@ -39,7 +38,7 @@ async function load(reset = false) {
  const run = ++serial
  if (reset) offset.value = 0
  page.value = null; error.value = ''; busy.value = false
- if (PREVIEW_MODE || !props.layerId) return
+ if (!props.layerId) return
  busy.value = true
  try {
   const query = new URLSearchParams({ layer: props.layerId, date: date.value, timezone: zone, source: source.value, offset: String(offset.value), limit: String(limit) })

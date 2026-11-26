@@ -162,6 +162,32 @@ export function requiredProfilePoints(profile: Pick<Profile, "point_specs"> | nu
   return new Set((profile?.point_specs || []).filter(point => point.required ?? !point.note?.split(/\s+/).includes("OPTIONAL")).map(point => point.name))
 }
 
+export function profilePointCounts(profile: Pick<Profile, "point_specs"> | null) {
+  const total = profile?.point_specs?.length || 0
+  const required = requiredProfilePoints(profile).size
+  return { total, required, optional: Math.max(0, total - required) }
+}
+
+export type DeviceAccessState = "unbound" | "pending" | "access"
+
+// ADR 0011: a bound device is not yet connected. /device-ledger exposes the
+// persisted binding and the manual verified flag; it does not expose the
+// per-required-point L2 result, so "access" means bound plus verified-marked.
+export function deviceAccessState(device: { bound?: boolean; profile_id?: string; verified?: boolean }): DeviceAccessState {
+  const bound = device.bound ?? !!device.profile_id
+  if (!bound) return "unbound"
+  return device.verified ? "access" : "pending"
+}
+
+export function deviceAccessLabel(state: DeviceAccessState) {
+  if (state === "access") return "已接入"
+  return state === "pending" ? "已绑定待验证" : "未绑定"
+}
+
+export function deviceAccessChipClass(state: DeviceAccessState) {
+  return state === "access" ? "ok" : state === "unbound" ? "warn" : ""
+}
+
 export type BatchBindingRow = {
   line: number
   device: string
