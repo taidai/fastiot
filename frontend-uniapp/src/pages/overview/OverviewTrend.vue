@@ -1,6 +1,6 @@
 <template>
   <view class="overview-trend daily-trend">
-    <view class="bcap">24 小时{{ label }}<text v-if="unit">（{{ unit }}）</text></view>
+    <view class="bcap">{{ captionText }}</view>
     <view v-if="trend.hasData" class="hour-bars" role="group" aria-label="最近 24 个小时桶；空桶不补值">
       <button v-for="(bucket, index) in trend.buckets" :key="bucket.time.toISOString()" class="hour-bar" :class="{ 'has-data': bucket.record }"
         :aria-label="bucketText(bucket)" :title="bucketText(bucket)" @mouseenter="selected = index" @mouseleave="selected = -1"
@@ -20,10 +20,11 @@ import type { HistoryRecord } from "../../types/api"
 import { buildHourlyTrend, qualityLabel } from "./overview"
 import type { HourlyTrendBucket } from "./overview"
 
-const props = defineProps<{ records: HistoryRecord[]; start: Date; end: Date; unit?: string; label: string }>()
+const props = defineProps<{ records: HistoryRecord[]; start: Date; end: Date; unit?: string; label: string; caption?: string }>()
 const emit = defineEmits<{ (event: "select"): void }>()
 const selected = ref(-1)
 const trend = computed(() => buildHourlyTrend(props.records, props.start, props.end))
+const captionText = computed(() => props.caption || `24 小时${props.label}${props.unit ? `（${props.unit}）` : ""}`)
 function bucketText(bucket: HourlyTrendBucket) {
   const time = bucket.time.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })
   if (!bucket.record || bucket.value === undefined) return `${time} · 无数据`

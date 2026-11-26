@@ -8,26 +8,30 @@
     <view class="layout">
       <LedgerTree :selected="selectedKey" :devices="ledger" :alarms="session.alarms" @select="selectLayer" />
       <main class="stage">
-        <view class="hero glass">
-          <view class="crumb">{{ pathText }}</view>
-          <view class="headline"><h1>{{ layerName }}</h1><text class="online">{{ onlineText }}</text></view>
-        </view>
-        <ScreenRenderer v-if="!screenError" :document="screenDocument" :snapshot="session.snapshot" :values="session.values" :quality="session.quality" :alarms="session.alarms" :ledger="ledger" :device-id="selectedDeviceId" :layer-id="session.layer" :last-sync="session.lastSync" :runtime-error="session.runtimeError" @history="openHistory" @select="selectLayer">
-          <template #alarm>
-
-          <view class="card-title">本层活动告警 <text class="alarm-num">{{ layerActiveAlarms.length }}</text></view>
+        <ScreenRenderer :document="overviewDocument" :snapshot="session.snapshot" :values="session.values" :quality="session.quality" :alarms="session.alarms" :ledger="ledger" :device-id="selectedDeviceId" :layer-id="session.layer" :last-sync="session.lastSync" :runtime-error="session.runtimeError" :hero="hero" :show-side="false" @history="openHistory" @select="selectLayer" />
+        <section class="daily glass" aria-label="今日统计">
+          <OverviewDailyStats :layer-id="session.layer" :bar="bar" @select="openHistory(barOption?.id || '')" />
+        </section>
+        <view class="colophon"><text>FastIOT · {{ projectName }} · {{ layerName }}</text><text>数据来自真实接口；未配置项显示 —</text></view>
+      </main>
+      <aside class="side glass">
+        <section class="rail-block">
+          <view class="card-title rail-title">待处理 <b class="alarm-num">{{ layerActiveAlarms.length }}</b></view>
           <view v-for="alarm in layerActiveAlarms.slice(0, 3)" :key="alarm.id" class="alarm-mini">
             <view class="title">{{ alarm.title }}</view><view class="meta">{{ alarm.severity }} · {{ shortTime(alarm.updated_at) }} · {{ alarm.state === 'acknowledged' ? '已接手，仍活动' : '待接手' }}</view>
             <button v-if="alarm.state === 'active' && alarm.permissions?.ack !== false" class="ack" :disabled="!!alarmBusy" @click="runAlarm('ack', alarm.id)">接手</button>
           </view>
           <view v-if="!layerActiveAlarms.length" class="side-empty">—</view>
           <view v-if="alarmError" class="error">{{ alarmError }}</view>
-
-          </template>
-          <template #after-side><HandoverPanel :layer-id="session.layer" /></template>
-        </ScreenRenderer>
-        <view class="colophon"><text>FastIOT · {{ projectName }} · {{ layerName }}</text><text>数据来自真实接口；未配置项显示 —</text></view>
-      </main>
+        </section>
+        <section class="rail-block">
+          <view class="card-title rail-title">今日执行</view>
+          <TodayExecutionSummary :layer-id="session.layer" />
+        </section>
+        <section class="rail-block rail-handover">
+          <HandoverPanel :layer-id="session.layer" />
+        </section>
+      </aside>
     </view>
 
     <AlarmCenter v-if="alarmOpen" :alarms="session.alarms" :busy-id="alarmBusy" :error="alarmError || session.runtimeError" @close="alarmOpen = false"
@@ -55,18 +59,21 @@ import { kindLabel } from "../../components/design/design"
 import { memberRolesOf } from "../../components/design/members"
 import AlarmCenter from "../../components/AlarmCenter.vue"
 import HandoverPanel from "./HandoverPanel.vue"
+import TodayExecutionSummary from "./TodayExecutionSummary.vue"
+import OverviewDailyStats from "./OverviewDailyStats.vue"
 import HistoryDrawer from "./HistoryDrawer.vue"
 import type { HistoryPointOption } from "../history/history"
 import { ApiError, request } from "../../api/client"
 import {
-  acknowledgeAlarm, closeAlarm, currentLayer as currentNode, layerPath,
+  acknowledgeAlarm, closeAlarm, currentLayer as currentNode, layerPath, loadHistory,
   nameOf, requireAuth, session, startPolling, stopPolling,
 } from "../../stores/session"
-import type { ScreenConfig } from "../../types/api"
+import type { HistoryRecord, ScreenConfig } from "../../types/api"
 import {
   boundDevicesForLayer, descendantNodeIds, deviceKey, healthLabel,
   shortTime, valueInLayer, alarmInLayer, devicePointIds,
   businessName, unitOf, historyOpenQuery, preferredHistoryPoint,
+  overviewScreenDocument, overviewBarPoint,
 } from "./overview"
 import type { LedgerDevice, OverviewScreen, QualityStats } from "./overview"
 import { isDerivedInput } from "../../components/design/strategy"
@@ -143,6 +150,32 @@ const screenDocument = computed(() => {
   if (saved?.inherited_from) { document.inherited_from = saved.inherited_from; document.version = saved.version || 0 }
   return document
 })
+const overviewDocument = computed(() => overviewScreenDocument(screenDocument.value))
+const barOption = computed(() => overviewBarPoint(screenDocument.value, historyPointOptions.value))
+const barRecords = ref<HistoryRecord[]>([])
+const barStart = ref(new Date())
+const barEnd = ref(new Date())
+const bar = computed(() => barOption.value ? { records: barRecords.value, start: barStart.value, end: barEnd.value, label: barOption.value.label, unit: barOption.value.unit } : null)
+let barSerial = 0
+async function loadBar() {
+  const serial = ++barSerial
+  const point = barOption.value
+  barRecords.value = []
+  if (!point?.id) return
+  // Server hourly buckets are aligned to UTC hour boundaries; align the asked
+  // window the same way so all 24 buckets can match a record.
+  const end = new Date(Math.floor(Date.now() / 3600000) * 3600000)
+  const start = new Date(end.getTime() - 23 * 60 * 60 * 1000)
+  const queryEnd = new Date(end.getTime() + 60 * 60 * 1000 - 1)
+  barStart.value = start; barEnd.value = end
+  try {
+    const result = await loadHistory(point.id, start, queryEnd, '1h')
+    if (serial === barSerial) barRecords.value = result.results[0]?.records || []
+  } catch {
+    if (serial === barSerial) barRecords.value = []
+  }
+}
+watch(() => [session.layer, barOption.value?.id || '', projectContext.generation, session.token], () => { void loadBar() }, { immediate: true, flush: 'sync' })
 const qualityDevices = computed(() => session.quality.devices as QualityStats[])
 const qualityChannels = computed(() => session.quality.channels as QualityStats[])
 const scopedChannels = computed(() => {
@@ -160,6 +193,7 @@ const selectedCommunication = computed(() => {
   return healthLabel(qualityDevices.value.find(item => item.device_id === id)?.health || 'unknown')
 })
 const onlineText = computed(() => session.runtimeError ? '通信状态未知 · 实时查询不可用' : isDevice.value ? `通信${selectedCommunication.value} · ${scopedValues.value.length} 个观测` : `在线 ${onlineCount.value} / ${scopedDevices.value.length}`)
+const hero = computed(() => ({ crumb: pathText.value, title: layerName.value, online: onlineText.value }))
 const syncMeta = computed(() => {
   const observed = scopedValues.value.map(value => value.source_time || '').filter(Boolean).sort().slice(-1)[0]
   return `最近观测 ${shortTime(observed)} · 查询于 ${shortTime(session.lastSync)} · 通道 ${scopedChannels.value.length} · 有效观测 ${goodValueCount.value}/${scopedValues.value.length}`
@@ -232,7 +266,7 @@ function locateDevice(id: string) {
   else selectDevice(id)
 }
 
-function invalidateReads() { layerSerial++; ledgerSerial++ }
+function invalidateReads() { layerSerial++; ledgerSerial++; barSerial++ }
 watch(() => projectContext.generation, () => {
   invalidateReads()
   ledger.value = []; selectedDeviceId.value = ''; screen.value = null
@@ -261,14 +295,13 @@ onBeforeUnmount(() => { stopPolling(); invalidateReads() })
 
 <style scoped>
 .page { min-height:100vh; padding:16px; overflow-x:hidden; }
-.layout { display:grid; grid-template-columns:200px minmax(0,1fr); gap:14px; margin-top:14px; }
+.layout { display:grid; grid-template-columns:200px minmax(0,1fr) 320px; gap:14px; margin-top:14px; }
 .stage { display:flex; flex-direction:column; gap:14px; min-width:0; }
-.hero { padding:16px 20px; }
-.crumb { color:var(--muted); font-size:11px; letter-spacing:.06em; }
-.headline { display:flex; align-items:baseline; justify-content:space-between; gap:16px; margin-top:4px; }
-h1 { margin:0; font-size:34px; line-height:normal; letter-spacing:-.02em; }
-.online { color:var(--muted); font-size:12px; text-align:right; }
-.alarm-num { color:var(--amber); font-size:25px; }
+.daily { padding:12px 18px; }
+.side { display:flex; flex-direction:column; gap:18px; min-width:0; padding:16px 18px; overflow:auto; }
+.rail-block { min-width:0; }
+.rail-title b { color:var(--amber); font-size:25px; }
+.rail-handover :deep(.handover-section) { margin-top:0; padding-top:0; border-top:0; }
 .alarm-mini { position:relative; border-top:1px solid var(--line); padding:10px 0; font-size:12.5px; }
 .alarm-mini .title { padding-right:52px; font-weight:600; }
 .alarm-mini .meta { margin-top:3px; color:var(--muted); font-size:10.5px; }
@@ -276,6 +309,6 @@ h1 { margin:0; font-size:34px; line-height:normal; letter-spacing:-.02em; }
 .side-empty { color:var(--muted); padding:6px 0; }
 .page-error { margin-top:12px; }
 .colophon { display:flex; justify-content:space-between; padding:2px 4px 0; color:var(--muted); font-size:9.5px; }
-@media(max-width:1150px) { .layout { grid-template-columns:170px minmax(0,1fr); } }
-@media(max-width:760px) { .page { padding:10px; } .layout { display:block; margin-top:10px; } h1 { font-size:29px; } .hero { padding:14px; } .colophon { flex-direction:column; gap:3px; } }
+@media(max-width:1150px) { .layout { grid-template-columns:170px minmax(0,1fr); } .side { display:none; } }
+@media(max-width:760px) { .page { padding:10px; } .layout { display:block; margin-top:10px; } .stage { gap:10px; } .side { display:flex; margin-top:10px; } .colophon { flex-direction:column; gap:3px; } }
 </style>

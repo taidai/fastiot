@@ -1,7 +1,18 @@
 <template>
-  <view class="screen-renderer" :data-screen-version="document.version" :data-screen-layer="layerId">
+  <view class="screen-renderer" :class="{ 'with-hero': !!hero }" :data-screen-version="document.version" :data-screen-layer="layerId">
+    <view v-if="hero" class="hero glass">
+      <view class="crumb">{{ hero.crumb }}</view>
+      <view class="headline"><h1>{{ hero.title }}</h1><text class="online">{{ hero.online }}</text></view>
+      <view v-if="heroMetrics.length" class="metrics">
+        <view v-for="(metric, index) in heroMetrics" :key="index" class="metric">
+          <view class="k"><svg viewBox="0 0 24 24" aria-hidden="true"><path :d="metricIcons[index]" /></svg>{{ metric.label }}</view><view class="v">{{ metric.value }}<text v-if="metric.unit">{{ metric.unit }}</text></view>
+          <view class="metric-quality">{{ metric.quality }} · {{ metric.time }}<text v-if="metric.target"> · 目标 {{ metric.target }}</text></view>
+        </view>
+      </view>
+    </view>
+    <view class="screen-body" :class="{ 'without-side': !showSide }">
     <view v-if="document.inherited_from" class="provenance">继承自 {{ nodeName(document.inherited_from) }} · v{{ document.version }}</view>
-    <view v-for="slot in ['top', 'main', 'side']" :key="slot" class="screen-slot" :class="[`slot-${slot}`, { side: slot === 'side' }]" :data-slot="slot" :style="{ '--screen-columns': document.columns }">
+    <view v-for="slot in visibleSlots" :key="slot" class="screen-slot" :class="[`slot-${slot}`, { side: slot === 'side' }]" :data-slot="slot" :style="{ '--screen-columns': document.columns }">
       <view v-for="block in slotBlocks(slot)" :key="block.type" class="screen-block" :data-block="block.type" :style="{ gridColumn: `span ${Math.min(block.span, document.columns)}` }">
         <view v-if="!applicable(block.type)" class="panel glass empty">{{ definition(block.type)?.label }} · 本层不适用，请重新配置</view>
         <view v-else-if="block.type === 'status'" class="status glass"><span>{{ runtimeError || onlineText }}</span><span>观测于 {{ latestObservation }} · 查询于 {{ shortTime(lastSync) }}</span></view>
@@ -35,7 +46,8 @@
         <section v-else-if="block.type === 'oplog'" class="panel glass"><view class="card-title">操作记录</view><view v-if="operationError" class="error">{{ operationError }}</view><view v-for="record in operations" :key="record.request_id" class="run"><span>{{ shortTime(record.updated_at || record.started_at) }} · {{ record.command_id }}</span><span>{{ commandStateText(record.state) }}</span></view><view v-if="!operationError && !operations.length" class="empty">暂无操作记录</view></section>
         <section v-else-if="block.type === 'trend'" class="panel glass screen-card"><h5 class="card-title">趋势 · {{ trendMetric.label }}</h5><OverviewTrend :records="trendRecords" :start="trendStart" :end="trendEnd" :unit="trendMetric.unit" :label="trendMetric.label" @select="history(trendMetric.id)" /><view v-if="trendError" class="error">{{ trendError }}</view><view v-else-if="!trendMetric.id" class="empty">未绑定或不在本层范围 · —</view></section>
       </view>
-      <view v-if="slot === 'side' && $slots['after-side']" class="screen-peripheral" :style="{ gridColumn: `span ${document.columns}` }"><slot name="after-side" /></view>
+      <view v-if="showSide && slot === 'side' && $slots['after-side']" class="screen-peripheral" :style="{ gridColumn: `span ${document.columns}` }"><slot name="after-side" /></view>
+    </view>
     </view>
   </view>
 </template>
@@ -65,7 +77,7 @@ import FlowScene from '../FlowScene.vue'
 import DevicePanel from '../../pages/overview/DevicePanel.vue'
 import OverviewTrend from '../../pages/overview/OverviewTrend.vue'
 
-const props = withDefaults(defineProps<{ document: ScreenDocument; snapshot: Snapshot | null; values: StateValue[]; quality: { devices: unknown[]; channels: unknown[] }; alarms: EmsAlarm[]; ledger: LedgerDevice[]; layerId: string; deviceId?: string; lastSync?: string; runtimeError?: string }>(), { lastSync: '', runtimeError: '' })
+const props = withDefaults(defineProps<{ document: ScreenDocument; snapshot: Snapshot | null; values: StateValue[]; quality: { devices: unknown[]; channels: unknown[] }; alarms: EmsAlarm[]; ledger: LedgerDevice[]; layerId: string; deviceId?: string; lastSync?: string; runtimeError?: string; hero?: { crumb: string; title: string; online: string } | null; showSide?: boolean }>(), { lastSync: '', runtimeError: '', hero: null, showSide: true })
 const emit = defineEmits<{ (event: 'history', id: string): void; (event: 'select', id: string): void }>()
 const nodes = computed(() => props.snapshot?.nodes || [])
 const selected = computed(() => nodes.value.find(node => node.id === props.layerId) || null)
@@ -85,7 +97,7 @@ const onlineText = computed(() => `在线 ${devices.value.filter(device => quali
 const latestObservation = computed(() => shortTime(scopedValues.value.map(value => value.source_time || '').filter(Boolean).sort().at(-1)))
 const definition = screenBlockDefinition
 function applicable(type: string) { const def = definition(type); return !!def && !!selected.value && (!('kinds' in def) || def.kinds.includes(kindLabel(selected.value) as never)) }
-function slotBlocks(slot: string) { return (props.document.slots[slot as keyof ScreenDocument['slots']] || []).map(type => props.document.blocks.find(block => block.type === type)).filter((block): block is ScreenBlock => !!block && !!definition(block.type)) }
+function slotBlocks(slot: string) { return (props.document.slots[slot as keyof ScreenDocument['slots']] || []).map(type => props.document.blocks.find(block => block.type === type)).filter((block): block is ScreenBlock => !!block && !!definition(block.type) && !(props.hero && slot === 'top' && block.type === 'kpi')) }
 function nodeName(id: string) { const node = nodes.value.find(node => node.id === id); return node ? nameOf(node) : '不可见对象' }
 function resolvePoint(id: string) {
  if (!availablePoints.value.has(id)) return { id: '', label: '未绑定或不在本层范围', value: '—', unit: '', quality: '未绑定', time: '—' }
@@ -135,6 +147,8 @@ const metrics = computed(() => ((props.document.blocks.find(block => block.type 
  const actual = metric.point_id ? resolvePoint(metric.point_id) : automaticMetric(metric.metric)
  return { ...actual, label: metric.label || actual.label, target:metric.target || '' }
 }))
+const heroMetrics = computed(() => props.hero && (props.document.slots.top || []).includes('kpi') ? metrics.value : [])
+const visibleSlots = computed(() => ['top', 'main', 'side'].filter(slot => slotBlocks(slot).length))
 const pointMetrics = computed(() => devices.value.flatMap(device => devicePointIds(nodes.value, [device]).slice(0, 1)).map(resolvePoint))
 const topology = computed(() => [...devices.value.map(device => { const id = devicePointIds(nodes.value, [device])[0]; const metric = id ? resolvePoint(id) : null; return { id:deviceKey(device), label:device.name, relation:`${layerName.value} → 设备绑定`, detail:metric ? `${metric.label} ${metric.value} ${metric.unit} · ${metric.quality}` : '无数据' } }), ...members.value.map(member => ({ id:`member:${member.role}`, label:member.node_id ? nodeName(member.node_id) : '未绑定成员', relation:member.role, detail:'成员引用，不代表能量流向' }))])
 const deviceColumnLabels: Record<string, string> = { type:'类型', state:'运行 / 维护', value:'主要值', communication:'通信', updated:'更新' }
@@ -176,15 +190,27 @@ watch(() => [props.layerId, trendMetric.value.id] as const, async ([, id]) => {
 </script>
 
 <style scoped>
-.screen-renderer { display:grid; grid-template-columns:minmax(0,1fr) 280px; gap:14px; min-width:0; }
+.screen-renderer { display:flex; flex-direction:column; gap:14px; min-width:0; }
+.screen-body { display:grid; grid-template-columns:minmax(0,1fr) 280px; gap:14px; min-width:0; }
+.screen-body.without-side { grid-template-columns:minmax(0,1fr); }
 .provenance, .slot-top { grid-column:1 / -1; }
+.hero { padding:16px 20px 4px; }
+.hero .crumb { color:var(--muted); font-size:11px; letter-spacing:.06em; }
+.hero .headline { display:flex; align-items:baseline; justify-content:space-between; gap:16px; margin:4px 0 0; }
+.hero h1 { margin:0; font-size:34px; font-weight:700; line-height:normal; letter-spacing:-.02em; }
+.hero .online { color:var(--muted); font-size:12px; text-align:right; white-space:nowrap; }
 .provenance { font-size:12px; color:var(--muted); }
 .screen-slot { display:grid; grid-template-columns:repeat(var(--screen-columns),minmax(0,1fr)); gap:14px; align-content:start; min-width:0; }
 .screen-block[data-block="summary"] :deep(.daily-stats) { grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px 0; }
 .screen-block { min-width:0; }
 .status { display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; padding:8px 14px; font-size:11px; color:var(--muted); }
 .metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(95px,1fr)); gap:10px; }
+.with-hero .metrics { grid-template-columns:repeat(6,minmax(0,1fr)); gap:0; margin-top:14px; padding:12px 0 10px; border-top:1px solid var(--line); }
 .metric { min-width:0; border:1px solid rgba(255,255,255,.9); border-radius:14px; padding:10px 12px 7px; background:rgba(255,255,255,.58); box-shadow:0 8px 24px rgba(54,92,120,.07),inset 0 0 12px rgba(255,255,255,.3); color:var(--ink); }
+.with-hero .metric { border:0; border-left:1px solid var(--line); border-radius:0; padding:4px 12px; background:transparent; box-shadow:none; }
+.with-hero .metric:first-child { border-left:0; padding-left:0; }
+.with-hero .metric .k svg, .with-hero .metric-quality { display:none; }
+.with-hero .metric .v { margin-top:4px; font-size:25px; letter-spacing:-.01em; }
 .k, .metric-quality { color:var(--muted); font-size:10.5px; overflow-wrap:anywhere; }
 .k { display:flex; align-items:center; gap:7px; }
 .k svg { flex:none; width:16px; height:16px; fill:none; stroke:#3b8aa8; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
@@ -210,6 +236,6 @@ th, td { padding:7px; text-align:left; }
 .tabs { display:flex; gap:5px; margin-bottom:10px; }
 .tabs button { min-height:0; padding:4px 8px; font-size:11px; }
 .tabs .active { color:var(--accent); }
-@media(max-width:1150px) { .screen-renderer { grid-template-columns:minmax(0,1fr); } .slot-top { grid-column:auto; } }
-@media(max-width:760px) { .screen-slot { grid-template-columns:1fr; } .screen-block, .screen-peripheral { grid-column:1 !important; } }
+@media(max-width:1150px) { .screen-body { grid-template-columns:minmax(0,1fr); } .slot-top { grid-column:auto; } }
+@media(max-width:760px) { .screen-slot { grid-template-columns:1fr; } .screen-block, .screen-peripheral { grid-column:1 !important; } .hero { padding:14px; } .hero h1 { font-size:29px; } .with-hero .metrics { grid-template-columns:repeat(3,minmax(0,1fr)); padding-top:10px; } .with-hero .metric { padding:2px 8px; } .with-hero .metric:nth-child(4) { border-left:0; padding-left:0; } .with-hero .metric .v { font-size:20px; } }
 </style>

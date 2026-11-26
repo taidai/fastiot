@@ -1,10 +1,11 @@
 <template>
-  <view class="daily-stats" :aria-busy="loading" aria-label="今日统计">
+  <view class="daily-stats" :class="{ 'with-trend': !!bar }" :aria-busy="loading" aria-label="今日统计">
     <view v-for="item in items" :key="item.key" class="dfig" :data-daily-stat="item.key" tabindex="0" :title="detail(item.key)" :aria-label="`${item.label} ${dailyMetricText(stats?.[item.key])} ${item.unit}；${detail(item.key)}`">
       <text>{{ item.label }}</text>
       <b>{{ dailyMetricText(stats?.[item.key]) }}<small>{{ item.unit }}</small></b>
       <view class="stat-note" :role="error ? 'alert' : undefined">{{ error || (loading && !stats ? '读取中…' : dailyMetricDetail(stats?.[item.key])) }}</view>
     </view>
+    <OverviewTrend v-if="bar" :records="bar.records" :start="bar.start" :end="bar.end" :unit="bar.unit" :label="bar.label" :caption="`24 小时${bar.label}`" @select="emit('select')" />
   </view>
 </template>
 
@@ -15,7 +16,11 @@ import { loadDailyStats } from './daily-stats-api'
 import { projectContext } from '../../stores/projects'
 import { dailyMetricDetail, dailyMetricText } from './daily-stats'
 import type { DailyStats } from './daily-stats'
-const props = defineProps<{ layerId: string; result?: DailyStats | null }>()
+import type { HistoryRecord } from '../../types/api'
+import OverviewTrend from './OverviewTrend.vue'
+type Bar = { records: HistoryRecord[]; start: Date; end: Date; label: string; unit?: string }
+const props = defineProps<{ layerId: string; result?: DailyStats | null; bar?: Bar | null }>()
+const emit = defineEmits<{ (event: 'select'): void }>()
 const fetched = ref<DailyStats | null>(null)
 const stats = computed(() => {
   const result = props.result === undefined ? fetched.value : props.result
@@ -27,7 +32,7 @@ const items = [
   { key: 'energy', label: '今日电量', unit: 'kWh' },
   { key: 'runtime', label: '运行时长', unit: 'h' },
   { key: 'communication', label: '通信成功率', unit: '%' },
-  { key: 'freshness', label: '数据新鲜度', unit: 's' },
+  { key: 'freshness', label: '数据新鲜度', unit: '秒' },
 ] as const
 type MetricKey = typeof items[number]['key']
 let serial = 0
@@ -70,11 +75,12 @@ onBeforeUnmount(() => { serial++; clearInterval(timer) })
 
 <style scoped>
 .daily-stats { grid-column: span 4; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); min-width: 0; }
+.daily-stats.with-trend { grid-template-columns: repeat(4, minmax(0, 1fr)) 2fr; align-items: end; }
 .dfig { min-width: 0; padding: 2px 14px; border-left: 1px solid var(--line); }
 .dfig:first-child { border-left: 0; padding-left: 0; }
 .dfig > text { display: block; color: var(--muted); font-size: 10px; letter-spacing: .06em; }
 .dfig b { font-size: 21px; font-weight: 600; }
 .dfig b small { margin-left: 2px; color: var(--muted); font-size: 10px; font-weight: 400; }
 .stat-note { color: var(--muted); font-size: 9px; overflow-wrap: anywhere; }
-@media (max-width: 760px) { .daily-stats { grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 0; } }
+@media (max-width: 760px) { .daily-stats, .daily-stats.with-trend { grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 0; } .daily-stats.with-trend :deep(.overview-trend) { grid-column: 1 / -1; margin-top: 8px; padding-left: 0; border-left: 0; } }
 </style>
