@@ -10,6 +10,7 @@ import (
 	"fastiot/internal/ems/alarm"
 	"fastiot/internal/notification"
 	"fastiot/internal/web"
+	"github.com/simpleiot/simpleiot/client"
 	"github.com/simpleiot/simpleiot/data"
 )
 
@@ -21,7 +22,6 @@ func TestTicket23BrowserBackend(t *testing.T) {
 	}
 	f, bus, sim := operationFixture(t)
 	f.handler.SetDataDir(f.dir)
-	root := snapshotRoot(t, f.base, f.token)
 	site := ""
 	for _, node := range snapshotNodes(t, f.base, f.token) {
 		if node.Type == NodeTypeSite && node.Desc() == "Operation site" {
@@ -50,8 +50,10 @@ func TestTicket23BrowserBackend(t *testing.T) {
 	goodVersion := publish("ticket23 supported baseline")
 
 	group := createNodeAPI(t, f.base, f.token, "group", site, "Unsupported target resource", 0)
+	// 计算输入的合法来源是 Modbus 数值点位（带单位）；普通变量不能作为计算输入。
+	sourcePoint := f.createPoint(t, bus, ModbusIOInput{Description: "Rollback calculation input", ServerID: 1, Address: 300, IOType: data.PointValueModbusHoldingRegister, DataFormat: "uint16", ReadOnly: true, Scale: 1, Units: "kW"})
 	var calculated calcResponse
-	definition := calculation.Definition{Operator: "add", Inputs: []string{variable, variable}, Kind: "number", Unit: "kW"}
+	definition := calculation.Definition{Operator: "add", Inputs: []string{sourcePoint, sourcePoint}, Kind: "number", Unit: "kW"}
 	status, body := call(t, http.MethodPost, f.base+"/calculations", f.token, map[string]any{
 		"parent": group, "name": "Rollback unsupported calculation", "definition": definition, "operation_id": "ticket23-calc-create",
 	}, &calculated)
@@ -65,9 +67,13 @@ func TestTicket23BrowserBackend(t *testing.T) {
 		t.Fatalf("calculation apply: %d %s", status, body)
 	}
 	badVersion := publish("ticket23 unsupported calculation")
-	status, body = call(t, http.MethodDelete, f.base+"/nodes/"+calculated.ID, f.token, nil, nil)
+	// 计算点从本工程移走（仍在授权范围内），当前工程因此不再包含该资源；
+	// 坏版本仍引用它，回退必须给出可追溯阻断，而版本列表仍可正常读取。
+	elsewhere := createNodeAPI(t, f.base, f.token, NodeTypeSite, snapshotRoot(t, f.base, f.token), "Unrelated site", 0)
+	elsewhereGroup := createNodeAPI(t, f.base, f.token, "group", elsewhere, "Elsewhere resources", 0)
+	status, body = call(t, http.MethodPost, f.base+"/nodes/"+calculated.ID+"/move", f.token, map[string]any{"old_parent": group, "new_parent": elsewhereGroup}, nil)
 	if status != http.StatusOK {
-		t.Fatalf("remove live calculation: %d %s", status, body)
+		t.Fatalf("move live calculation out of the project: %d %s", status, body)
 	}
 	status, body = call(t, http.MethodPatch, f.base+"/nodes/"+site, f.token, map[string]any{"description": "Current before rollback"}, nil)
 	if status != http.StatusOK {
@@ -112,26 +118,25 @@ func TestTicket23BrowserBackend(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	username := "rollback@fixture.local"
-	password := data.NewID()
-	var account struct {
-		ID string `json:"id"`
+	// 站内通知用一个真实存在的接收账号（本实例管理员），浏览器以同一身份读取。
+	users, err := client.GetNodesType[client.User](f.handler.nc, "all", "all")
+	if err != nil || len(users) == 0 {
+		t.Fatalf("fixture admin user: %v", err)
 	}
-	status, body = call(t, http.MethodPost, f.base+"/users", f.token, map[string]any{
-		"parent": root, "email": username, "password": password, "role": "admin",
-	}, &account)
-	if status != http.StatusOK {
-		t.Fatalf("browser account: %d %s", status, body)
+	recipientID := users[0].ID
+	// 通知必须挂到真实存在的决策表节点，且该节点父级等于通知范围。
+	ruleID := data.NewID()
+	if err := client.SendNode(f.handler.nc, data.NodeEdge{ID: ruleID, Parent: site, Type: "decisionTable"}, "ticket23"); err != nil {
+		t.Fatal(err)
 	}
-	browserToken := loginAPI(t, f.base, username, password)
 	created, err := f.handler.CreateRuleNotification(notification.Request{
-		SourceRevision: "1", RuleID: "ticket23-rule", ExecutionID: "ticket23-execution", ActionID: "ticket23-action",
-		ScopeNodeID: site, RecipientIDs: []string{account.ID}, Title: "Ticket23 preserved notification", Body: "in-app only",
+		SourceRevision: "1", RuleID: ruleID, ExecutionID: "ticket23-execution", ActionID: "ticket23-action",
+		ScopeNodeID: site, RecipientIDs: []string{recipientID}, Title: "Ticket23 preserved notification", Body: "in-app only",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	status, body = call(t, http.MethodPost, f.base+"/notifications/"+created.ID+"/read", browserToken, map[string]any{}, nil)
+	status, body = call(t, http.MethodPost, f.base+"/notifications/"+created.ID+"/read", f.token, map[string]any{}, nil)
 	if status != http.StatusOK {
 		t.Fatalf("notification read state: %d %s", status, body)
 	}
@@ -139,9 +144,32 @@ func TestTicket23BrowserBackend(t *testing.T) {
 	done := make(chan struct{}, 1)
 	mux := http.NewServeMux()
 	mux.Handle("/api/", http.StripPrefix("/api", f.handler))
+	mux.HandleFunc("GET /__diag", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := f.handler.resolveSession(f.token)
+		if !ok {
+			http.Error(w, "no session", 500)
+			return
+		}
+		identity, active := f.handler.identityForUser(userID)
+		blocked := map[string]any{"active": active, "anchors": identity.Anchors, "admin": identity.Policy.Admin, "actions": identity.Actions}
+		var ids []string
+		for _, versionID := range []string{goodVersion, badVersion} {
+			version, err := f.handler.loadVersion(site, versionID)
+			if err != nil {
+				continue
+			}
+			for _, node := range version.Nodes {
+				if !f.handler.allows(identity, node.ID) {
+					ids = append(ids, versionID+":"+node.ID+"("+node.Type+")")
+				}
+			}
+		}
+		blocked["blocked"] = ids
+		writeJSON(w, blocked)
+	})
 	mux.HandleFunc("GET /__fixture", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{
-			"fixture": "ticket23-private", "username": username, "password": password,
+			"fixture": "ticket23-private", "token": f.token,
 			"site": site, "variable": variable, "bus": bus, "target": target,
 			"good_version": goodVersion, "bad_version": badVersion, "calculation": calculated.ID,
 			"command_request": commandRequestID, "notification": created.ID, "alarm": occurrence.ID,
@@ -156,7 +184,7 @@ func TestTicket23BrowserBackend(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.Handle("/", http.FileServer(http.FS(web.FS())))
-	server := &http.Server{Addr: "127.0.0.1:18230", Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	server := &http.Server{Addr: ":18230", Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			t.Error(err)
