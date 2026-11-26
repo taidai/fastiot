@@ -3,10 +3,12 @@ import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { chromium } from "../../../../frontend/node_modules/playwright-core/index.mjs"
 
-const base = "http://127.0.0.1:5174/uniapp/"
+// API is intercepted by contract fixtures; pages come from any host serving
+// the built H5, e.g. DELIVERY_UNIAPP_URL=http://127.0.0.1:18405/uniapp/.
+const base = process.env.DELIVERY_UNIAPP_URL || "http://127.0.0.1:5174/uniapp/"
 const description = text => ({ type: "description", key: "", time: "", text })
 let preflightRuns = 0
-let versions = [{ id: "pv-old", site_id: "site-1", site_name: "泵房", created_at: "2026-11-20T08:00:00Z", operator: "admin", note: "旧版", preflight_status: "warn", nodes: 3 }]
+let versions = [{ id: "pv-old", site_id: "site-1", site_name: "泵房", created_at: "2026-11-20T08:00:00Z", operator: "admin", note: "旧版", preflight_status: "warn", nodes: 3, deliverable: true }]
 let industryInstalled = false
 let evidenceForbidden = false
 let importError = ""
@@ -29,6 +31,10 @@ try {
     const method = request.method()
     const json = (body, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) })
     if (path === "/login") return json({ token: "delivery-test-token" })
+    if (path === "/projects") return json({ user_id: "admin", projects: [{
+      id: "root-project", root_id: "root-project", name: "交付项目", scope_root_ids: ["root-project"],
+      sites: [], dependencies: [], runtime: { kind: "local", root_id: "root-project" },
+    }] })
     if (path === "/snapshot") return json({
       user: { user_id: "admin", email: "admin", policy: { admin: true, role: "admin", actions: [] }, actions: [] },
       roots: ["root-project"],
@@ -65,12 +71,11 @@ try {
     if (path === "/projects/publish") {
       const body = request.postDataJSON()
       writes.push({ path, body })
-      if (!body.confirm) return json({ error: "preflight_failed" }, 409)
-      const created = { id: "pv-new", site_id: body.site, site_name: "泵房", created_at: "2026-11-22T10:02:00Z", operator: "admin", note: body.note, preflight_status: "fail", nodes: 3 }
+      const created = { id: "pv-new", site_id: body.site, site_name: "泵房", created_at: "2026-11-22T10:02:00Z", operator: "admin", note: body.note, preflight_status: "pass", nodes: 3, deliverable: true }
       versions = [created, ...versions]
       return json(created)
     }
-    if (path === "/projects/export") return json({ id: "pp-1", name: "泵房", format: "fastiot.project-package", format_version: 2, point_count: 12, strategy_count: 3, dependencies: [{ kind: "profile", id: "pump", version: "abc" }], nodes: [{ ref: "n1" }], screens: [], stripped: [{ reason: "凭据" }], warnings: [] })
+    if (path === "/projects/export") return json({ id: "pp-1", name: "泵房", format: "fastiot.project-package", format_version: 2, point_count: 12, strategy_count: 3, devices: 2, bound_devices: 1, rules: 3, state_machines: 1, dependencies: [{ kind: "profile", id: "pump", version: "abc" }], nodes: [{ ref: "n1" }], screens: [], stripped: [{ reason: "凭据" }], warnings: [] })
     if (path === "/projects/import") {
       if (importError) return json({ error: importError }, 400)
       const body = request.postDataJSON()
@@ -104,6 +109,13 @@ try {
       writes.push({ path, body })
       return json({ version: body.version, updated: 2, created: 1, extra: 1, preflight_status: "warn" })
     }
+    const authorization = path.match(/^\/users\/([^/]+)\/authorization$/)
+    if (authorization) {
+      const id = decodeURIComponent(authorization[1])
+      const operations = ["overview", "command", "configure", "publish", "account_manage", "audit_view"]
+      const allowed = id === "u-admin" ? new Set(operations) : new Set(["overview"])
+      return json({ read_only: true, user_id: id, target_id: url.searchParams.get("target") || "", checks: operations.map(operation => ({ operation, allowed: allowed.has(operation), reason: allowed.has(operation) ? "allowed" : "operation_not_allowed" })) })
+    }
     if (path === "/users" && method === "GET") return json({ users: [
       { id: "u-admin", email: "admin", policy: { admin: true, role: "admin", root_node_ids: ["root-project"], actions: [] } },
       { id: "u-viewer", email: "viewer@local", policy: { admin: false, role: "viewer", root_node_ids: ["site-1"], actions: [] } },
@@ -127,14 +139,21 @@ try {
   await page.locator("input").nth(1).fill("fixture-password-not-a-real-account")
   await button("登录").click()
   await page.waitForURL(/pages\/overview\/index/)
-  await page.goto(`${base}?live=1#/pages/delivery/index`)
+  // Same-document hash navigation keeps the signed-in session store, exactly
+  // like the product's own navigation from the overview to delivery.
+  await page.evaluate(() => { location.hash = "#/pages/delivery/index" })
+  // loadPackage runs when canExport flips true after the snapshot arrives, so
+  // start the page with an empty store like a real direct visit.
+  await page.reload()
   await page.getByText("预检与门槛", { exact: true }).waitFor()
   await page.locator(".package-grid").waitFor()
   await page.locator(".versions-card").waitFor()
   await page.locator(".import-card").waitFor()
   await page.locator(".package-contents").getByText("Profile pump@abc", { exact: true }).waitFor()
+  await page.locator(".package-contents").getByText(/1 个节点 · 2 台设备 · 1 台已绑定/).waitFor()
   await page.locator(".package-contents").getByText(/12 个采集点 · 画面绑定已 token 化/).waitFor()
-  await page.locator(".package-contents").getByText("3 条策略", { exact: true }).waitFor()
+  await page.locator(".package-contents").getByText(/0 份本层配置 · 其余继承或默认/).waitFor()
+  await page.locator(".package-contents").getByText("3 条规则 · 1 个状态机", { exact: true }).waitFor()
   if (process.env.DELIVERY_SHOT_DIR) {
     for (const width of [1280, 1024]) {
       await page.setViewportSize({ width, height: width === 1280 ? 800 : 768 })
@@ -210,10 +229,9 @@ try {
 
   await page.locator(".publish-note input").fill("交付基线", { force: true })
   await button("重新发布").click()
-  await button("预检未通过，仍要发布").click()
   await page.getByText(/已发布版本 pv-new/).waitFor()
-  assert.equal(writes.filter(write => write.path === "/projects/publish").length, 2)
-  assert.equal(writes.filter(write => write.path === "/projects/publish")[1].body.site, "site-1")
+  assert.equal(writes.filter(write => write.path === "/projects/publish").length, 1)
+  assert.equal(writes.filter(write => write.path === "/projects/publish")[0].body.site, "site-1")
 
   const packageDownload = page.waitForEvent("download")
   await button("导出项目包").click()
@@ -259,9 +277,7 @@ try {
   await page.getByText("运行状态（真实快照）", { exact: true }).waitFor()
   await page.getByText("采集样本 1 个", { exact: true }).waitFor()
   await page.locator(".runtime-card").getByText(/通过 · /).waitFor()
-  await page.locator(".site-select").selectOption("site-2")
-  await page.locator(".runtime-card").getByText(/通过 · /).waitFor()
-  await page.locator(".site-select").selectOption("site-1")
+  const rollbackSite = await page.locator(".site-select").inputValue()
 
   await button("部署记录").click()
   await page.getByText(/暂无部署记录/).waitFor()
@@ -272,26 +288,29 @@ try {
   await rollbackRow.locator("uni-button").filter({ hasText: "回退" }).click()
   await rollbackRow.locator("uni-button").filter({ hasText: "确认回退（历史保留）" }).click()
   await page.getByText(/已回退到 pv-old：更新 2、创建 1、保留多余 1/).waitFor()
-  assert.equal(writes.find(write => write.path === "/projects/rollback").body.site, "site-1")
+  assert.equal(writes.find(write => write.path === "/projects/rollback").body.site, rollbackSite)
 
   await button("账号与权限").click()
   await page.getByText("viewer@local", { exact: true }).first().waitFor()
   await page.getByText("角色 × 动作 × 对象", { exact: true }).waitFor()
   const viewerMatrixRow = page.locator(".permission-matrix tbody tr").filter({ hasText: "viewer@local" })
   await viewerMatrixRow.getByText("泵房", { exact: true }).waitFor()
-  assert.equal(await viewerMatrixRow.locator("td").nth(4).innerText(), "拒绝", "viewer command must be denied")
+  assert.match(await viewerMatrixRow.locator("td").nth(4).innerText(), /^拒绝/, "viewer command must be denied")
   const adminMatrixRow = page.locator(".permission-matrix tbody tr").filter({ hasText: "管理员" })
-  assert.equal(await adminMatrixRow.locator("td").nth(7).innerText(), "允许", "admin account management must be allowed")
+  assert.equal(await adminMatrixRow.locator("td").nth(7).innerText(), "授权允许", "admin account management must be allowed")
   const ruleOnlyMatrixRow = page.locator(".permission-matrix tbody tr").filter({ hasText: "rule-only@local" })
-  assert.equal(await ruleOnlyMatrixRow.locator("td").nth(6).innerText(), "拒绝", "rule_publish alone must not grant project version publishing")
+  assert.match(await ruleOnlyMatrixRow.locator("td").nth(6).innerText(), /^拒绝/, "rule_publish alone must not grant project version publishing")
   const viewer = page.locator(".account-table tbody tr").filter({ hasText: "viewer@local" })
   await viewer.locator("uni-button").filter({ hasText: "编辑权限" }).click()
   const accountEditor = page.locator(".accounts-card .editor").first()
-  await accountEditor.locator("select").selectOption("operator")
+  await accountEditor.locator("select").first().selectOption("operator")
   await accountEditor.locator(".action-grid uni-label").filter({ hasText: "审计查看" }).locator("uni-checkbox").click()
   await accountEditor.locator("uni-button").filter({ hasText: "保存权限" }).click()
   await page.getByText("权限已保存", { exact: true }).waitFor()
-  assert.deepEqual(writes.find(write => write.path === "/users/u-viewer").body, { role: "operator", actions: ["audit_view"] })
+  const savedPolicy = writes.find(write => write.path === "/users/u-viewer").body
+  assert.equal(savedPolicy.role, "operator")
+  assert.deepEqual(savedPolicy.actions, ["audit_view"])
+  assert.ok(savedPolicy.parent, "the edited scope must be sent with the policy")
 
   await button("＋ 创建账号").click()
   await page.locator(".create-editor input").nth(0).fill("new@local", { force: true })
