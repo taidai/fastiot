@@ -47,18 +47,11 @@ func TestAcceptanceEvidenceManifestScopesVersionsAndDeployments(t *testing.T) {
 		t.Fatalf("deployment record: %d %s", status, body)
 	}
 
-	response, err := http.Get(base + "/delivery/evidence")
-	if err != nil {
-		t.Fatal(err)
+	status, packed := call(t, http.MethodGet, base+"/delivery/evidence", token, nil, nil)
+	if status != http.StatusOK {
+		t.Fatalf("evidence: %d", status)
 	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("evidence: %d", response.StatusCode)
-	}
-	raw, err := io.ReadAll(response.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
+	raw := []byte(packed)
 	archive, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
 	if err != nil {
 		t.Fatal(err)
