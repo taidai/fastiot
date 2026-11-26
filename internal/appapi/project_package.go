@@ -94,9 +94,19 @@ type projectPackage struct {
 	Nodes             []packageNode       `json:"nodes"`
 	PointCount        int                 `json:"point_count"`
 	StrategyCount     int                 `json:"strategy_count"`
-	Screens           []packageScreen     `json:"screens"`
-	Stripped          []packageStrip      `json:"stripped"`
-	Warnings          []string            `json:"warnings"`
+	// DeviceCount, BoundDeviceCount, RuleCount and StateMachineCount describe
+	// the package contents for operators. They are derived from Nodes and are
+	// deliberately excluded from the integrity digest: an older instance that
+	// does not know these fields must still accept the package, and a newer
+	// instance must still accept packages written before the fields existed.
+	// Pointers keep a real zero distinct from "not carried by this package".
+	DeviceCount       *int            `json:"devices,omitempty"`
+	BoundDeviceCount  *int            `json:"bound_devices,omitempty"`
+	RuleCount         *int            `json:"rules,omitempty"`
+	StateMachineCount *int            `json:"state_machines,omitempty"`
+	Screens           []packageScreen `json:"screens"`
+	Stripped          []packageStrip  `json:"stripped"`
+	Warnings          []string        `json:"warnings"`
 }
 
 type importProjectRequest struct {
@@ -659,6 +669,56 @@ func packageContentCounts(nodes []packageNode) (points, strategies int) {
 		}
 	}
 	return points, strategies
+}
+
+// packageSummaryCounts derives the operator-facing device and strategy split
+// from the exact nodes the package carries. A device is bound when an included
+// channel maps it through a complete unit model (Profile plus at least one
+// point), the same rule preflight uses for "device not yet bound".
+func packageSummaryCounts(nodes []packageNode) (devices, boundDevices, rules, stateMachines int) {
+	deviceRefs := map[string]bool{}
+	for _, node := range nodes {
+		switch node.Type {
+		case data.NodeTypeDevice:
+			devices++
+			deviceRefs[node.Ref] = true
+		case "decisionTable":
+			rules++
+		case stateMachineType:
+			stateMachines++
+		}
+		for _, point := range node.Points {
+			if point.Type == capabilityRulePoint && point.Tombstone%2 == 0 {
+				rules++
+			}
+		}
+	}
+	bound := map[string]bool{}
+	for _, node := range nodes {
+		if node.Type != data.NodeTypeModbus {
+			continue
+		}
+		for _, point := range node.Points {
+			if point.Type != unitModelPoint || point.Tombstone%2 != 0 {
+				continue
+			}
+			var model unitModelConfig
+			if json.Unmarshal([]byte(point.Txt()), &model) == nil &&
+				deviceRefs[model.BusinessNodeID] && model.ProfileID != "" && len(model.PointMap) > 0 {
+				bound[model.BusinessNodeID] = true
+			}
+		}
+	}
+	return devices, len(bound), rules, stateMachines
+}
+
+// applySummaryCounts fills the derived operator-facing counts from the package
+// nodes. Values are always recomputed rather than trusted from the wire, so an
+// older frozen package gains the counts and a hand-edited one cannot lie.
+func (pkg *projectPackage) applySummaryCounts() {
+	devices, bound, rules, stateMachines := packageSummaryCounts(pkg.Nodes)
+	pkg.DeviceCount, pkg.BoundDeviceCount = &devices, &bound
+	pkg.RuleCount, pkg.StateMachineCount = &rules, &stateMachines
 }
 
 func addPackageWarning(warnings *[]string, message string) {
@@ -1352,6 +1412,7 @@ func (h *Handler) packageFromNodes(identity Identity, nodes []data.NodeEdge, str
 		}
 	}
 	pkg.PointCount, pkg.StrategyCount = packageContentCounts(pkg.Nodes)
+	pkg.applySummaryCounts()
 	for id := range profiles {
 		version, ok := h.profileVersion(id)
 		if !ok {
