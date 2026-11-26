@@ -93,7 +93,8 @@ const availablePoints = computed(() => new Set([...devicePointIds(nodes.value, d
 const children = computed(() => nodes.value.filter(node => node.parent === props.layerId && isBusinessLayer(node) && (kindLabel(node) !== '设备' || devices.value.some(device => device.business_node_id === node.id))))
 const layerAlarms = computed(() => props.alarms.filter(alarm => alarm.active && alarmInLayer(alarm, scopeNodes.value, deviceIds.value)))
 const qualityDevices = computed(() => props.quality.devices as QualityStats[])
-const onlineText = computed(() => `在线 ${devices.value.filter(device => qualityDevices.value.some(item => item.device_id === deviceKey(device) && item.health === 'healthy')).length} / ${devices.value.length}`)
+const onlineCount = computed(() => devices.value.filter(device => qualityDevices.value.some(item => item.device_id === deviceKey(device) && item.health === 'healthy')).length)
+const onlineText = computed(() => `在线 ${onlineCount.value} / ${devices.value.length}`)
 const latestObservation = computed(() => shortTime(scopedValues.value.map(value => value.source_time || '').filter(Boolean).sort().at(-1)))
 const definition = screenBlockDefinition
 function applicable(type: string) { const def = definition(type); return !!def && !!selected.value && (!('kinds' in def) || def.kinds.includes(kindLabel(selected.value) as never)) }
@@ -135,18 +136,35 @@ watch(() => [props.layerId, projectContext.generation], () => { void refreshDail
 onMounted(() => { dailyTimer = setInterval(() => { void refreshDaily() }, 30000) })
 onBeforeUnmount(() => { dailySerial++; clearInterval(dailyTimer) })
 const dailyBindings = { today_energy: 'energy', run_duration: 'runtime', communication_success_rate: 'communication', data_freshness: 'freshness' } as const
+const automaticFillKeys = ['online_devices', 'active_alarms', 'communication_success_rate', 'data_freshness'] as const
 function automaticMetric(key = '') {
  const field = dailyBindings[key as keyof typeof dailyBindings]
  if (field) {
   const value = dailyStats.value?.[field]
   return { id: '', label: automaticMetricLabel(key), value: dailyMetricText(value), unit: value?.unit || '', quality: dailyError.value || dailyMetricDetail(value), time: shortTime(value?.observed_at || dailyStats.value?.as_of) }
  }
- return { id: '', label: automaticMetricLabel(key), value: props.runtimeError ? '—' : key === 'online_devices' ? onlineText.value : key === 'active_alarms' ? String(layerAlarms.value.length) : '—', unit: '', quality: key === 'online_devices' || key === 'active_alarms' ? (props.runtimeError ? '查询不可用' : '当前查询') : '暂无统计', time: '—' }
+ return { id: '', label: automaticMetricLabel(key), value: props.runtimeError ? '—' : key === 'online_devices' ? `${onlineCount.value} / ${devices.value.length}` : key === 'active_alarms' ? String(layerAlarms.value.length) : '—', unit: '', quality: key === 'online_devices' || key === 'active_alarms' ? (props.runtimeError ? '查询不可用' : '当前查询') : '暂无统计', time: '—' }
 }
-const metrics = computed(() => ((props.document.blocks.find(block => block.type === 'kpi')?.binding.metrics || []) as ScreenMetric[]).map(metric => {
- const actual = metric.point_id ? resolvePoint(metric.point_id) : automaticMetric(metric.metric)
- return { ...actual, label: metric.label || actual.label, target:metric.target || '' }
-}))
+type HeroMetric = { id: string; label: string; value: string; unit: string; quality: string; time: string; target: string; metric: string }
+const metrics = computed<HeroMetric[]>(() => {
+ const configured = ((props.document.blocks.find(block => block.type === 'kpi')?.binding.metrics || []) as ScreenMetric[]).slice(0, 6).map(metric => {
+  const actual = metric.point_id ? resolvePoint(metric.point_id) : automaticMetric(metric.metric)
+  return { ...actual, label: metric.label || actual.label, target: metric.target || '', metric: metric.metric || '' }
+ })
+ // The prototype's hero always carries six cards; pad the layer's configured
+ // metrics with the automatic ones that have real sources. Never invent a
+ // value: anything unavailable stays "—". The design preview (no hero) keeps
+ // exactly the configured metrics.
+ if (props.hero) {
+  const used = new Set(configured.map(metric => metric.metric).filter(Boolean))
+  for (const key of automaticFillKeys) {
+   if (configured.length >= 6) break
+   if (used.has(key)) continue
+   configured.push({ ...automaticMetric(key), target: '', metric: key })
+  }
+ }
+ return configured
+})
 const heroMetrics = computed(() => props.hero && (props.document.slots.top || []).includes('kpi') ? metrics.value : [])
 const visibleSlots = computed(() => ['top', 'main', 'side'].filter(slot => slotBlocks(slot).length))
 const pointMetrics = computed(() => devices.value.flatMap(device => devicePointIds(nodes.value, [device]).slice(0, 1)).map(resolvePoint))
@@ -207,12 +225,13 @@ watch(() => [props.layerId, trendMetric.value.id] as const, async ([, id]) => {
 .metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(95px,1fr)); gap:10px; }
 .with-hero .metrics { grid-template-columns:repeat(6,minmax(0,1fr)); gap:0; margin-top:var(--overview-gap); padding:12px 0 10px; border-top:1px solid var(--line); }
 .metric { min-width:0; border:var(--metric-border); border-radius:var(--metric-radius); padding:var(--metric-pad); background:var(--metric-bg); box-shadow:var(--metric-shadow); color:var(--metric-ink); }
-.with-hero .metric { margin:0 var(--metric-gap); }
+.with-hero .metric { height:70px; box-sizing:border-box; overflow:hidden; margin:0 var(--metric-gap); }
 .with-hero .metric:first-child { margin-left:0; padding-left:var(--metric-first-pad-left); }
 .with-hero .metric:last-child { margin-right:0; }
+.with-hero .metric .k { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .with-hero .metric .k svg { display:var(--metric-icon-display); }
 .with-hero .metric-quality { display:none; }
-.with-hero .metric .v { margin-top:4px; font-size:var(--metric-value-size); letter-spacing:-.01em; color:var(--metric-value-color); }
+.with-hero .metric .v { margin-top:4px; font-size:var(--metric-value-size); letter-spacing:-.01em; color:var(--metric-value-color); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .k, .metric-quality { color:var(--muted); font-size:var(--metric-label-size); overflow-wrap:anywhere; }
 .k { display:flex; align-items:center; gap:7px; }
 .k svg { flex:none; width:var(--metric-icon-size); height:var(--metric-icon-size); fill:none; stroke:var(--metric-icon-stroke); stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
