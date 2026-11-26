@@ -77,9 +77,16 @@ const overviewMainBlocks = new Set(["flow", "children", "members", "deviceData",
 // only feeds the fixed main area (trend picks the daily-strip point).
 export function overviewScreenDocument(document: ScreenDocument): ScreenDocument {
   const blocks = document.blocks.filter(block => block.type === "kpi" || overviewMainBlocks.has(block.type))
+  // The prototype's main area puts the device list and the recent-data panel
+  // side by side. Pair them only when both are configured: a lone panel keeps
+  // its full-width span instead of leaving half the row empty.
+  const paired = blocks.some(block => block.type === "devices") && blocks.some(block => block.type === "recent")
+  const laidOut = blocks.map(block => paired && (block.type === "devices" || block.type === "recent")
+    ? { ...block, span: 1 as const }
+    : block)
   return {
     ...document,
-    blocks,
+    blocks: laidOut,
     slots: {
       top: blocks.some(block => block.type === "kpi") ? ["kpi"] : [],
       main: (document.slots.main || []).filter(type => overviewMainBlocks.has(type)),

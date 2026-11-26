@@ -1,7 +1,7 @@
 <template>
   <view class="page" :class="appearance.theme === 'light' ? '' : `theme-${appearance.theme}`">
     <TopBar active="overview" :meta="syncMeta" :pending="unackedAlarms.length" :alpha="appearance.alpha"
-      :theme="appearance.theme" themes show-appearance show-bell @navigate="navigate" @bell="alarmOpen = true" @alpha="setAlpha" @theme="setTheme" @reset="resetAppearance" />
+      :theme="appearance.theme" themes show-appearance show-bell :show-workbench="false" @navigate="navigate" @bell="alarmOpen = true" @alpha="setAlpha" @theme="setTheme" @reset="resetAppearance" />
 
     <IndustryGate v-if="industryBlocked" />
     <template v-else>
@@ -17,11 +17,13 @@
       <aside class="side glass">
         <section class="rail-block">
           <view class="card-title rail-title">待处理 <b class="alarm-num">{{ layerActiveAlarms.length }}</b></view>
-          <view v-for="alarm in layerActiveAlarms.slice(0, 3)" :key="alarm.id" class="alarm-mini">
-            <view class="title">{{ alarm.title }}</view><view class="meta">{{ alarm.severity }} · {{ shortTime(alarm.updated_at) }} · {{ alarm.state === 'acknowledged' ? '已接手，仍活动' : '待接手' }}</view>
-            <button v-if="alarm.state === 'active' && alarm.permissions?.ack !== false" class="ack" :disabled="!!alarmBusy" @click="runAlarm('ack', alarm.id)">接手</button>
+          <view class="alarm-list">
+            <view v-for="alarm in layerActiveAlarms.slice(0, 3)" :key="alarm.id" class="alarm-mini">
+              <view class="title">{{ alarm.title }}</view><view class="meta">{{ alarm.severity }} · {{ shortTime(alarm.updated_at) }} · {{ alarm.state === 'acknowledged' ? '已接手，仍活动' : '待接手' }}</view>
+              <button v-if="alarm.state === 'active' && alarm.permissions?.ack !== false" class="ack" :disabled="!!alarmBusy" @click="runAlarm('ack', alarm.id)">接手</button>
+            </view>
+            <view v-if="!layerActiveAlarms.length" class="side-empty">—</view>
           </view>
-          <view v-if="!layerActiveAlarms.length" class="side-empty">—</view>
           <view v-if="alarmError" class="error">{{ alarmError }}</view>
         </section>
         <section class="rail-block">
@@ -294,18 +296,19 @@ onBeforeUnmount(() => { stopPolling(); invalidateReads() })
 </script>
 
 <style scoped>
-.page { min-height:100vh; padding:var(--page-pad); overflow-x:hidden; }
-.layout { display:grid; grid-template-columns:200px minmax(0,1fr) 320px; gap:var(--overview-gap); margin-top:var(--overview-gap); }
+.page { min-height:100vh; padding:var(--page-pad); overflow-x:hidden; display:flex; flex-direction:column; }
+.layout { flex:1; display:grid; grid-template-columns:200px minmax(0,1fr) 320px; gap:var(--overview-gap); margin-top:var(--overview-gap); }
 .stage { display:flex; flex-direction:column; gap:var(--overview-gap); min-width:0; }
-.daily { padding:var(--daily-pad); }
+.daily { padding:var(--daily-pad); margin-top:auto; }
 .side { display:flex; flex-direction:column; gap:var(--side-gap); min-width:0; padding:var(--side-pad); overflow:auto; }
 .rail-block { min-width:0; }
 .rail-title b { color:var(--amber); font-size:25px; }
 .rail-handover :deep(.handover-section) { margin-top:0; padding-top:0; border-top:0; }
-.alarm-mini { position:relative; border-top:1px solid var(--line); padding:10px 0; font-size:var(--fs-ledger); }
+.alarm-list { display:flex; flex-direction:column; gap:8px; }
+.alarm-mini { position:relative; border:1px solid var(--glass-border); border-radius:12px; padding:9px 12px; background:var(--control-bg); font-size:var(--fs-ledger); }
 .alarm-mini .title { padding-right:52px; font-weight:600; }
 .alarm-mini .meta { margin-top:3px; color:var(--muted); font-size:var(--fs-label); }
-.ack { position:absolute; top:10px; right:0; min-height:0; padding:3px 8px; border:1px solid var(--glass-border); border-radius:var(--control-radius); background:var(--control-bg); color:var(--muted); font-size:var(--fs-label); line-height:normal; }
+.ack { position:absolute; top:9px; right:9px; min-height:0; padding:3px 8px; border:1px solid var(--glass-border); border-radius:var(--control-radius); background:var(--control-active); color:var(--muted); font-size:var(--fs-label); line-height:normal; }
 .side-empty { color:var(--muted); padding:6px 0; }
 .page-error { margin-top:12px; }
 .colophon { display:flex; justify-content:space-between; padding:2px 4px 0; color:var(--muted); font-size:var(--fs-micro); }
