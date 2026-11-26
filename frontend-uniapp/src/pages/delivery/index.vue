@@ -40,10 +40,10 @@
             <section class="card glass package-card package-contents">
               <h5>包内容 <span class="h5-note">{{ packageSummary?.source_version || (hasPublished ? "正在读取冻结版本…" : "当前草稿 · 未发布") }}</span></h5>
               <table class="mini-table"><tbody>
-                <tr><td>对象</td><td class="src">{{ contentSummary ? `${contentSummary.nodes} 个节点` : "—" }}</td></tr>
-                <tr><td>点位</td><td class="src">{{ contentSummary ? `${contentSummary.points} 个采集点` : "—" }}</td></tr>
-                <tr><td>画面</td><td class="src">{{ contentSummary ? `${contentSummary.screens} 份画面定义 · 其余继承或默认` : "—" }}</td></tr>
-                <tr><td>策略</td><td class="src">{{ contentSummary ? `${contentSummary.strategies} 条规则或状态机` : "—" }}</td></tr>
+                <tr><td>对象</td><td class="src">{{ contentSummary ? `${showCount(contentSummary.nodes)} 个节点 · ${showCount(contentSummary.devices)} 台设备 · ${showCount(contentSummary.bound_devices)} 台已绑定` : "—" }}</td></tr>
+                <tr><td>点位</td><td class="src">{{ contentSummary ? `${showCount(contentSummary.points)} 个采集点 · 画面绑定已 token 化` : "—" }}</td></tr>
+                <tr><td>画面</td><td class="src">{{ contentSummary ? `${showCount(contentSummary.screens)} 份本层配置 · 其余继承或默认` : "—" }}</td></tr>
+                <tr><td>策略</td><td class="src">{{ contentSummary ? `${showCount(contentSummary.rules)} 条规则 · ${showCount(contentSummary.state_machines)} 个状态机` : "—" }}</td></tr>
                 <tr><td>依赖</td><td class="src">{{ packageDependencies }}</td></tr>
               </tbody></table>
               <view v-if="packageSummary?.warnings?.length" class="package-warnings">{{ packageSummary.warnings.join("；") }}</view>
@@ -169,7 +169,7 @@ type ImportEvidence = {
   target: string; time: string; result: string; reason?: string; node_ids: string[]; created: number; channels: number; rules: number
 }
 type VersionSummary = { id: string; site_id: string; site_name: string; created_at: string; operator: string; note?: string; preflight_status?: string; nodes: number; deliverable?: boolean; fingerprint?: string; import?: ImportEvidence }
-type ProjectPackage = { id: string; name: string; source_version?: string; source_fingerprint?: string; point_count?: number; strategy_count?: number; screen_count?: number; dependencies?: { kind: string; id: string; version: string }[]; nodes?: unknown[]; screens?: unknown[]; stripped?: unknown[]; warnings?: string[] }
+type ProjectPackage = { id: string; name: string; source_version?: string; source_fingerprint?: string; point_count?: number; strategy_count?: number; devices?: number; bound_devices?: number; rules?: number; state_machines?: number; screen_count?: number; dependencies?: { kind: string; id: string; version: string }[]; nodes?: unknown[]; screens?: unknown[]; stripped?: unknown[]; warnings?: string[] }
 type ImportResult = { site_id: string; name: string; created: number; channels: number; rules: number; node_ids?: string[]; version_id?: string; warnings?: string[]; evidence?: ImportEvidence }
 type RollbackResult = { version: string; baseline: string; updated: number; created: number; extra: number; preflight_status?: string }
 
@@ -242,11 +242,15 @@ const siteName = computed(() => {
   const site = sites.value.find(node => node.id === selectedSite.value)
   return site ? nameOf(site) : ""
 })
+// A package that predates a count (or an unreadable one) must read "—", not 0.
+const showCount = (value?: number) => typeof value === "number" ? String(value) : "—"
 const contentSummary = computed(() => packageSummary.value ? {
-  nodes: packageSummary.value.nodes?.length || 0, points: packageSummary.value.point_count || 0,
-  strategies: packageSummary.value.strategy_count || 0, screens: packageSummary.value.screen_count ?? packageSummary.value.screens?.length ?? 0,
+  nodes: packageSummary.value.nodes?.length ?? 0, points: packageSummary.value.point_count ?? 0,
+  devices: packageSummary.value.devices, bound_devices: packageSummary.value.bound_devices,
+  rules: packageSummary.value.rules, state_machines: packageSummary.value.state_machines,
+  screens: packageSummary.value.screen_count ?? packageSummary.value.screens?.length ?? 0,
   dependencies: packageSummary.value.dependencies || [],
-} : !hasPublished.value && !gateError.value ? gates.value?.content : undefined)
+} : undefined)
 const packageDependencies = computed(() => {
   if (!selectedSite.value) return "—"
   if (!contentSummary.value) return packageError.value || gateError.value ? "读取失败" : packageLoading.value ? "正在读取…" : "—"

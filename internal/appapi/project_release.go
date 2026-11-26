@@ -82,7 +82,18 @@ func (pkg *projectPackage) seal() {
 	}
 	pkg.Manifest["dependencies"] = contentDigest(pkg.Dependencies)
 	pkg.Integrity = ""
-	pkg.Integrity = contentDigest(pkg)
+	pkg.Integrity = contentDigest(pkg.integrityPayload())
+}
+
+// integrityPayload is what the package integrity covers: the engineering
+// content, not the derived display counts. Excluding them keeps packages
+// readable by instances that predate the fields (and vice versa); the counts
+// are recomputed from Nodes whenever the package is served.
+func (pkg projectPackage) integrityPayload() projectPackage {
+	pkg.Integrity = ""
+	pkg.DeviceCount, pkg.BoundDeviceCount = nil, nil
+	pkg.RuleCount, pkg.StateMachineCount = nil, nil
+	return pkg
 }
 
 func (pkg projectPackage) verifyIntegrity() error {
@@ -90,8 +101,7 @@ func (pkg projectPackage) verifyIntegrity() error {
 		return fmt.Errorf("package_integrity_missing")
 	}
 	expected := pkg.Integrity
-	pkg.Integrity = ""
-	if contentDigest(pkg) != expected {
+	if contentDigest(pkg.integrityPayload()) != expected {
 		return fmt.Errorf("package_integrity_mismatch")
 	}
 	manifest := contentDigest(pkg.Manifest)
@@ -364,5 +374,8 @@ func (h *Handler) frozenProjectPackage(identity Identity, siteID, versionID stri
 	if err := pkg.validate(); err != nil {
 		return projectPackage{}, err
 	}
+	// Frozen packages written before the display counts existed gain them from
+	// their own nodes; counts are never read back from storage.
+	pkg.applySummaryCounts()
 	return pkg, nil
 }
