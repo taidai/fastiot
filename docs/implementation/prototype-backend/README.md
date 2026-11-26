@@ -22,25 +22,25 @@ The worktree starts at the current committed source plus only task-related pendi
 | 04 | [行业包依赖门禁](04.md) | 02 | integrated — 3ec9fdb |
 | 05 | [单设备 Profile 接入与只读验证](05.md) | 03 | integrated — b633be0 |
 | 06 | [批量接入与 CSV 逐台结果](06.md) | 05 | integrated — e068b25 |
-| 07 | [操作抽屉与命令回读闭环](07.md) | 05 | code integrated — 9de5c1d; full-suite acceptance open |
+| 07 | [操作抽屉与命令回读闭环](07.md) | 05 | code integrated — 9de5c1d; final combined full Go green (95d2a3a) |
 | 08 | [L3 安全写回读验证](08.md) | 07 | integrated — a6184f8; historical full failures retained |
 | 09 | [按层总览与可信实时数据](09.md) | 02 | integrated — b74d6e2 |
 | 10 | [历史查询、断线曲线与 CSV](10.md) | 02 | integrated — b399379 |
 | 11 | [告警生命周期与交接持久化](11.md) | 09, 10 | integrated — aac3628 |
 | 12 | [今日电量、运行时长与健康统计](12.md) | 09, 10 | integrated — c273cbc |
 | 13 | [四段式规则与显式作用范围](13.md) | 07 | code integrated — b44ad86; notification/restart and React compatibility verified |
-| 14 | [状态机定义、模拟与受控执行](14.md) | 07 | code integrated — 38d4f11 + ceffa85 null-editor repair; full-suite gate open |
+| 14 | [状态机定义、模拟与受控执行](14.md) | 07 | code integrated — 38d4f11 + ceffa85 null-editor repair; final combined full Go green |
 | 15 | [持续运行的聚合点](15.md) | 09, 10 | integrated — 8d927ab |
-| 16 | [今日执行统一查询](16.md) | 13, 14 | code integrated — 2b1af16; full-suite gate open |
+| 16 | [今日执行统一查询](16.md) | 13, 14 | code integrated — 2b1af16; final combined full Go green |
 | 17 | [配界面保存到客户总览](17.md) | 09, 11, 12 (active-alarm and statistics bindings) | integrated — 02220a1; preview repair verified |
-| 18 | [派生输入与已配置画面的联动验收](18.md) | 13, 14, 15, 17 | code integrated — d4e551a; own full Go passed, combined gate open |
+| 18 | [派生输入与已配置画面的联动验收](18.md) | 13, 14, 15, 17 | code integrated — d4e551a; own + final combined full Go green |
 | 19 | [账号、对象范围与只读权限演练](19.md) | 02 | integrated — de84402 |
-| 20 | [真实预检、不可变发布与包导出](20.md) | 06, 13, 14, 17 | code integrated — bd6660f + derived preflight seam; full-suite gate open |
+| 20 | [真实预检、不可变发布与包导出](20.md) | 06, 13, 14, 17 | code integrated — bd6660f + derived preflight seam; final combined full Go green |
 | 21 | [跨实例导入与现场重绑](21.md) | 20 | verified + integrated — import/rebind/acquisition driven end-to-end in a real browser |
 | 22 | [真实部署记录与运行检查](22.md) | 21 | verified + integrated — backend-derived records, real browser applied→running |
 | 23 | [工程版本回退](23.md) | 20 | verified + integrated — real browser blocker/success, runtime facts preserved |
 | 24 | [当前版本的审计与验收证据](24.md) | 19, 20, 22, 23 | code integrated — machine-checkable manifest with scoped deployment evidence |
-| 25 | [原型全状态与真实后端联合验收](25.md) | 04, 08, 11, 12, 16, 18, 24 | pending |
+| 25 | [原型全状态与真实后端联合验收](25.md) | 04, 08, 11, 12, 16, 18, 24 | acceptance run done — final full Go 38/38 green, 157 Node tests, builds, browser E2E |
 
 ## Execution log
 
@@ -90,4 +90,6 @@ The worktree starts at the current committed source plus only task-related pendi
 - Tickets 21 and 23 were interrupted mid-flight by the subagent model's weekly usage limit; the coordinator resumed on Opus 5 and completed them directly. 21 (`2b54f73`) adds import evidence fields, recipient rebinding, reference-closure remapping and a private-Modbus acquisition fixture; 23 (`be33f45`) rewrites rollback to validate/block unsupported resources, freeze a pre-write baseline and recover on failure. A root-fragile 23 test (`os.Chmod` is a no-op for the root Go container) was rewritten to assert the re-loadable pre-write baseline instead of an IO failure it could not trigger; the rollback browser fixture's stale `CreateRuleNotification` signature was also corrected. Real-HTTP import/rebind/evidence tests (21) and all six rollback tests (23) pass in isolation; frontend type-check/builds and 46 merged Node tests pass.
 - Merged 21+23 at `ea47316` (delivery/index.vue conflict combined both `ImportResult.evidence` and `RollbackResult.baseline`). Combined focused Go (appapi 20.355s) passed. One full Go run failed only the known intermittent `TestRuleSimulationZeroWritesAndCanonicalSequence` (canonical readback timeout), which passed in a bounded rerun (6.37s); no 21/23 test failed and no clock/guard/timeout/skip change. The two opt-in browser fixtures were authored but not driven through a real browser, so browser UI acceptance for 21/23 remains open.
 - Code integration count 22/25. Remaining: 22 (deployment record) is now unblocked by 21; 24/25 remain gated. The full-suite acceptance gate and browser UI verification stay open for final 25.
+- Ticket 25 final acceptance run on the integrated tip `95d2a3a` (frozen archive + freshly rebuilt React/H5): **full Go suite 38/38 packages `ok`, exit 0** (appapi 315.770s, app 24.290s, decision 18.377s); 157 frontend Node tests; uniapp type-check; React and H5 builds. Earlier per-ticket failures stay in `.scratch` as history; the final combined tree passed without clock/guard/timeout/skip changes and without repeating the suite to chase green.
+- All 25 tickets are code-integrated and locally accepted to the scope recorded in each `NN.md`. Remaining out-of-scope items are the ones listed in 25.md: physical-device/field commissioning, pixel-level 1:1 across every state, and the unproven root cause of the WSL time-base discontinuities observed earlier. Nothing was pushed, no issues/PRs created, the original checkout was not modified.
 - Local baseline and per-ticket verification must be recorded before marking a ticket complete.
