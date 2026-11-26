@@ -170,12 +170,25 @@ export function profilePointCounts(profile: Pick<Profile, "point_specs"> | null)
 
 export type DeviceAccessState = "unbound" | "pending" | "access"
 
-// ADR 0011: a bound device is not yet connected. /device-ledger exposes the
-// persisted binding and the manual verified flag; it does not expose the
-// per-required-point L2 result, so "access" means bound plus verified-marked.
-export function deviceAccessState(device: { bound?: boolean; profile_id?: string; verified?: boolean }): DeviceAccessState {
+export type DeviceAccessFacts = {
+  bound?: boolean
+  profile_id?: string
+  verified?: boolean
+  required_points?: number
+  verified_points?: number
+}
+
+// ADR 0011: a bound device is not yet connected. /device-ledger now reports
+// the required-point count and how many of them the current L2 evidence
+// verified, so "access" requires every required point, not a manual mark.
+export function deviceAccessState(device: DeviceAccessFacts): DeviceAccessState {
   const bound = device.bound ?? !!device.profile_id
   if (!bound) return "unbound"
+  const required = device.required_points
+  const verified = device.verified_points
+  if (typeof required === "number" && required > 0 && typeof verified === "number") {
+    return verified >= required ? "access" : "pending"
+  }
   return device.verified ? "access" : "pending"
 }
 
