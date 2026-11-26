@@ -1,7 +1,7 @@
 <template>
   <view class="page" :class="appearance.theme === 'light' ? '' : `theme-${appearance.theme}`">
     <TopBar active="overview" :meta="syncMeta" :pending="unackedAlarms.length" :alpha="appearance.alpha"
-      :theme="appearance.theme" themes show-appearance show-bell :show-workbench="false" @navigate="navigate" @bell="alarmOpen = true" @alpha="setAlpha" @theme="setTheme" @reset="resetAppearance" />
+      :theme="appearance.theme" themes show-appearance show-bell @navigate="navigate" @bell="alarmOpen = true" @alpha="setAlpha" @theme="setTheme" @reset="resetAppearance" />
 
     <IndustryGate v-if="industryBlocked" />
     <template v-else>
@@ -112,7 +112,10 @@ const selectedDevice = computed(() => ledger.value.find(device => selectedDevice
 const selectedKey = computed(() => selectedDeviceId.value ? `device:${selectedDeviceId.value}` : session.layer)
 const layerName = computed(() => selectedDevice.value?.name || (currentNode.value ? nameOf(currentNode.value) : "未选择对象"))
 const pathText = computed(() => {
-  const path = layerPath(session.layer).map(node => nameOf(node))
+  // The project root is not a customer layer, so it stays out of the crumb.
+  const path = layerPath(session.layer)
+    .filter(node => !session.snapshot?.roots.includes(node.id))
+    .map(node => nameOf(node))
   if (selectedDevice.value && !isBusinessDevice.value) path.push(selectedDevice.value.name)
   return path.join(" / ") || "—"
 })

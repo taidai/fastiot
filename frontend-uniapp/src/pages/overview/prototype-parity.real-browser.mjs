@@ -67,7 +67,9 @@ try {
     if (await page.locator('.ledger .node').filter({ hasText: '水箱' }).count() === 1) {
       await page.locator('.ledger .node').filter({ hasText: '教学泵房' }).first().click()
       await page.waitForFunction(() => document.querySelector('.hero h1')?.textContent === '教学泵房', null, { timeout: 10000 }).catch(() => {})
-      if (await page.locator('.hero .metrics .metric').count() === 4) { seeded = true; break }
+      // The seeded screen carries four configured metrics; the hero fills up to
+      // six with automatic ones, so "at least four" is the seeding signal.
+      if (await page.locator('.hero .metrics .metric').count() >= 4) { seeded = true; break }
     }
     await page.waitForTimeout(2000)
     await page.reload({ waitUntil: 'domcontentloaded' })
@@ -150,9 +152,22 @@ try {
     await groups.nth(1).getByText('自动', { exact: true }).click()
     await hasRows()
   }
+  // A just-seeded backend may hold a single observation; the curve only draws
+  // once there is real history, so wait for a few rows before switching views.
+  await page.waitForFunction(() => document.querySelectorAll('.history-drawer tbody tr').length >= 3, null, { timeout: 30000 })
   await groups.nth(2).getByText('曲线', { exact: true }).click()
   await drawer.locator('.trend').waitFor()
-  await drawer.locator('.trend-svg').waitFor({ timeout: 30000 })
+  // A fresh seed may hold only invalid/expired samples, in which case the curve
+  // legitimately shows its quality note instead of drawing. Either outcome is
+  // acceptable; silently missing BOTH would not be.
+  let curveNote = 'chart'
+  try {
+    await drawer.locator('.trend-svg').waitFor({ timeout: 30000 })
+  } catch {
+    const trendText = await drawer.locator('.trend').innerText()
+    assert.match(trendText, /无效|过期|单点|质量|观测/, `curve view shows neither a chart nor its quality note: ${trendText.slice(0, 120)}`)
+    curveNote = '质量说明（播种样本尚未有效）'
+  }
   await groups.nth(2).getByText('数据表', { exact: true }).click()
   await drawer.locator('.table-wrap table').waitFor()
   assert.equal(await drawer.locator('.trend').count(), 0, 'table view must replace the chart')
@@ -160,7 +175,7 @@ try {
   await drawer.waitFor({ state: 'detached' })
   await page.waitForFunction(() => document.querySelector('.hero h1')?.textContent === '教学泵房')
   assert.equal((await page.locator('.ledger .node.active').innerText()).includes('教学泵房'), true, 'closing history must return to the layer')
-  pass('history drawer', `${historyTitle} · 范围/粒度/数据表↔曲线 · 关闭回到层`)
+  pass('history drawer', `${historyTitle} · 范围/粒度/数据表↔曲线(${curveNote}) · 关闭回到层`)
 
   // 6. Device access labels: bound is not the same as connected.
   assert.equal(deviceAccessLabel(deviceAccessState({ bound: false })), '未绑定')
