@@ -12,7 +12,7 @@
         <section class="daily glass" aria-label="今日统计">
           <OverviewDailyStats :layer-id="session.layer" :bar="bar" @select="openHistory(barOption?.id || '')" />
         </section>
-        <view class="colophon"><text>FastIOT · {{ projectName }} · {{ layerName }}</text><text>数据来自真实接口；未配置项显示 —</text></view>
+        <view class="colophon"><text>FastIOT · {{ siteName }} · {{ layerName }}</text><text>数据来自真实接口；未配置项显示 —</text></view>
       </main>
       <aside class="side glass">
         <section class="rail-block">
@@ -107,6 +107,11 @@ function setTheme(value: AppearanceTheme) { appearance.value = normalizeAppearan
 function resetAppearance() { appearance.value = { ...DEFAULT_APPEARANCE }; persistAppearance(); applyAppearanceDocument(appearance.value) }
 
 const projectName = computed(() => currentProject.value?.name || "未选择项目")
+// The colophon names the Site, like the prototype, not the project container.
+const siteName = computed(() => {
+  const site = layerPath(session.layer).find(node => node.type === "site")
+  return site ? nameOf(site) : projectName.value
+})
 const isBusinessDevice = computed(() => !!currentNode.value && !session.snapshot?.roots.includes(currentNode.value.id) && ["device", "modbus_device"].includes(currentNode.value.type))
 const selectedDevice = computed(() => ledger.value.find(device => selectedDeviceId.value ? deviceKey(device) === selectedDeviceId.value : isBusinessDevice.value && device.business_node_id === session.layer) || null)
 const selectedKey = computed(() => selectedDeviceId.value ? `device:${selectedDeviceId.value}` : session.layer)

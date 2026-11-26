@@ -30,7 +30,7 @@
         </section>
         <section v-else-if="block.type === 'devices'" class="panel glass">
           <view class="card-title">设备清单<text>{{ devices.length }}</text></view>
-          <view class="table-wrap"><table><thead><tr><th>设备</th><th v-for="column in block.binding.columns" :key="column">{{ deviceColumnLabels[column] }}</th></tr></thead><tbody><tr v-for="device in devices" :key="deviceKey(device)"><td><button class="object-link" @click="emit('select', device.business_node_id || '')">{{ device.name }}</button></td><td v-for="column in block.binding.columns" :key="column">{{ deviceColumn(device, column) }}</td></tr><tr v-if="!devices.length"><td :colspan="block.binding.columns.length + 1" class="empty">没有已接入设备</td></tr></tbody></table></view>
+          <view class="table-wrap"><table class="device-table"><thead><tr><th>设备</th><th v-for="column in block.binding.columns" :key="column">{{ deviceColumnLabels[column] }}</th></tr></thead><tbody><tr v-for="device in devices" :key="deviceKey(device)"><td><button class="object-link" @click="emit('select', device.business_node_id || '')">{{ device.name }}</button></td><td v-for="column in block.binding.columns" :key="column">{{ deviceColumn(device, column) }}</td></tr><tr v-if="!devices.length"><td :colspan="block.binding.columns.length + 1" class="empty">没有已接入设备</td></tr></tbody></table></view>
         </section>
         <section v-else-if="block.type === 'deviceData'" class="panel glass">
           <DevicePanel v-if="devices[0]" :device="devices[0]" :values="scopedValues" :nodes="nodes" :allowed-tabs="block.binding.tabs" /><view v-else class="empty">没有已接入设备数据</view>
@@ -279,7 +279,8 @@ watch(() => [props.layerId, trendMetric.value.id] as const, async ([, id]) => {
 .panel { padding:var(--panel-pad); min-width:0; height:100%; box-sizing:border-box; }
 .table-wrap { overflow:auto; }
 table { width:100%; font-size:var(--fs-ledger); }
-th, td { padding:7px; text-align:left; }
+th, td { padding:6px; text-align:left; white-space:nowrap; }
+.device-table td:nth-child(2) { max-width:108px; overflow:hidden; text-overflow:ellipsis; }
 .object-link { display:inline; min-height:0; margin:0; border:0; padding:0; background:transparent; color:var(--ink); font-size:var(--fs-ledger); text-align:left; line-height:1.6; }
 .object-link::after { border:0; }
 .run, .alarm-mini { padding:8px 0; border-top:1px solid var(--line); font-size:var(--fs-ledger); }
