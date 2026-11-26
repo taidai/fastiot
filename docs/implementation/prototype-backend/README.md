@@ -36,10 +36,10 @@ The worktree starts at the current committed source plus only task-related pendi
 | 18 | [派生输入与已配置画面的联动验收](18.md) | 13, 14, 15, 17 | code integrated — d4e551a; own full Go passed, combined gate open |
 | 19 | [账号、对象范围与只读权限演练](19.md) | 02 | integrated — de84402 |
 | 20 | [真实预检、不可变发布与包导出](20.md) | 06, 13, 14, 17 | code integrated — bd6660f + derived preflight seam; full-suite gate open |
-| 21 | [跨实例导入与现场重绑](21.md) | 20 | code integrated — 2b54f73; browser fixture authored, not yet driven |
-| 22 | [真实部署记录与运行检查](22.md) | 21 | pending |
-| 23 | [工程版本回退](23.md) | 20 | code integrated — be33f45; browser fixture authored, not yet driven |
-| 24 | [当前版本的审计与验收证据](24.md) | 19, 20, 22, 23 | pending |
+| 21 | [跨实例导入与现场重绑](21.md) | 20 | verified + integrated — import/rebind/acquisition driven end-to-end in a real browser |
+| 22 | [真实部署记录与运行检查](22.md) | 21 | verified + integrated — backend-derived records, real browser applied→running |
+| 23 | [工程版本回退](23.md) | 20 | verified + integrated — real browser blocker/success, runtime facts preserved |
+| 24 | [当前版本的审计与验收证据](24.md) | 19, 20, 22, 23 | code integrated — machine-checkable manifest with scoped deployment evidence |
 | 25 | [原型全状态与真实后端联合验收](25.md) | 04, 08, 11, 12, 16, 18, 24 | pending |
 
 ## Execution log
