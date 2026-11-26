@@ -74,7 +74,7 @@ test('derived polling refreshes only observations and fails closed without repla
     tick()
     await new Promise(resolve => setImmediate(resolve))
     const old = app.requests.splice(0)
-    await app.api.selectProject('project-b', async () => true)
+    app.api.resetProjectContext()
     respond(old, 99)
     await new Promise(resolve => setImmediate(resolve))
     assert.equal(app.api.session.snapshot, null)
@@ -84,7 +84,7 @@ test('derived polling refreshes only observations and fails closed without repla
   }
 })
 
-test('project selection fences late reads and writes and persists only authorized context', async () => {
+test('context reset fences late reads and writes from the previous project', async () => {
   const app = await application()
   const old = await pendingRequest(app)
   assert.equal(old.request.header['X-Fastiot-Project'], 'project-a')
@@ -94,22 +94,15 @@ test('project selection fences late reads and writes and persists only authorize
   const oldWrite = app.requests.shift()
   assert.equal(oldWrite.header['X-Fastiot-Project'], 'project-a')
   assert.deepEqual(oldWrite.data, { version: 2 })
-  await app.api.selectProject('project-b', async () => true)
+  app.api.resetProjectContext()
   old.request.success({ statusCode: 200, data: { roots: ['project-a'], nodes: [] } })
   oldWrite.success({ statusCode: 200, data: { version: 3 } })
   await assert.rejects(old.promise, { code: 'project_context_changed' })
   await assert.rejects(write, { code: 'project_context_changed' })
-  const current = await pendingRequest(app)
-  assert.equal(current.request.header['X-Fastiot-Project'], 'project-b')
-  current.request.success({ statusCode: 200, data: {} })
-  await current.promise
-  assert.equal(app.api.projectContext.id, 'project-b')
-  assert.equal(await app.api.selectProject('not-authorized', async () => true), false)
-  assert.equal(await app.api.selectProject('project-a', async () => false), false)
-  assert.equal(app.api.projectContext.id, 'project-b')
+  assert.equal(app.api.projectContext.id, '')
 })
 
-test('refresh restores an authorized project and layer, and project change clears scoped data', async () => {
+test('refresh restores an authorized project and layer, and context reset clears scoped data', async () => {
   const storage = new Map([['fastems-token', 'live-session'], ['fastiot-project-context:fixture-user', { project: 'project-b', layer: 'b-layer' }]])
   const app = await application(storage)
   await app.api.ensureProjectContext()
@@ -117,21 +110,20 @@ test('refresh restores an authorized project and layer, and project change clear
   app.api.session.snapshot = { roots: ['project-b'], nodes: [{ id: 'b-layer' }] }
   app.api.session.layer = 'b-layer'
   app.api.session.values = [{ point_id: 'b-point' }]
-  await app.api.selectProject('project-a', async () => true)
+  app.api.resetProjectContext()
   assert.equal(app.api.session.snapshot, null)
   assert.equal(app.api.session.layer, '')
   assert.deepEqual(app.api.session.values, [])
   const reloaded = await application(storage)
   await reloaded.api.ensureProjectContext()
-  assert.equal(reloaded.api.projectContext.id, 'project-a')
-  assert.equal(reloaded.api.projectContext.layer, '')
+  assert.equal(reloaded.api.projectContext.id, 'project-b')
+  assert.equal(reloaded.api.projectContext.layer, 'b-layer')
 })
 
-test('returning to a project does not revive old responses or swallow revision conflicts', async () => {
+test('context reset does not revive old responses or swallow revision conflicts', async () => {
   const app = await application()
   const old = await pendingRequest(app)
-  await app.api.selectProject('project-b', async () => true)
-  await app.api.selectProject('project-a', async () => true)
+  app.api.resetProjectContext()
   old.request.success({ statusCode: 200, data: { stale: true } })
   await assert.rejects(old.promise, { code: 'project_context_changed' })
   const save = app.api.request('/ems/screen/layer-a', 'PUT', { layer: 'layer-a', version: 1 })
@@ -147,7 +139,7 @@ test('returning to a project does not revive old responses or swallow revision c
   await new Promise(resolve => setImmediate(resolve))
   const download = app.requests.shift()
   assert.equal(download.responseType, 'arraybuffer')
-  await app.api.selectProject('project-b', async () => true)
+  app.api.resetProjectContext()
   download.success({ statusCode: 200, data: new ArrayBuffer(4) })
   await assert.rejects(binary, { code: 'project_context_changed' })
 })
@@ -264,11 +256,6 @@ test('context reset and activation publish a coherent owner, project and layer t
   app.requests.splice(0).forEach(request => request.success({ statusCode: 200, data: { handover: null } }))
   await new Promise(resolve => setImmediate(resolve))
   assert.deepEqual(errors, [])
-  await app.api.selectProject('project-b', async () => true)
-  assert.deepEqual(published.at(-1), ['project-b', ''])
-  await new Promise(resolve => setImmediate(resolve))
-  assert.equal(app.requests[0].header['X-Fastiot-Project'], 'project-b')
-  app.requests.shift().success({ statusCode: 200, data: { handover: null } })
 })
 
 test('login publishes the new credential before synchronous context readers resume', async context => {

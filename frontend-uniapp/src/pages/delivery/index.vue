@@ -1,7 +1,7 @@
 <template>
   <view class="page">
-    <TopBar active="delivery" :project="projectName" meta="发布 / 导入 / 回退，不等于部署" :pending="pendingAlarms.length" :alpha="42"
-      show-ems :ems-installed="emsInstalled" :ems-busy="busy === 'industry'" @toggle-ems="toggleEms" @import-project="current = 'package'; choosePackage()" @navigate="navigate" @bell="alarmOpen = true" @alpha="() => {}" />
+    <TopBar active="delivery" meta="发布 / 导入 / 回退，不等于部署" :pending="pendingAlarms.length" :alpha="42"
+      show-ems :ems-installed="emsInstalled" :ems-busy="busy === 'industry'" @toggle-ems="toggleEms" @navigate="navigate" @bell="alarmOpen = true" @alpha="() => {}" />
     <view v-if="session.error" class="error">{{ session.error }}</view>
     <view class="statebar">
       <span>项目 <b>{{ projectName }}</b></span><span>工作台 <b>交付</b></span><span>页面 <b>{{ currentLabel }}</b></span><span>EMS <b>{{ emsInstalled === null ? "—" : emsInstalled ? "已启用" : "未启用" }}</b></span>

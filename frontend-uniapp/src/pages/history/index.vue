@@ -1,6 +1,6 @@
 <template>
   <view class="page" :class="appearance.theme === 'light' ? '' : `theme-${appearance.theme}`">
-    <TopBar active="overview" :project="projectName" meta="历史数据" :pending="unackedAlarms.length" :alpha="appearance.alpha"
+    <TopBar active="overview" meta="历史数据" :pending="unackedAlarms.length" :alpha="appearance.alpha"
       :theme="appearance.theme" themes :show-workbench="false" show-appearance show-bell @navigate="navigate" @bell="alarmOpen = true" @alpha="setAlpha" @theme="setTheme" @reset="resetAppearance" />
     <view class="history glass">
       <view class="hist-head">
@@ -42,7 +42,7 @@ import HistoryTable from "../../components/HistoryTable.vue"
 import HistoryTrend from "./HistoryTrend.vue"
 import { downloadText, request } from "../../api/client"
 import { acknowledgeAlarm, closeAlarm, requireAuth, session, startPolling, stopPolling } from "../../stores/session"
-import { currentProject, projectContext } from "../../stores/projects"
+import { projectContext } from "../../stores/projects"
 import type { HistoryRecord, HistoryPointResult, HistoryQueryResponse } from "../../types/api"
 import { buildHistoryQuery } from "./history"
 import type { HistoryCursor, HistoryScope } from "./history"
@@ -88,7 +88,6 @@ let authorized = false
 let querySerial = 0
 let exportSerial = 0
 
-const projectName = computed(() => currentProject.value?.name || "未选择项目")
 const unackedAlarms = computed(() => session.alarms.filter(alarm => alarm.active && alarm.state === "active"))
 const pointOptions = computed(() => (session.snapshot?.nodes || []).filter(node => ["variable", "modbusIo", "opcuaPoint", "mqttSub"].includes(node.type) || isDerivedInput(node)).map(node => ({
   id: node.id,

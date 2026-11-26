@@ -49,7 +49,7 @@ try {
   await page.locator('.login input[type="text"]').fill('history-viewer@fixture.local')
   await page.locator('.login input[type="password"]').fill('history-browser-test-only')
   await page.keyboard.press('Enter')
-  await page.locator('.project-button').waitFor()
+  await page.locator('.project').waitFor()
   await page.goto(base + `#/pages/history/index?point=${fixture.point}`)
   await page.locator('.hist-sub').filter({ hasText: '运行历史' }).waitFor()
   await button('自动').click()

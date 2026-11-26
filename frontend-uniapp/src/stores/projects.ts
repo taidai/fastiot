@@ -65,14 +65,3 @@ export function rememberLayer(id: string) {
   projectContext.layer = id
   persist()
 }
-
-// Caller reloads the current workbench after this returns true: no old editor is reused.
-// Confirmation is intentionally conservative, including editors without dirty tracking.
-export async function selectProject(id: string, confirmDiscard: () => Promise<boolean>) {
-  if (id === projectContext.id || !projectContext.projects.some(project => project.id === id)) return false
-  const generation = projectContext.generation
-  if (!await confirmDiscard() || generation !== projectContext.generation) return false
-  activate(id)
-  persist()
-  return true
-}
