@@ -40,8 +40,10 @@ type LedgerDevice struct {
 	// RequiredPoints/VerifiedPoints are the machine-readable L2 facts ADR 0011
 	// needs. Verified is the human UnitModel sign-off and stays independent:
 	// these counts never upgrade it and it never stands in for L2 evidence.
-	RequiredPoints int `json:"required_points"`
-	VerifiedPoints int `json:"verified_points"`
+	// They are pointers so an absent field means "unknown" (no Profile resolved
+	// yet) and is never confused with a real zero, which is also not evidence.
+	RequiredPoints *int `json:"required_points,omitempty"`
+	VerifiedPoints *int `json:"verified_points,omitempty"`
 	// L2VerifiedAt is when the latest current-configuration L2 run proved every
 	// required point. VerifiedAt above remains the manual verification date.
 	L2VerifiedAt string `json:"l2_verified_at,omitempty"`
@@ -137,7 +139,8 @@ func (h *Handler) ledgerDevices(identity Identity, siteID string) ([]LedgerDevic
 					item.Model = prof.Model
 					item.CommandCount = len(prof.CommandSpecs)
 					required := domainaccess.RequiredPointSpecs(prof)
-					item.RequiredPoints = len(required)
+					requiredCount := len(required)
+					item.RequiredPoints = &requiredCount
 					item.Bound = model.BusinessNodeID != "" && len(model.PointMap) > 0
 					for _, spec := range required {
 						point, mapped := findPoint(byServer[server], model.PointMap[spec.Name])
@@ -145,7 +148,9 @@ func (h *Handler) ledgerDevices(identity Identity, siteID string) ([]LedgerDevic
 							item.Bound = false
 						}
 					}
-					item.VerifiedPoints, item.L2VerifiedAt = ledgerVerificationFacts(node, server, required, points, h.ems.Profiles)
+					verifiedPoints, verifiedAt := ledgerVerificationFacts(node, server, required, points, h.ems.Profiles)
+					item.VerifiedPoints = &verifiedPoints
+					item.L2VerifiedAt = verifiedAt
 				}
 			}
 			deviceID := node.ID + "/" + strconv.Itoa(server)

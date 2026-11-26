@@ -24,7 +24,7 @@
               <view class="row"><span>当前版本</span><view class="version-site"><span>{{ hasPublished ? currentVersion?.id || "未发布" : "未发布" }}</span><label class="site-field">Site<select v-model="selectedSite" class="site-select" :disabled="!sites.length" @change="selectLayer(selectedSite)"><option v-if="!sites.length" value="">没有可用 Site</option><option v-for="item in sites" :key="item.id" :value="item.id">{{ nameOf(item) }}</option></select></label></view></view>
               <view class="row"><span>依赖</span><span class="src">{{ packageDependencies }}</span></view>
               <view class="row"><span>现场绑定</span><span class="src">地址、凭据、控制启动与运行数据不进包</span></view>
-              <view class="row"><span>预检</span><span v-if="gates" class="chip" :class="gates.status">{{ statusText(gates.status) }} · 通过 {{ gates.summary?.pass || 0 }} · 注意 {{ gates.summary?.warn || 0 }} · 阻断 {{ gates.summary?.fail || 0 }}</span><span v-else class="src">{{ gateError ? "读取失败" : "—" }}</span></view>
+              <view class="row"><span>预检</span><span v-if="gates" class="chip" :class="gates.status">{{ statusText(gates.status) }} · 通过 {{ gates.summary?.pass || 0 }} · 注意 {{ gates.summary?.warn || 0 }} · 失败 {{ gates.summary?.fail || 0 }}</span><span v-else class="src">{{ gateError ? "读取失败" : "—" }}</span></view>
               <view class="actions">
                 <button class="primary" :disabled="!selectedSite || !canConfigure || !!busy" @click="publish()">{{ busy === "publish" ? "发布中…" : hasPublished ? "重新发布" : "发布版本" }}</button>
                 <button class="ghost" :disabled="!selectedSite || !hasPublished || !canExport || !!busy" @click="exportPackage">{{ busy === "export" ? "导出中…" : "导出项目包" }}</button>
@@ -159,7 +159,7 @@ import IndustryPanel from "../../components/delivery/IndustryPanel.vue"
 import ImportGuide from "../../components/delivery/ImportGuide.vue"
 import { ApiError, downloadText, request } from "../../api/client"
 import { acknowledgeAlarm, closeAlarm, layerPath, selectLayer, nameOf, pendingAlarms, refreshAll, requireAuth, session, startPolling, stopPolling } from "../../stores/session"
-import { canAction, clock, deliveryError, statusText } from "../../components/delivery/contracts"
+import { canAction, clock, countText, deliveryError, statusText } from "../../components/delivery/contracts"
 
 type Gate = { key: string; title: string; status: string; detail: string; object?: string; next_step?: string; informational?: boolean }
 type ReleaseContent = { nodes: number; points: number; strategies: number; screens: number; dependencies: { kind: string; id: string; version: string }[] }
@@ -243,12 +243,12 @@ const siteName = computed(() => {
   return site ? nameOf(site) : ""
 })
 // A package that predates a count (or an unreadable one) must read "—", not 0.
-const showCount = (value?: number) => typeof value === "number" ? String(value) : "—"
+const showCount = countText
 const contentSummary = computed(() => packageSummary.value ? {
-  nodes: packageSummary.value.nodes?.length ?? 0, points: packageSummary.value.point_count ?? 0,
+  nodes: packageSummary.value.nodes?.length, points: packageSummary.value.point_count,
   devices: packageSummary.value.devices, bound_devices: packageSummary.value.bound_devices,
   rules: packageSummary.value.rules, state_machines: packageSummary.value.state_machines,
-  screens: packageSummary.value.screen_count ?? packageSummary.value.screens?.length ?? 0,
+  screens: packageSummary.value.screen_count ?? packageSummary.value.screens?.length,
   dependencies: packageSummary.value.dependencies || [],
 } : undefined)
 const packageDependencies = computed(() => {

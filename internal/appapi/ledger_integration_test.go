@@ -25,6 +25,15 @@ func ledgerSnapshot(t *testing.T, base, token, project string) []data.NodeEdge {
 	return result.Nodes
 }
 
+// derefInt reports -1 for an absent required/verified point count, so an
+// unknown count can never pass an equality check against a real number.
+func derefInt(value *int) int {
+	if value == nil {
+		return -1
+	}
+	return *value
+}
+
 func TestLedgerMemberEditsRejectStaleVersionAcrossRestart(t *testing.T) {
 	dir, password := t.TempDir(), data.NewID()
 	base, first, _, stop := startInputServer(t, dir, password)
@@ -224,11 +233,11 @@ func TestLedgerReportsRequiredPointVerificationFacts(t *testing.T) {
 	// access-sim declares one required point (水箱液位) and one optional point
 	// (远程模式), so only the required point may ever be counted as verified.
 	noL2 := ledgerDevice()
-	if noL2.RequiredPoints != 1 || noL2.VerifiedPoints != 0 || noL2.L2VerifiedAt != "" {
+	if derefInt(noL2.RequiredPoints) != 1 || derefInt(noL2.VerifiedPoints) != 0 || noL2.L2VerifiedAt != "" {
 		t.Fatalf("without L2 evidence: %+v", noL2)
 	}
 	t.Logf("ledger without L2: required_points=%d verified_points=%d l2_verified_at=%q verified=%v",
-		noL2.RequiredPoints, noL2.VerifiedPoints, noL2.L2VerifiedAt, noL2.Verified)
+		derefInt(noL2.RequiredPoints), derefInt(noL2.VerifiedPoints), noL2.L2VerifiedAt, noL2.Verified)
 	if noL2.Verified {
 		t.Fatalf("manual sign-off invented without operator confirmation: %+v", noL2)
 	}
@@ -242,7 +251,7 @@ func TestLedgerReportsRequiredPointVerificationFacts(t *testing.T) {
 	if status != 200 || !l1.Passed {
 		t.Fatalf("L1: %d %s", status, body)
 	}
-	if afterL1 := ledgerDevice(); afterL1.VerifiedPoints != 0 || afterL1.L2VerifiedAt != "" {
+	if afterL1 := ledgerDevice(); derefInt(afterL1.VerifiedPoints) != 0 || afterL1.L2VerifiedAt != "" {
 		t.Fatalf("L1 counted as point evidence: %+v", afterL1)
 	}
 
@@ -254,11 +263,11 @@ func TestLedgerReportsRequiredPointVerificationFacts(t *testing.T) {
 		t.Fatalf("L2: %d %s", status, body)
 	}
 	passing := ledgerDevice()
-	if passing.RequiredPoints != 1 || passing.VerifiedPoints != 1 || passing.L2VerifiedAt == "" {
+	if derefInt(passing.RequiredPoints) != 1 || derefInt(passing.VerifiedPoints) != 1 || passing.L2VerifiedAt == "" {
 		t.Fatalf("full L2 evidence: %+v", passing)
 	}
 	t.Logf("ledger after L2: required_points=%d verified_points=%d l2_verified_at=%q bound=%v verified=%v",
-		passing.RequiredPoints, passing.VerifiedPoints, passing.L2VerifiedAt, passing.Bound, passing.Verified)
+		derefInt(passing.RequiredPoints), derefInt(passing.VerifiedPoints), passing.L2VerifiedAt, passing.Bound, passing.Verified)
 	if !passing.Bound {
 		t.Fatalf("complete mapping must stay bound: %+v", passing)
 	}
@@ -304,7 +313,7 @@ func TestLedgerReportsRequiredPointVerificationFacts(t *testing.T) {
 		t.Fatalf("mapping edit: %d %s", status, body)
 	}
 	stale := ledgerDevice()
-	if stale.RequiredPoints != 1 || stale.VerifiedPoints != 0 || stale.L2VerifiedAt != "" {
+	if derefInt(stale.RequiredPoints) != 1 || derefInt(stale.VerifiedPoints) != 0 || stale.L2VerifiedAt != "" {
 		t.Fatalf("stale L2 evidence counted: %+v", stale)
 	}
 }
@@ -370,5 +379,26 @@ func TestLedgerVerificationFactsUsesCurrentL2PointEvidence(t *testing.T) {
 	staleBasis := append(append([]domainaccess.VerificationRecord{}, partial...), domainaccess.VerificationRecord{Level: "L2", At: "stale-time", Basis: "older-basis", Passed: true})
 	if verified, at := ledgerVerificationFacts(withHistory(staleBasis), 1, required, points, registry); verified != 1 || at != "" {
 		t.Fatalf("stale basis = %d/%q", verified, at)
+	}
+}
+
+// TestLedgerUnknownRequiredPointsOmitsField locks the JSON contract the
+// frontend relies on: a Profile that cannot be resolved leaves both counts
+// absent ("unknown"), while a real zero stays 0. Neither reads as access.
+func TestLedgerUnknownRequiredPointsOmitsField(t *testing.T) {
+	unknown, err := json.Marshal(LedgerDevice{ChannelID: "c", ServerID: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(unknown), "required_points") || strings.Contains(string(unknown), "verified_points") {
+		t.Fatalf("unknown point counts must be omitted: %s", unknown)
+	}
+	zero := 0
+	known, err := json.Marshal(LedgerDevice{RequiredPoints: &zero, VerifiedPoints: &zero})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(known), `"required_points":0`) || !strings.Contains(string(known), `"verified_points":0`) {
+		t.Fatalf("a known zero must serialize as 0: %s", known)
 	}
 }

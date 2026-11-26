@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { allowedChildTypes, boundBusinessIDs, firstIncompleteStep, flattenLedger, screenSummary, summarizeLedger } from "./design.ts"
+import { allowedChildTypes, firstIncompleteStep, flattenLedger, screenSummary, summarizeLedger } from "./design.ts"
 
 const snapshot = {
   roots: ["site-1"],
@@ -49,17 +49,6 @@ test("allowedChildTypes keeps units and devices from becoming containers", () =>
   assert.deepEqual(allowedChildTypes("energyUnit"), ["device"])
   assert.deepEqual(allowedChildTypes("device"), [])
   assert.deepEqual(allowedChildTypes("siteRoot", true), ["site", "plant", "area", "unit", "energyUnit", "device"])
-})
-
-test("boundBusinessIDs reads only persisted UnitModel bindings from Modbus channels", () => {
-  const nodes = [{
-    id: "channel-1", type: "modbus", parent: "site-1", points: [
-      { type: "easyemsUnitModel", key: "1", text: JSON.stringify({ profile_id: "p1", business_node_id: "device-1", point_map: {} }) },
-      { type: "easyemsUnitModel", key: "2", tombstone: 1, text: JSON.stringify({ profile_id: "p1", business_node_id: "device-deleted", point_map: {} }) },
-      { type: "easyemsUnitModel", key: "broken", text: "not json" },
-    ],
-  }]
-  assert.deepEqual([...boundBusinessIDs(nodes)], ["device-1"])
 })
 
 test("firstIncompleteStep follows ADR 0007 instead of always reopening step one", () => {

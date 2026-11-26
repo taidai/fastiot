@@ -245,8 +245,7 @@ import { ApiError, request } from "../../api/client"
 import { commandStateText } from "../../pages/overview/overview"
 import { nameOf, point, valueText } from "../../types/api"
 import type { Snapshot, StateValue, Node } from "../../types/api"
-import { automaticPointMap, requiredProfilePoints, canCommandAccess, canConfigureAccess, prepareModelSave, safeVerificationCommands, verificationError, deviceAccessState, deviceAccessLabel, deviceAccessChipClass, profilePointCounts } from "./access"
-import { boundBusinessIDs, businessBindingStates } from "./design"
+import { automaticPointMap, requiredProfilePoints, canCommandAccess, canConfigureAccess, prepareModelSave, safeVerificationCommands, verificationError, deviceAccessState, deviceAccessLabel, deviceAccessChipClass, profilePointCounts, boundBusinessIDs, businessBindingStates } from "./access"
 import type { EmsChannel, LedgerDevice, Profile, ProfileApplyResponse, ProfileApplyResult, UnitModel, UnitModelConfig, UnitPoint, DeviceAccessState } from "./access"
 
 const props = withDefaults(defineProps<{ snapshot: Snapshot | null; values: StateValue[]; selectedNodeId?: string; batchNodeIds?: string[] }>(), { selectedNodeId: "", batchNodeIds: () => [] })

@@ -1,4 +1,4 @@
-import type { Snapshot } from "../../types/api"
+import type { Node, Snapshot } from "../../types/api"
 
 export type ChannelPoint = {
   id: string
@@ -86,6 +86,10 @@ export type LedgerDevice = {
   verifier?: string
   verified_at?: string
   device_serial?: string
+  // Absent means "unknown" (no Profile resolved); 0 is a real zero. Neither is
+  // evidence of access, so deviceAccessState keeps both pending.
+  required_points?: number
+  verified_points?: number
 }
 
 export type UnitPoint = {
@@ -178,18 +182,20 @@ export type DeviceAccessFacts = {
   verified_points?: number
 }
 
-// ADR 0011: a bound device is not yet connected. /device-ledger now reports
-// the required-point count and how many of them the current L2 evidence
-// verified, so "access" requires every required point, not a manual mark.
+// ADR 0011: a bound device is not yet connected. "access" needs machine L2
+// evidence for every required point: a positive required-point count that the
+// verified-point count meets. The manual `verified` sign-off is not evidence,
+// and unknown counts (legacy snapshots or a missing Profile) or a zero required
+// count are not evidence either. Those devices stay "已绑定待验证".
 export function deviceAccessState(device: DeviceAccessFacts): DeviceAccessState {
   const bound = device.bound ?? !!device.profile_id
   if (!bound) return "unbound"
   const required = device.required_points
   const verified = device.verified_points
-  if (typeof required === "number" && required > 0 && typeof verified === "number") {
-    return verified >= required ? "access" : "pending"
+  if (typeof required === "number" && required > 0 && typeof verified === "number" && verified >= required) {
+    return "access"
   }
-  return device.verified ? "access" : "pending"
+  return "pending"
 }
 
 export function deviceAccessLabel(state: DeviceAccessState) {
@@ -199,6 +205,50 @@ export function deviceAccessLabel(state: DeviceAccessState) {
 
 export function deviceAccessChipClass(state: DeviceAccessState) {
   return state === "access" ? "ok" : state === "unbound" ? "warn" : ""
+}
+
+export type BusinessBindingState = { bound: boolean; verified: boolean }
+
+// Reads only persisted UnitModel bindings from Modbus channels. A persisted
+// model carries the bound flag and the manual sign-off; it never carries L2
+// point evidence, so deviceBindingProgress derives the state with the same
+// deviceAccessState rather than counting `verified` as access.
+export function businessBindingStates(nodes: Node[]) {
+  const states = new Map<string, BusinessBindingState>()
+  for (const node of nodes) {
+    if (node.type !== "modbus") continue
+    for (const point of node.points) {
+      if (point.type !== "easyemsUnitModel" || (point.tombstone || 0) % 2 !== 0 || !point.text) continue
+      try {
+        const model = JSON.parse(point.text) as { business_node_id?: string; verified?: boolean }
+        if (!model.business_node_id) continue
+        const previous = states.get(model.business_node_id)
+        states.set(model.business_node_id, {
+          bound: true,
+          verified: (previous?.verified || false) || model.verified === true,
+        })
+      } catch { /* Invalid persisted models remain unbound rather than guessed. */ }
+    }
+  }
+  return states
+}
+
+export function boundBusinessIDs(nodes: Node[]) {
+  return new Set(businessBindingStates(nodes).keys())
+}
+
+export function deviceBindingProgress(nodes: Node[]) {
+  const progress = { devices: 0, bound: 0, verified: 0 }
+  const states = businessBindingStates(nodes)
+  for (const node of nodes) {
+    if (node.type !== "device" || node.parent === "root") continue
+    progress.devices++
+    const state = states.get(node.id)
+    if (!state) continue
+    progress.bound++
+    if (deviceAccessState({ bound: state.bound, verified: state.verified }) === "access") progress.verified++
+  }
+  return progress
 }
 
 export type BatchBindingRow = {

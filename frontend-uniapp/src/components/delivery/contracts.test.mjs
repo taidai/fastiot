@@ -4,6 +4,7 @@ import {
   actionText,
   authorizationText,
   canAction,
+  countText,
   deliveryError,
   resolveActions,
   roleText,
@@ -11,6 +12,12 @@ import {
 } from "./contracts.ts"
 
 const policy = (role, actions = []) => ({ admin: role === "admin", role, actions })
+
+test("countText keeps a missing count out of the number column", () => {
+  assert.equal(countText(0), "0")
+  assert.equal(countText(3), "3")
+  assert.equal(countText(undefined), "—")
+})
 
 test("authorization cells fail closed without a server result and explain scope denial", () => {
   assert.equal(authorizationText(undefined), "未检查")

@@ -69,6 +69,10 @@ const ACTION_LABELS: Record<string, string> = {
 export function statusText(status?: string) {
   return status ? STATUS_LABELS[status] || status : "未运行"
 }
+// A count the backend did not send is unknown and must render "—", never 0.
+export function countText(value?: number) {
+  return typeof value === "number" ? String(value) : "—"
+}
 export function roleText(role?: string) {
   return role ? ROLE_LABELS[role] || role : "—"
 }

@@ -36,9 +36,8 @@ import { computed, onMounted, ref, watch } from "vue"
 import { request } from "../../api/client"
 import { nameOf } from "../../types/api"
 import type { Snapshot } from "../../types/api"
-import { batchCSV, batchVerificationOutcome, batchVerificationText, summarizeBatchVerification } from "./access"
+import { batchCSV, batchVerificationOutcome, batchVerificationText, boundBusinessIDs, summarizeBatchVerification } from "./access"
 import type { BatchAccessResponse, BatchBindingRow, BatchVerificationOutcome, BatchVerificationRecord, BatchVerificationSummary, LedgerDevice, EmsChannel, Profile } from "./access"
-import { boundBusinessIDs } from "./design"
 
 const props = withDefaults(defineProps<{ snapshot: Snapshot | null; channels: EmsChannel[]; profiles: Profile[]; selectedNodeIds?: string[]; readOnly?: boolean }>(), { selectedNodeIds: () => [], readOnly: false })
 const emit = defineEmits<{ (event: "refresh"): void; (event: "close"): void }>()

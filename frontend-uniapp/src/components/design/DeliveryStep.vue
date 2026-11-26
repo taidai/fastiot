@@ -8,9 +8,9 @@
 
       <h5 class="section-title">项目包里有什么</h5>
       <table class="mini-table"><tbody>
-        <tr><td>对象</td><td class="src">{{ packageSummary ? `${packageSummary.nodes?.length || 0} 个节点 · ${packageSummary.devices ?? "—"} 台设备 · ${packageSummary.bound_devices ?? "—"} 台已绑定` : "—" }}</td></tr>
-        <tr><td>点位</td><td class="src">{{ packageSummary ? `${packageSummary.point_count || 0} 个采集点 · 画面绑定已 token 化` : "—" }}</td></tr>
-        <tr><td>画面</td><td class="src">{{ packageSummary ? `${packageSummary.screen_count ?? packageSummary.screens?.length ?? 0} 份本层配置 · 其余继承或默认` : "—" }}</td></tr>
+        <tr><td>对象</td><td class="src">{{ packageSummary ? `${showCount(packageSummary.nodes?.length)} 个节点 · ${packageSummary.devices ?? "—"} 台设备 · ${packageSummary.bound_devices ?? "—"} 台已绑定` : "—" }}</td></tr>
+        <tr><td>点位</td><td class="src">{{ packageSummary ? `${showCount(packageSummary.point_count)} 个采集点 · 画面绑定已 token 化` : "—" }}</td></tr>
+        <tr><td>画面</td><td class="src">{{ packageSummary ? `${showCount(packageSummary.screen_count ?? packageSummary.screens?.length)} 份本层配置 · 其余继承或默认` : "—" }}</td></tr>
         <tr><td>策略</td><td class="src">{{ packageSummary ? `${packageSummary.rules ?? "—"} 条规则 · ${packageSummary.state_machines ?? "—"} 个状态机` : "—" }}</td></tr>
         <tr><td>现场绑定</td><td class="src">已剥离：地址、凭据、控制启动与运行数据不进包</td></tr>
       </tbody></table>
@@ -40,7 +40,7 @@ import { computed, ref, watch } from "vue"
 import { ApiError, downloadText, request } from "../../api/client"
 import { nameOf } from "../../types/api"
 import type { Snapshot } from "../../types/api"
-import { canAction, deliveryError, statusText } from "../delivery/contracts"
+import { canAction, countText, deliveryError, statusText } from "../delivery/contracts"
 
 type Gate = { key: string; title: string; status: string; detail: string; object?: string; next_step?: string; informational?: boolean }
 type PreflightReport = { id?: string; site?: string; generated_at?: string; operator?: string; status: string; summary: Record<string, number>; gates: Gate[]; fingerprint?: string }
@@ -53,6 +53,7 @@ const selectedSite = ref("")
 const versions = ref<VersionSummary[]>([])
 const currentVersion = computed(() => versions.value.find(version => version.deliverable))
 const packageSummary = ref<ProjectPackage | null>(null)
+const showCount = countText
 const gates = ref<PreflightReport | null>(null)
 const versionError = ref("")
 const packageError = ref("")

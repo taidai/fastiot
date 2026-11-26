@@ -675,6 +675,12 @@ func packageContentCounts(nodes []packageNode) (points, strategies int) {
 // from the exact nodes the package carries. A device is bound when an included
 // channel maps it through a complete unit model (Profile plus at least one
 // point), the same rule preflight uses for "device not yet bound".
+//
+// It deliberately does not reuse the live snapshot counters: the package is a
+// frozen subset (a carried version may omit nodes), so counts must come from
+// the same nodes the package itself ships. The capabilityRulePoint pass here
+// counts rules, while packageContentCounts reports the same points as
+// strategies; both names are intentional.
 func packageSummaryCounts(nodes []packageNode) (devices, boundDevices, rules, stateMachines int) {
 	deviceRefs := map[string]bool{}
 	for _, node := range nodes {

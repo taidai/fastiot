@@ -16,6 +16,25 @@ const checks = []
 function pass(name, detail) { checks.push({ name, detail }); console.log(`PASS ${name}${detail ? ` — ${detail}` : ''}`) }
 function fail(name, detail) { failures.push({ name, detail }); console.error(`FAIL ${name}${detail ? ` — ${detail}` : ''}`) }
 
+// The guard seeds one station through the same HTTP API a delivery engineer
+// uses, so it can prove a bound-but-not-L2-verified device never reads 已接入.
+async function adminToken() {
+  const response = await fetch(origin + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'admin', password }) })
+  assert.ok(response.ok, `admin login failed: ${response.status}`)
+  const body = await response.json()
+  assert.ok(body.token, 'admin login returned no token')
+  return body.token
+}
+async function apiCall(token, path, init = {}) {
+  const response = await fetch(origin + '/api' + path, {
+    ...init,
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(init.headers || {}) },
+  })
+  const text = await response.text()
+  if (!response.ok) throw new Error(`${init.method || 'GET'} ${path}: ${response.status} ${text}`)
+  return text ? JSON.parse(text) : null
+}
+
 const deadline = Date.now() + 120000
 for (;;) {
   try { if ((await fetch(origin + '/api/health')).ok) break } catch {}
@@ -136,12 +155,66 @@ try {
   // 6. Device access labels: bound is not the same as connected.
   assert.equal(deviceAccessLabel(deviceAccessState({ bound: false })), '未绑定')
   assert.equal(deviceAccessLabel(deviceAccessState({ bound: true, verified: false })), '已绑定待验证')
-  assert.equal(deviceAccessLabel(deviceAccessState({ bound: true, verified: true })), '已接入')
+  assert.equal(deviceAccessLabel(deviceAccessState({ bound: true, verified: true })), '已绑定待验证', 'a manual sign-off alone must not read 已接入')
   assert.notEqual(deviceAccessLabel(deviceAccessState({ bound: true, verified: false })), '已接入', 'a bound device without verification must not read 已接入')
   const ledgerText = await page.locator('.ledger').innerText()
   assert.match(ledgerText, /仅显示已绑定设备/, 'overview ledger must call its devices bound, not connected')
   assert.doesNotMatch(ledgerText, /已接入/, 'overview ledger must not label merely bound devices as 已接入')
   pass('device access labels', '未绑定 / 已绑定待验证 / 已接入; overview ledger keeps 已绑定')
+
+  // 7. Design workbench access step renders the same verdicts from real ledger
+  // data. Make one seeded station ledger-bound while keeping only the manual
+  // sign-off: it must render 已绑定待验证, never 已接入.
+  const token = await adminToken()
+  const api = (path, init = {}) => apiCall(token, path, init)
+  const ledgerBefore = await api('/device-ledger')
+  const target = (ledgerBefore.devices || []).find(device => device.profile_id && device.business_node_id)
+  assert.ok(target, 'seeded ledger must carry a bound business device')
+  const unitPath = `/modbus/${encodeURIComponent(target.channel_id)}/units/${target.server_id}/model`
+  const unit = await api(unitPath)
+  assert.ok(unit.model && unit.profiles?.length, `unit model missing for ${target.channel_id}/${target.server_id}`)
+  const pointByName = new Map((unit.points || []).filter(point => point.server_id === target.server_id).map(point => [point.name, point.id]))
+  const profile = (unit.profiles || []).find(item => item.id === unit.model.profile_id) || (unit.profiles || [])[0]
+  const pointMap = {}
+  for (const spec of profile?.point_specs || []) if (pointByName.has(spec.name)) pointMap[spec.name] = pointByName.get(spec.name)
+  const baseModel = { name: unit.model.name, profile_id: unit.model.profile_id, point_map: pointMap, business_node_id: unit.model.business_node_id }
+  await api(unitPath, { method: 'PUT', body: JSON.stringify(baseModel) })
+  const afterMap = await api(unitPath)
+  await api(unitPath, { method: 'PUT', body: JSON.stringify({
+    ...baseModel, mapping_version: afterMap.model?.mapping_version, profile_version: afterMap.model?.profile_version,
+    verified: true, verifier: 'parity-guard', verified_at: new Date().toISOString().slice(0, 10),
+    device_serial: 'PARITY-GUARD', verification: 'parity guard: bound but not L2 verified',
+  }) })
+  const ledgerAfter = await api('/device-ledger')
+  const bound = (ledgerAfter.devices || []).find(device => device.channel_id === target.channel_id && device.server_id === target.server_id)
+  assert.equal(bound?.bound, true, 'the seeded station must be ledger-bound after mapping every point')
+  assert.equal(bound?.verified, true, 'the manual sign-off must stay independent of L2 evidence')
+  assert.ok(bound.required_points > 0 && bound.verified_points === 0, `unexpected L2 facts: ${JSON.stringify(bound)}`)
+  assert.equal(deviceAccessState(bound), 'pending', 'a bound, manually signed-off device without L2 evidence is pending')
+  for (const device of ledgerAfter.devices || []) {
+    const state = deviceAccessState(device)
+    if (state === 'access') assert.ok(device.required_points > 0 && device.verified_points >= device.required_points, `no L2 evidence device read 已接入: ${JSON.stringify(device)}`)
+  }
+
+  await page.goto(`${origin}/uniapp/#/pages/design/index`, { waitUntil: 'domcontentloaded' })
+  await page.locator('.design-ledger .node').first().waitFor({ timeout: 120000 })
+  const siteRow = page.locator('.design-ledger .node').filter({ hasText: '教学泵房' }).first()
+  await siteRow.waitFor({ timeout: 60000 })
+  await siteRow.click()
+  const accessStep = page.locator('.stepper .step').filter({ hasText: '接设备' })
+  await accessStep.click()
+  await page.locator('.access-step .ledger-panel .ledger-table tbody tr').first().waitFor({ timeout: 60000 })
+  const chips = await page.locator('.access-step .ledger-panel .ledger-table tbody tr').evaluateAll(rows => rows.map(row => row.querySelector('.chip')?.textContent?.trim() || ''))
+  const allowed = new Set(['未绑定', '已绑定待验证', '已接入'])
+  assert.ok(chips.length >= 3, `access step must list the seeded devices: ${JSON.stringify(chips)}`)
+  assert.ok(chips.every(chip => allowed.has(chip)), `access step must use the three-state vocabulary: ${JSON.stringify(chips)}`)
+  assert.ok(chips.includes('未绑定'), 'an unbound device must read 未绑定')
+  assert.ok(chips.includes('已绑定待验证'), 'a bound, manually signed-off device must read 已绑定待验证')
+  assert.ok(!chips.includes('已接入'), 'a device without full L2 evidence must never read 已接入')
+  const accessSummary = await page.locator('.access-step .step-head').innerText()
+  assert.match(accessSummary, /已接入 0 \/ \d+/, `access summary must count zero connected: ${JSON.stringify(accessSummary)}`)
+  assert.match(accessSummary, /台待验证/, `access summary must surface pending devices: ${JSON.stringify(accessSummary)}`)
+  pass('design access three states', `${chips.join(' / ')} · ${accessSummary.replace(/\s+/g, ' ').trim()}`)
 
   if (evidence) await page.screenshot({ path: evidence, fullPage: true })
   assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join('\n')}`)

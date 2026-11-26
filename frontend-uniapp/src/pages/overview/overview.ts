@@ -72,7 +72,9 @@ const overviewMainBlocks = new Set(["flow", "children", "members", "deviceData",
 // The customer overview keeps the prototype's three columns: the configurable
 // primary visual stays in the middle, while the rail and the daily strip are
 // fixed by the page. Side-slot blocks therefore never render inside the screen
-// body on this page.
+// body on this page. This whitelist is the ui-parity 01 decision: only these
+// blocks render; trend/summary are not separate side slots, and their config
+// only feeds the fixed main area (trend picks the daily-strip point).
 export function overviewScreenDocument(document: ScreenDocument): ScreenDocument {
   const blocks = document.blocks.filter(block => block.type === "kpi" || overviewMainBlocks.has(block.type))
   return {
@@ -90,6 +92,9 @@ export type OverviewBarPoint = { id: string; label: string; unit: string }
 
 // The prototype's bar strip is the outlet pressure. Keep that meaning when the
 // layer exposes a pressure metric; otherwise follow the configured trend point.
+// The /压力/ test is intentionally on the operator-facing label, not the point
+// name, because each site names its points differently; the configured trend
+// point is the preferred fallback before any arbitrary option.
 export function overviewBarPoint(document: ScreenDocument, options: OverviewBarPoint[]): OverviewBarPoint | null {
   const blocks = document.blocks || []
   const metrics = (blocks.find(block => block.type === "kpi")?.binding?.metrics || []) as { point_id?: string; label?: string }[]

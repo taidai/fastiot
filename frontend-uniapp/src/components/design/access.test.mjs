@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { automaticPointMap, batchCSV, batchVerificationOutcome, canCommandAccess, canConfigureAccess, deviceAccessChipClass, deviceAccessLabel, deviceAccessState, prepareModelSave, safeVerificationCommands, summarizeBatchVerification, verificationError } from "./access.ts"
+import { automaticPointMap, batchCSV, batchVerificationOutcome, boundBusinessIDs, canCommandAccess, canConfigureAccess, deviceAccessChipClass, deviceAccessLabel, deviceAccessState, deviceBindingProgress, prepareModelSave, safeVerificationCommands, summarizeBatchVerification, verificationError } from "./access.ts"
 
 const profile = {
   id: "vendor-v1",
@@ -68,7 +68,8 @@ test("canConfigureAccess follows resolved actions before role defaults", () => {
 test("deviceAccessState keeps unbound, bound-awaiting-verification and connected apart", () => {
   assert.equal(deviceAccessState({ bound: false }), "unbound")
   assert.equal(deviceAccessState({ bound: true, verified: false }), "pending")
-  assert.equal(deviceAccessState({ bound: true, verified: true }), "access")
+  assert.equal(deviceAccessState({ bound: true, verified: true }), "pending", "a manual sign-off without L2 point evidence is not access")
+  assert.equal(deviceAccessState({ bound: true, verified: true, verified_points: 10 }), "pending", "an unknown required-point count is not access")
   assert.equal(deviceAccessState({ bound: true, verified: true, required_points: 10, verified_points: 4 }), "pending", "required-point evidence overrides the manual mark")
   assert.equal(deviceAccessState({ bound: true, verified: false, required_points: 10, verified_points: 10 }), "access", "every required point verified counts as connected")
   assert.equal(deviceAccessState({ bound: true, verified: false, required_points: 0, verified_points: 0 }), "pending", "no required points is not evidence of access")
@@ -77,6 +78,28 @@ test("deviceAccessState keeps unbound, bound-awaiting-verification and connected
   assert.equal(deviceAccessLabel("pending"), "已绑定待验证")
   assert.equal(deviceAccessLabel("access"), "已接入")
   assert.equal(deviceAccessChipClass("pending"), "", "pending must not borrow the connected style")
+})
+
+test("boundBusinessIDs reads only persisted UnitModel bindings from Modbus channels", () => {
+  const nodes = [{
+    id: "channel-1", type: "modbus", parent: "site-1", points: [
+      { type: "easyemsUnitModel", key: "1", text: JSON.stringify({ profile_id: "p1", business_node_id: "device-1", point_map: {} }) },
+      { type: "easyemsUnitModel", key: "2", tombstone: 1, text: JSON.stringify({ profile_id: "p1", business_node_id: "device-deleted", point_map: {} }) },
+      { type: "easyemsUnitModel", key: "broken", text: "not json" },
+    ],
+  }]
+  assert.deepEqual([...boundBusinessIDs(nodes)], ["device-1"])
+})
+
+test("deviceBindingProgress keeps a persisted manual sign-off out of the access count", () => {
+  const nodes = [
+    { id: "channel-1", type: "modbus", parent: "site-1", points: [
+      { type: "easyemsUnitModel", key: "1", text: JSON.stringify({ profile_id: "p1", business_node_id: "device-1", point_map: { level: "p1" }, verified: true }) },
+    ] },
+    { id: "device-1", type: "device", parent: "area-1", points: [] },
+    { id: "device-2", type: "device", parent: "area-1", points: [] },
+  ]
+  assert.deepEqual(deviceBindingProgress(nodes), { devices: 2, bound: 1, verified: 0 })
 })
 
 test("verificationError rejects empty mappings and command-required gaps", () => {
