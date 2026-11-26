@@ -50,7 +50,10 @@ const rows = computed<Row[]>(() => {
   }
   session.snapshot.roots.forEach(id => {
     const root = session.snapshot!.nodes.find(node => node.id === id)
-    if (root) walk(root, 0, true)
+    if (!root) return
+    // The project root is the container the Sites live in, not a customer
+    // layer: the prototype starts the ledger at the Site.
+    session.snapshot!.nodes.filter(child => child.parent === root.id).forEach(child => walk(child, 0))
   })
   return result
 })

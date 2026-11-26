@@ -180,9 +180,11 @@ test('refresh validates persisted layer against the authorized snapshot', async 
     }
     app.requests.splice(0).forEach(req => req.success({ statusCode: 200, data: responses[req.url] }))
     await refresh
-    assert.equal(app.api.session.layer, savedLayer === 'b-layer' ? 'b-layer' : 'project-b')
+    assert.equal(app.api.session.layer, 'b-layer', 'an invalid persisted layer falls back to the first Site, never the project root')
     app.api.selectLayer('a-layer')
-    assert.notEqual(app.api.session.layer, 'a-layer')
+    assert.equal(app.api.session.layer, 'b-layer')
+    app.api.selectLayer('project-b')
+    assert.equal(app.api.session.layer, 'b-layer', 'the project root is not a selectable customer layer')
   }
 })
 

@@ -81,9 +81,10 @@ try {
   const named = rowText.map(text => expectedLayers.find(name => text.includes(name))).filter(Boolean)
   assert.deepEqual(named, expectedLayers, `ledger layers out of order: ${JSON.stringify(rowText)}`)
   const extras = rowText.filter(text => !expectedLayers.some(name => text.includes(name)))
-  // The instance root is the project row; it is not one of the six layers.
-  assert.ok(extras.length <= 1 && extras.every(text => /项目/.test(text)), `unexpected ledger rows: ${JSON.stringify(extras)}`)
-  pass('layer navigation', `${expectedLayers.join(' / ')}${extras.length ? ` (+ ${extras[0]})` : ''}`)
+  // The project root is not a customer layer: the ledger must show exactly the
+  // six prototype layers.
+  assert.deepEqual(extras, [], `the project root must not appear as a ledger layer: ${JSON.stringify(extras)}`)
+  pass('layer navigation', expectedLayers.join(' / '))
 
   await page.locator('.ledger .node').filter({ hasText: '教学泵房' }).first().click()
   await page.waitForFunction(() => document.querySelector('.hero h1')?.textContent === '教学泵房')

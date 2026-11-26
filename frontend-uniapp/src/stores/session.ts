@@ -86,15 +86,22 @@ export function layerPath(nodeId: string): Node[] {
 }
 
 export function selectLayer(id: string) {
+  // The project root is a container, not a customer layer.
+  if (session.snapshot?.roots.includes(id)) return
   if (session.snapshot?.nodes.some(node => node.id === id)) session.layer = id
 }
 
 async function refreshSnapshot() {
   const snapshot = await request<Snapshot>("/snapshot")
   session.snapshot = snapshot
-  if (!session.layer || !snapshot.nodes.some(node => node.id === session.layer)) {
+  const isRoot = (id: string) => snapshot.roots.includes(id)
+  // The project root is not a customer layer; fall back to the first Site.
+  const firstChild = snapshot.nodes.find(node => node.parent === snapshot.roots[0] && node.type === "site")
+    || snapshot.nodes.find(node => node.parent === snapshot.roots[0])
+  const fallback = firstChild?.id || snapshot.nodes[0]?.id || ""
+  if (!session.layer || !snapshot.nodes.some(node => node.id === session.layer) || isRoot(session.layer)) {
     const restored = projectContext.layer
-    session.layer = snapshot.nodes.some(node => node.id === restored) ? restored : snapshot.roots[0] || snapshot.nodes[0]?.id || ""
+    session.layer = restored && snapshot.nodes.some(node => node.id === restored) && !isRoot(restored) ? restored : fallback
   }
 }
 
