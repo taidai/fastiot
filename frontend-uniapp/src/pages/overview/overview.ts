@@ -1,4 +1,5 @@
 import type { EmsAlarm, HistoryRecord, Node as ApiNode, Point, Snapshot, StateValue } from "../../types/api"
+import type { ScreenDocument } from "../../components/design/screen"
 
 function point(node: ApiNode, type: string): Point | undefined {
   return node.points.find(item => item.type === type && (item.tombstone || 0) % 2 === 0)
@@ -64,6 +65,37 @@ export function screenMetricTarget(screen: OverviewScreen | null, pointID: strin
   const metrics = screen?.blocks?.find(block => block.type === "kpi")?.binding?.metrics || []
   const target = metrics.find(metric => metric.point_id === pointID)?.target
   return typeof target === "string" ? target.trim() : ""
+}
+
+const overviewMainBlocks = new Set(["flow", "children", "members", "deviceData", "devices", "recent"])
+
+// The customer overview keeps the prototype's three columns: the configurable
+// primary visual stays in the middle, while the rail and the daily strip are
+// fixed by the page. Side-slot blocks therefore never render inside the screen
+// body on this page.
+export function overviewScreenDocument(document: ScreenDocument): ScreenDocument {
+  const blocks = document.blocks.filter(block => block.type === "kpi" || overviewMainBlocks.has(block.type))
+  return {
+    ...document,
+    blocks,
+    slots: {
+      top: blocks.some(block => block.type === "kpi") ? ["kpi"] : [],
+      main: (document.slots.main || []).filter(type => overviewMainBlocks.has(type)),
+      side: [],
+    },
+  }
+}
+
+export type OverviewBarPoint = { id: string; label: string; unit: string }
+
+// The prototype's bar strip is the outlet pressure. Keep that meaning when the
+// layer exposes a pressure metric; otherwise follow the configured trend point.
+export function overviewBarPoint(document: ScreenDocument, options: OverviewBarPoint[]): OverviewBarPoint | null {
+  const blocks = document.blocks || []
+  const metrics = (blocks.find(block => block.type === "kpi")?.binding?.metrics || []) as { point_id?: string; label?: string }[]
+  const pressure = metrics.find(metric => metric.point_id && /压力/.test(metric.label || ""))
+  const trendID = blocks.find(block => block.type === "trend")?.binding?.point_id as string | undefined
+  return options.find(option => option.id === (pressure?.point_id || trendID)) || options[0] || null
 }
 
 // The design workbench deep link carries history=1; the overview consumes it

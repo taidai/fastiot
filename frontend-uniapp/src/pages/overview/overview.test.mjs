@@ -1,5 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
 import {
   boundDevicesForLayer,
   buildHourlyTrend,
@@ -12,6 +13,8 @@ import {
   isBusinessLayer,
   isTerminalCommandState,
   metricForPoint,
+  overviewBarPoint,
+  overviewScreenDocument,
   preferredHistoryPoint,
   qualityLabel,
   screenMetricTarget,
@@ -179,4 +182,54 @@ test("24 hour trend keeps real hourly values and explicit missing buckets", () =
   assert.equal(trend.buckets[3].value, undefined)
   assert.equal(trend.hasData, true)
   assert.equal(buildHourlyTrend([], start, end).hasData, false)
+})
+
+const screenDocument = {
+  layer: "room", version: 0, title: "泵房", columns: 2, point_ids: [],
+  slots: { top: ["status", "kpi"], main: ["flow", "devices", "recent"], side: ["alarm", "today", "trend", "summary"] },
+  blocks: [
+    { type: "status", binding: {}, span: 2 },
+    { type: "kpi", binding: { metrics: [{ point_id: "level", label: "水箱液位" }, { point_id: "pressure", label: "出口压力" }] }, span: 2 },
+    { type: "flow", binding: {}, span: 2 },
+    { type: "devices", binding: {}, span: 2 },
+    { type: "recent", binding: {}, span: 2 },
+    { type: "alarm", binding: {}, span: 2 },
+    { type: "today", binding: {}, span: 2 },
+    { type: "trend", binding: { point_id: "level" }, span: 2 },
+    { type: "summary", binding: {}, span: 2 },
+  ],
+}
+
+test("overview keeps metrics in the hero and only the primary visual in the stage", () => {
+  const document = overviewScreenDocument(screenDocument)
+  assert.deepEqual(document.slots, { top: ["kpi"], main: ["flow", "devices", "recent"], side: [] })
+  assert.deepEqual(document.blocks.map(block => block.type), ["kpi", "flow", "devices", "recent"])
+  const withoutKPI = { ...screenDocument, blocks: screenDocument.blocks.filter(block => block.type !== "kpi") }
+  assert.deepEqual(overviewScreenDocument(withoutKPI).slots.top, [])
+})
+
+test("overview bar strip follows outlet pressure before the configured trend", () => {
+  const options = [{ id: "level", label: "水箱液位", unit: "m" }, { id: "pressure", label: "出口压力", unit: "MPa" }]
+  assert.equal(overviewBarPoint(screenDocument, options).id, "pressure")
+  const levelOnly = { ...screenDocument, blocks: screenDocument.blocks.map(block => block.type === "kpi" ? { ...block, binding: { metrics: [{ point_id: "level", label: "水箱液位" }] } } : block) }
+  assert.equal(overviewBarPoint(levelOnly, options).id, "level")
+  assert.equal(overviewBarPoint({ ...screenDocument, blocks: [] }, options).id, "level")
+  assert.equal(overviewBarPoint(screenDocument, []), null)
+})
+
+const liveSource = readFileSync(new URL("./LiveOverview.vue", import.meta.url), "utf8")
+const rendererSource = readFileSync(new URL("../../components/design/ScreenRenderer.vue", import.meta.url), "utf8")
+
+test("overview renders hero, primary visual, daily strip and colophon in that order", () => {
+  assert.match(liveSource, /grid-template-columns:200px minmax\(0,1fr\) 320px/)
+  assert.ok(liveSource.indexOf("<ScreenRenderer") < liveSource.indexOf('class="daily'))
+  assert.ok(liveSource.indexOf('class="daily') < liveSource.indexOf('class="colophon'))
+  assert.ok(rendererSource.indexOf('class="hero') < rendererSource.indexOf('class="screen-body'))
+})
+
+test("overview rail renders pending, today execution and handover in that order", () => {
+  const pending = liveSource.indexOf("待处理")
+  const today = liveSource.indexOf("<TodayExecutionSummary")
+  const handover = liveSource.indexOf("<HandoverPanel")
+  assert.ok(pending > -1 && pending < today && today < handover)
 })

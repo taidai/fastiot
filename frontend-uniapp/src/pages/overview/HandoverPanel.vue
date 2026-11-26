@@ -1,6 +1,6 @@
 <template>
   <section class="handover-section">
-    <view class="card-title summary-title">交接班</view>
+    <view class="card-title summary-title">交接</view>
     <view v-if="record" class="handover-record">
       <view class="handover-note">{{ record.note }}</view>
       <view class="handover-meta">{{ record.actor || '未记录人员' }} · {{ formatTime(record.updated_at) }}</view>
