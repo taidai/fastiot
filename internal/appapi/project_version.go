@@ -64,10 +64,35 @@ type versionSummary struct {
 
 type rollbackResult struct {
 	Version   string `json:"version"`
+	Baseline  string `json:"baseline"`
 	Updated   int    `json:"updated"`
 	Created   int    `json:"created"`
 	Extra     int    `json:"extra"`
 	Preflight string `json:"preflight_status,omitempty"`
+}
+
+type rollbackBlocker struct {
+	Code     string `json:"code"`
+	Scope    string `json:"scope"`
+	NodeID   string `json:"node_id"`
+	NodeType string `json:"node_type"`
+}
+
+func unsupportedRollbackResource(id, typ, scope string) (rollbackBlocker, bool) {
+	code := ""
+	switch typ {
+	case calculationType:
+		code = "calculation_rollback_unsupported"
+	case virtualInputType:
+		code = "virtual_input_rollback_unsupported"
+	}
+	return rollbackBlocker{Code: code, Scope: scope, NodeID: id, NodeType: typ}, code != ""
+}
+
+func writeRollbackBlockers(w http.ResponseWriter, blockers []rollbackBlocker) {
+	writeJSONStatus(w, http.StatusConflict, map[string]any{
+		"error": blockers[0].Code, "blockers": blockers, "retryable": true, "writes": 0,
+	})
 }
 
 type publishRequest struct {
@@ -88,11 +113,22 @@ func (h *Handler) projectDir(siteID string) string {
 
 // snapshotSite 冻结当前工程配置；运行时值与凭据不进入版本。
 func (h *Handler) snapshotSite(identity Identity, siteID, note string) (projectVersion, error) {
-	nodes, err := h.loadReuseSource(siteID)
+	nodes, _, _, err := h.collectProjectPackageNodes(siteID)
 	if err != nil {
 		return projectVersion{}, err
 	}
 	return h.snapshotNodes(identity, siteID, note, nodes)
+}
+
+func rollbackConfigurationPoint(node data.NodeEdge, point data.Point) bool {
+	if reuseRuntimePoints[point.Type] || packageRuntimePoints[point.Type] || packageSecretKey(point.Type) {
+		return false
+	}
+	// 启用状态是当前实例的控制授权，不是可回放的工程定义。
+	if node.Type == "decisionTable" && point.Type == "enabled" {
+		return false
+	}
+	return node.Type != stateMachineType || point.Type != data.PointTypeDisabled
 }
 
 func (h *Handler) snapshotNodes(identity Identity, siteID, note string, nodes []data.NodeEdge) (projectVersion, error) {
@@ -115,7 +151,7 @@ func (h *Handler) snapshotNodes(identity Identity, siteID, note string, nodes []
 		}
 		points := make(data.Points, 0, len(node.Points))
 		for _, p := range node.Points {
-			if reuseRuntimePoints[p.Type] || packageRuntimePoints[p.Type] || packageSecretKey(p.Type) {
+			if !rollbackConfigurationPoint(node, p) {
 				continue
 			}
 			if node.Type == virtualInputType && p.Type == virtualInputDocument {
@@ -323,100 +359,196 @@ func (h *Handler) versionsHandler(w http.ResponseWriter, identity Identity, site
 	writeJSON(w, map[string]any{"versions": summaries})
 }
 
-func (h *Handler) rollbackHandler(w http.ResponseWriter, identity Identity, siteID, versionID string) {
-	h.stateMachineMu.Lock()
-	defer h.stateMachineMu.Unlock()
-	if siteID == "" {
-		writeError(w, http.StatusForbidden, "forbidden")
-		return
+func (h *Handler) validateRollbackNodes(identity Identity, siteID string, nodes []versionNode) error {
+	if len(nodes) == 0 || nodes[0].ID != siteID || nodes[0].Type != NodeTypeSite {
+		return fmt.Errorf("invalid_version_structure")
 	}
-	version, err := h.loadVersion(siteID, versionID)
-	if err != nil || version.SiteID != siteID {
-		writeError(w, http.StatusNotFound, "version_not_found")
-		return
-	}
-	for _, node := range version.Nodes {
-		if node.Type == calculationType {
-			writeError(w, 409, "calculation_rollback_unsupported")
-			return
+	ids := make(map[string]bool, len(nodes))
+	for _, node := range nodes {
+		if node.ID == "" || node.Type == "" || ids[node.ID] {
+			return fmt.Errorf("invalid_version_structure")
 		}
-		if node.Type == virtualInputType {
-			writeError(w, 409, "virtual_input_rollback_unsupported")
-			return
+		ids[node.ID] = true
+	}
+	for _, node := range nodes {
+		if node.Parent == "" || ids[node.Parent] {
+			continue
+		}
+		parents, err := client.GetNodes(h.nc, "all", node.Parent, "", false)
+		if err != nil || len(parents) == 0 {
+			return fmt.Errorf("rollback_parent_missing:%s", node.ID)
 		}
 	}
-	currentNodes, err := h.loadReuseSource(siteID)
+	validationIdentity := identity
+	validationIdentity.Anchors = append([]string{}, identity.Anchors...)
+	for _, node := range nodes {
+		validationIdentity.Anchors = append(validationIdentity.Anchors, node.ID)
+	}
+	pkg, err := h.packageFromNodes(validationIdentity, versionNodeEdges(projectVersion{Nodes: nodes}), nil, nil)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
+		return err
 	}
+	return pkg.validate()
+}
+
+func versionPackageResourcesMatch(version projectVersion, pkg projectPackage) bool {
+	if len(version.Nodes) != len(pkg.Nodes) {
+		return false
+	}
+	refs := make(map[string]string, len(version.Nodes))
+	for i, node := range version.Nodes {
+		refs[node.ID] = fmt.Sprintf("n%d", i+1)
+	}
+	for i, node := range version.Nodes {
+		packaged := pkg.Nodes[i]
+		parent := ""
+		if node.ID != version.Nodes[0].ID {
+			parent = refs[node.Parent]
+		}
+		if packaged.Ref != refs[node.ID] || packaged.Type != node.Type || packaged.Parent != parent {
+			return false
+		}
+	}
+	return true
+}
+
+func validateRollbackPackageDependencies(h *Handler, pkg projectPackage) error {
+	profiles := map[string]bool{}
+	for _, node := range pkg.Nodes {
+		for _, point := range node.Points {
+			if point.Type == PointTypeProfileID && point.Txt() != "" {
+				profiles[point.Txt()] = true
+			}
+			if node.Type == data.NodeTypeModbus && point.Type == unitModelPoint {
+				var model unitModelConfig
+				if json.Unmarshal([]byte(point.Txt()), &model) == nil && model.ProfileID != "" {
+					profiles[model.ProfileID] = true
+				}
+			}
+		}
+	}
+	return h.requireDependencies(pkg.Dependencies, profiles, packageNeedsIndustry(packageNodeEdges(pkg)))
+}
+
+func (h *Handler) validateRollbackVersion(identity Identity, siteID string, version projectVersion) error {
+	if version.Integrity == "" {
+		return fmt.Errorf("version_integrity_missing")
+	}
+	if err := h.validateRollbackNodes(identity, siteID, version.Nodes); err != nil {
+		return err
+	}
+	if version.Package == nil {
+		if version.Deliverable {
+			return fmt.Errorf("version_package_missing")
+		}
+		return nil
+	}
+	var pkg projectPackage
+	pkg = *version.Package
+	if version.Deliverable && (pkg.SourceVersion != version.ID || pkg.SourceFingerprint != version.Fingerprint) {
+		return fmt.Errorf("version_fingerprint_mismatch")
+	}
+	if !version.Deliverable && pkg.SourceVersion != "" && pkg.SourceVersion != version.ID {
+		return fmt.Errorf("version_fingerprint_mismatch")
+	}
+	if engineeringFingerprint(version.Nodes, pkg.Dependencies) != version.Fingerprint {
+		return fmt.Errorf("version_fingerprint_mismatch")
+	}
+	if err := pkg.verifyIntegrity(); err != nil {
+		return err
+	}
+	if err := pkg.validate(); err != nil {
+		return err
+	}
+	if !versionPackageResourcesMatch(version, pkg) {
+		return fmt.Errorf("version_package_mismatch")
+	}
+	return validateRollbackPackageDependencies(h, pkg)
+}
+
+func (h *Handler) prepareRollbackVersion(version projectVersion, currentNodes []data.NodeEdge) (projectVersion, error) {
+	live := make(map[string]data.NodeEdge, len(currentNodes))
 	for _, node := range currentNodes {
-		if node.Type == calculationType {
-			writeError(w, 409, "calculation_rollback_unsupported")
-			return
-		}
-		if node.Type == virtualInputType {
-			writeError(w, 409, "virtual_input_rollback_unsupported")
-			return
-		}
+		live[node.ID] = node
 	}
 	for i, saved := range version.Nodes {
+		current, exists := live[saved.ID]
+		if exists && (current.Type != saved.Type || current.Parent != saved.Parent) {
+			return version, fmt.Errorf("rollback_node_identity_conflict:%s", saved.ID)
+		}
 		if saved.Type != stateMachineType {
 			continue
 		}
-		var live data.NodeEdge
-		for _, node := range currentNodes {
-			if node.ID == saved.ID {
-				live = node
-				break
-			}
-		}
-		prepared, err := h.prepareMachineVersionRestore(saved, live)
+		prepared, err := h.prepareMachineVersionRestore(saved, current)
 		if err != nil {
-			writeError(w, 409, err.Error())
-			return
+			return version, err
 		}
 		version.Nodes[i] = prepared
 	}
-	// 回退前先冻结当前配置，回退失败或需要反悔时有据可查。
-	if current, err := h.snapshotSite(identity, siteID, "回退前自动快照"); err == nil {
-		_ = h.saveVersion(current)
+	return version, nil
+}
+
+func rollbackPoints(node versionNode, current data.NodeEdge, origin string, now time.Time) data.Points {
+	currentPoints := map[string]data.Point{}
+	for _, point := range current.Points {
+		currentPoints[upgradePointKey(point)] = point
 	}
-	existing := make(map[string]bool, len(currentNodes))
+	targetKeys := map[string]bool{}
+	points := make(data.Points, 0, len(node.Points)+len(current.Points))
+	for _, point := range node.Points {
+		if !rollbackConfigurationPoint(data.NodeEdge{Type: node.Type}, point) {
+			continue
+		}
+		key := upgradePointKey(point)
+		targetKeys[key] = true
+		if live, ok := currentPoints[key]; ok && live.Tombstone > point.Tombstone {
+			point.Tombstone = live.Tombstone + 1
+		}
+		// 版本里的点是冻结时的旧时间戳；存储会忽略过期写入，回退必须用当前时间。
+		point.Time = now
+		points = append(points, point)
+	}
+	for _, point := range current.Points {
+		if point.Tombstone%2 != 0 || targetKeys[upgradePointKey(point)] ||
+			!rollbackConfigurationPoint(current, point) {
+			continue
+		}
+		tombstone := data.NewPointString(point.Type, point.Key, "")
+		tombstone.Tombstone = point.Tombstone + 1
+		tombstone.Time, tombstone.Origin = now, origin
+		points = append(points, tombstone)
+	}
+	return points
+}
+
+func (h *Handler) writeRollbackVersion(identity Identity, version projectVersion, currentNodes []data.NodeEdge) (rollbackResult, []string, error) {
+	existing := make(map[string]data.NodeEdge, len(currentNodes))
 	for _, node := range currentNodes {
-		existing[node.ID] = true
+		existing[node.ID] = node
 	}
 	result := rollbackResult{Version: version.ID}
 	restored := make(map[string]bool, len(version.Nodes))
+	created := []string{}
 	for _, node := range version.Nodes {
-		points := make(data.Points, 0, len(node.Points))
-		for _, p := range node.Points {
-			if reuseRuntimePoints[p.Type] || isSecretPoint(p.Type) {
-				continue
-			}
-			// 版本里的点是冻结时的旧时间戳；存储会忽略过期写入，回退必须用当前时间。
-			p.Time = time.Now()
-			points = append(points, p)
-		}
-		if existing[node.ID] {
+		current := existing[node.ID]
+		points := rollbackPoints(node, current, identity.UserID, time.Now())
+		if current.ID != "" {
 			if len(points) > 0 {
-				if err := client.SendPoints(h.nc, client.SubjectNodePoints(node.ID), points, node.Type == stateMachineType); err != nil {
-					writeError(w, http.StatusBadGateway, "restore_failed")
-					return
+				if err := client.SendPoints(h.nc, client.SubjectNodePoints(node.ID), points, true); err != nil {
+					return result, created, err
 				}
 				if node.Type == stateMachineType {
 					expected, _ := points.Text(stateMachineDocumentPoint, "")
 					if h.verifyStateMachine(node.ID, expected) != nil {
-						writeError(w, 503, "state_machine_persistence_unconfirmed")
-						return
+						return result, created, fmt.Errorf("state_machine_persistence_unconfirmed")
 					}
 				}
 			}
 			result.Updated++
 		} else {
+			created = append(created, node.ID)
 			if err := client.SendNode(h.nc, data.NodeEdge{ID: node.ID, Type: node.Type, Parent: node.Parent, Points: points}, identity.UserID); err != nil {
-				writeError(w, http.StatusBadGateway, "restore_failed")
-				return
+				return result, created, err
 			}
 			result.Created++
 		}
@@ -427,20 +559,146 @@ func (h *Handler) rollbackHandler(w http.ResponseWriter, identity Identity, site
 			result.Extra++
 		}
 	}
+	return result, created, nil
+}
+
+func (h *Handler) recoverRollbackBaseline(identity Identity, baseline projectVersion, created []string) error {
+	for i := len(created) - 1; i >= 0; i-- {
+		nodes, err := client.GetNodes(h.nc, "all", created[i], "", false)
+		if err != nil {
+			return err
+		}
+		if len(nodes) > 0 {
+			if err := client.DeleteNode(h.nc, created[i], nodes[0].Parent, identity.UserID); err != nil {
+				return err
+			}
+		}
+	}
+	currentNodes, _, _, err := h.collectProjectPackageNodes(baseline.SiteID)
+	if err != nil {
+		return err
+	}
+	prepared, err := h.prepareRollbackVersion(baseline, currentNodes)
+	if err != nil {
+		return err
+	}
+	_, _, err = h.writeRollbackVersion(identity, prepared, currentNodes)
+	return err
+}
+
+func (h *Handler) auditRollback(identity Identity, object, result, detail string) {
+	if h.audit == nil {
+		return
+	}
+	actor := identity.Email
+	if actor == "" {
+		actor = identity.UserID
+	}
+	_ = h.audit.Append(audit.Record{
+		Time: time.Now(), Actor: actor, Action: projectRollbackAction, Object: object,
+		Detail: detail, Result: result,
+	})
+}
+
+func writeRollbackValidationError(w http.ResponseWriter, err error) {
+	status := http.StatusConflict
+	if err.Error() == "source_forbidden" {
+		status = http.StatusForbidden
+	}
+	writeError(w, status, err.Error())
+}
+
+func (h *Handler) rollbackHandler(w http.ResponseWriter, identity Identity, siteID, versionID string) {
+	h.stateMachineMu.Lock()
+	defer h.stateMachineMu.Unlock()
+	if siteID == "" {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	version, err := h.loadVersion(siteID, versionID)
+	if err != nil {
+		switch err.Error() {
+		case "version_integrity_missing", "version_integrity_mismatch", "version_identity_mismatch":
+			writeError(w, http.StatusConflict, err.Error())
+		default:
+			writeError(w, http.StatusNotFound, "version_not_found")
+		}
+		return
+	}
+	if err := h.validateRollbackVersion(identity, siteID, version); err != nil {
+		writeRollbackValidationError(w, err)
+		return
+	}
+	blockers := []rollbackBlocker{}
+	for _, node := range version.Nodes {
+		if blocker, unsupported := unsupportedRollbackResource(node.ID, node.Type, "version"); unsupported {
+			blockers = append(blockers, blocker)
+		}
+	}
+	currentNodes, _, _, err := h.collectProjectPackageNodes(siteID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	for _, node := range currentNodes {
+		if blocker, unsupported := unsupportedRollbackResource(node.ID, node.Type, "current"); unsupported {
+			blockers = append(blockers, blocker)
+		}
+	}
+	if len(blockers) > 0 {
+		writeRollbackBlockers(w, blockers)
+		return
+	}
+	version, err = h.prepareRollbackVersion(version, currentNodes)
+	if err != nil {
+		writeRollbackValidationError(w, err)
+		return
+	}
+	// 回退前先冻结并回读当前配置；没有可恢复的基线就不能写入。
+	current, err := h.snapshotSite(identity, siteID, "回退前自动快照")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "rollback_baseline_failed")
+		return
+	}
+	if err := h.validateRollbackNodes(identity, siteID, current.Nodes); err != nil {
+		writeJSONStatus(w, http.StatusConflict, map[string]any{
+			"error": "rollback_baseline_unrestorable", "cause": err.Error(), "retryable": true, "writes": 0,
+		})
+		return
+	}
+	if err := h.saveVersion(current); err != nil {
+		writeError(w, http.StatusInternalServerError, "rollback_baseline_failed")
+		return
+	}
+	if _, err := h.loadVersion(siteID, current.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "rollback_baseline_failed")
+		return
+	}
+	result, created, writeErr := h.writeRollbackVersion(identity, version, currentNodes)
+	result.Baseline = current.ID
+	if writeErr != nil {
+		recoveryErr := h.recoverRollbackBaseline(identity, current, created)
+		if recoveryErr != nil {
+			detail := fmt.Sprintf("目标写入失败：%v；基线 %s 恢复未确认：%v", writeErr, current.ID, recoveryErr)
+			h.auditRollback(identity, version.ID, "failed", detail)
+			writeJSONStatus(w, http.StatusServiceUnavailable, map[string]any{
+				"error": "rollback_recovery_failed", "cause": detail, "baseline": current.ID,
+				"recovered": false, "retryable": false,
+			})
+			return
+		}
+		detail := fmt.Sprintf("目标写入失败：%v；已恢复回退前基线 %s", writeErr, current.ID)
+		h.auditRollback(identity, version.ID, "failed", detail)
+		writeJSONStatus(w, http.StatusBadGateway, map[string]any{
+			"error": "rollback_failed_recovered", "cause": detail, "baseline": current.ID,
+			"recovered": true, "retryable": true,
+		})
+		return
+	}
 	if report, err := h.buildPreflight(identity, siteID); err == nil {
 		result.Preflight = report.Status
 	}
-	if h.audit != nil {
-		actor := identity.Email
-		if actor == "" {
-			actor = identity.UserID
-		}
-		_ = h.audit.Append(audit.Record{
-			Time: time.Now(), Actor: actor, Action: projectRollbackAction, Object: version.ID,
-			Detail: fmt.Sprintf("更新 %d、创建 %d、保留多余 %d；历史不回滚", result.Updated, result.Created, result.Extra),
-			Result: "success",
-		})
-	}
+	h.auditRollback(identity, version.ID, "success", fmt.Sprintf("基线 %s；更新 %d、创建 %d、保留多余 %d；历史不回滚", current.ID, result.Updated, result.Created, result.Extra))
 	writeJSON(w, result)
 }
 

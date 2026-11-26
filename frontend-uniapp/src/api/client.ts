@@ -1,8 +1,17 @@
 import { PREVIEW_MODE } from "./source"
 import { ensureProjectContext, projectContext, resetProjectContext } from '../stores/projects'
 
+export type ApiErrorDetails = {
+  error?: string
+  blockers?: { code: string; scope: string; node_id: string; node_type: string }[]
+  baseline?: string
+  cause?: string
+  recovered?: boolean
+  retryable?: boolean
+}
+
 export class ApiError extends Error {
-  constructor(message: string, public status: number, public code = "") {
+  constructor(message: string, public status: number, public code = "", public details?: ApiErrorDetails) {
     super(message)
   }
 }
@@ -34,11 +43,11 @@ export async function request<T>(path: string, method = "GET", body?: unknown, r
     const { resolvePreview } = await import("./preview")
     const preview = await resolvePreview(path, method, body)
     if (preview.handled && (preview.status || 200) < 400) return preview.data as T
-    const payload = preview.data as { error?: string } | undefined
+    const payload = preview.data as ApiErrorDetails | undefined
     const backendCode = payload?.error || ""
     const code = preview.handled ? backendCode || "preview_request_failed" : "preview_unhandled"
     const message = preview.handled ? ERROR_TEXTS[backendCode] || backendCode || `预览操作失败：${method} ${path}` : `预览接口未实现：${method} ${path}`
-    throw new ApiError(message, preview.status || 501, code)
+    throw new ApiError(message, preview.status || 501, code, payload)
   }
   const scoped = path !== '/login' && path !== '/projects' && path !== '/health'
   const entryGeneration = projectContext.generation
@@ -67,7 +76,7 @@ export async function request<T>(path: string, method = "GET", body?: unknown, r
   if (scoped && generation !== projectContext.generation && token === (uni.getStorageSync('fastems-token') || '')) {
     throw new ApiError('项目上下文已改变，请重新读取；已发出的写入请回到原项目核实', 409, 'project_context_changed')
   }
-  let result = response.data as { error?: string }
+  let result = response.data as ApiErrorDetails
   if (responseType === 'arraybuffer' && response.statusCode >= 400) {
     try { result = JSON.parse(new TextDecoder().decode(response.data as ArrayBuffer)) } catch { result = {} }
   }
@@ -76,7 +85,7 @@ export async function request<T>(path: string, method = "GET", body?: unknown, r
       logout()
     }
     const code = result?.error || ""
-    throw new ApiError(ERROR_TEXTS[code] || code || `请求失败（${response.statusCode}）`, response.statusCode, code)
+    throw new ApiError(ERROR_TEXTS[code] || code || `请求失败（${response.statusCode}）`, response.statusCode, code, result)
   }
   if (path !== "/login" && token !== (uni.getStorageSync("fastems-token") || "")) {
     throw new ApiError("会话已改变，请重新读取", 401, "session_changed")
