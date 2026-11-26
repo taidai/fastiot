@@ -140,6 +140,7 @@ import IndustryGate from '../../components/IndustryGate.vue'
 import { industryBlocked } from '../../stores/session'
 import { currentProject } from '../../stores/projects'
 import { computed, nextTick, onMounted, onUnmounted, ref, toRef, watch } from "vue"
+import type { Ref } from "vue"
 import TopBar from "../../components/TopBar.vue"
 import AlarmCenter from "../../components/AlarmCenter.vue"
 import PreflightPanel from "../../components/delivery/PreflightPanel.vue"
@@ -157,9 +158,13 @@ import { canAction, clock, deliveryError, statusText } from "../../components/de
 type Gate = { key: string; title: string; status: string; detail: string; object?: string; next_step?: string; informational?: boolean }
 type ReleaseContent = { nodes: number; points: number; strategies: number; screens: number; dependencies: { kind: string; id: string; version: string }[] }
 type PreflightReport = { id?: string; site?: string; generated_at?: string; operator?: string; status: string; summary: Record<string, number>; gates: Gate[]; fingerprint?: string; content?: ReleaseContent }
-type VersionSummary = { id: string; site_id: string; site_name: string; created_at: string; operator: string; note?: string; preflight_status?: string; nodes: number; deliverable?: boolean; fingerprint?: string }
+type ImportEvidence = {
+  id: string; actor: string; source_package: string; source_version?: string; source_fingerprint: string
+  target: string; time: string; result: string; reason?: string; node_ids: string[]; created: number; channels: number; rules: number
+}
+type VersionSummary = { id: string; site_id: string; site_name: string; created_at: string; operator: string; note?: string; preflight_status?: string; nodes: number; deliverable?: boolean; fingerprint?: string; import?: ImportEvidence }
 type ProjectPackage = { id: string; name: string; source_version?: string; source_fingerprint?: string; point_count?: number; strategy_count?: number; screen_count?: number; dependencies?: { kind: string; id: string; version: string }[]; nodes?: unknown[]; screens?: unknown[]; stripped?: unknown[]; warnings?: string[] }
-type ImportResult = { site_id: string; name: string; created: number; channels: number; rules: number; node_ids?: string[]; version_id?: string; warnings?: string[] }
+type ImportResult = { site_id: string; name: string; created: number; channels: number; rules: number; node_ids?: string[]; version_id?: string; warnings?: string[]; evidence?: ImportEvidence }
 type RollbackResult = { version: string; updated: number; created: number; extra: number; preflight_status?: string }
 
 const current = PREVIEW_MODE ? toRef(deliveryPreviewState, "current") : ref("package")
@@ -184,7 +189,7 @@ const rollbackConfirm = ref("")
 const packageSummary = ref<ProjectPackage | null>(null)
 const packageError = ref("")
 const packageLoading = ref(false)
-const importResult = PREVIEW_MODE ? toRef(deliveryPreviewState, "importResult") : ref<ImportResult | null>(null)
+const importResult: Ref<ImportResult | null> = PREVIEW_MODE ? toRef(deliveryPreviewState, "importResult") : ref<ImportResult | null>(null)
 const importStatus = PREVIEW_MODE ? toRef(deliveryPreviewState, "importStatus") : ref("未导入")
 const busy = ref("")
 const previewPreflightFail = PREVIEW_MODE ? toRef(deliveryPreviewState, "preflightFail") : ref(false)
@@ -246,6 +251,10 @@ watch([sites, () => session.layer], ([list]) => {
   else if (!list.some(node => node.id === selectedSite.value)) selectedSite.value = PREVIEW_MODE ? previewWorkspace.projectId : list[0]?.id || ""
 }, { immediate: true })
 watch(selectedSite, () => {
+  if (!PREVIEW_MODE && importResult.value && importResult.value.site_id !== selectedSite.value) {
+    importResult.value = null
+    importStatus.value = "未导入"
+  }
   gates.value = null; latestPreflight.value = null; versions.value = []
   gateError.value = ""; latestError.value = ""; versionError.value = ""
   publishBlocked.value = false; rollbackConfirm.value = ""; packageSummary.value = null
@@ -311,7 +320,25 @@ async function loadVersions(site: string) {
   if (!site) { versions.value = []; versionError.value = ""; return }
   try {
     const result = await request<{ versions: VersionSummary[] }>(`/projects/versions${queryFor(site)}`)
-    if (site === selectedSite.value) { versions.value = result.versions || []; versionError.value = "" }
+    if (site === selectedSite.value) {
+      versions.value = result.versions || []
+      versionError.value = ""
+      if (!PREVIEW_MODE) {
+        const matching = importResult.value?.version_id
+          ? versions.value.find(version => version.id === importResult.value?.version_id && version.import?.target === site)
+          : versions.value.find(version => version.import?.target === site)
+        if (matching?.import && (!importResult.value || importResult.value.version_id === matching.id)) {
+          const evidence = matching.import
+          const restoring = !importResult.value
+          importResult.value = {
+            site_id: evidence.target, name: matching.site_name,
+            created: evidence.created || evidence.node_ids.length, channels: evidence.channels || 0, rules: evidence.rules || 0,
+            node_ids: evidence.node_ids, version_id: matching.id, evidence,
+          }
+          if (restoring) importStatus.value = `已导入 ${matching.site_name}；不是部署`
+        }
+      }
+    }
   } catch (error) { if (site === selectedSite.value) { versions.value = []; versionError.value = deliveryError(error) } }
 }
 function repairGate(gate: { repair_node?: string; repair_step?: string }) {
@@ -408,6 +435,7 @@ async function importPackage(file: File) {
 }
 async function refreshImportState() {
   await refreshAll()
+  if (importResult.value) await loadVersions(importResult.value.site_id)
 }
 async function exportEvidence() {
   busy.value = "evidence"; message.value = ""

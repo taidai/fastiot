@@ -29,9 +29,37 @@
     <view class="actions">
       <button class="primary" @click="rebindOpen = !rebindOpen">{{ rebindOpen ? "收起现场重绑" : "重绑通道与设备" }}</button>
       <button class="ghost" :disabled="refreshing" @click="refresh">{{ refreshing ? "刷新中…" : "刷新真实状态" }}</button>
+      <button class="ghost" @click="openStrategyRebind">打开策略重绑</button>
     </view>
-    <p class="note">重绑只列出本次导入的通道，可修改真实连接并保存；失败显示后端原因，不自动把重绑标成完成，也不会回退到既有 Site 的设备。</p>
-    <RebindPanel v-if="rebindOpen" :snapshot="snapshot" :node-ids="importedIDList" @saved="refresh" />
+    <p class="note">重绑只列出本次导入的通道，可修改真实连接并保存；失败显示后端原因，不自动把重绑标成完成，也不会回退到既有 Site 的设备。通知接收账号须在设计 → 策略中显式选择当前范围账号，保存和发布会复核权限，不自动启用。</p>
+    <RebindPanel v-if="rebindOpen" :snapshot="snapshot" :node-ids="importedIDList" @saved="rebindSaved" />
+
+    <view v-if="result.evidence?.id" class="evidence-card">
+      <view class="card-title">导入证据（已保存）</view>
+      <view class="row"><span>来源包</span><span class="src">{{ result.evidence.source_package }}</span></view>
+      <view class="row"><span>来源版本</span><span class="src">{{ result.evidence.source_version || "未发布草稿" }}</span></view>
+      <view class="row"><span>来源指纹</span><span class="src">{{ result.evidence.source_fingerprint }}</span></view>
+      <view class="row"><span>目标 / 结果</span><span class="src">{{ result.evidence.target }} · {{ result.evidence.result }}</span></view>
+      <view class="row"><span>操作者 / 时间</span><span class="src">{{ result.evidence.actor }} · {{ clock(result.evidence.time) }}</span></view>
+      <p class="note">这里只证明指定包已导入当前实例，不是部署成功或控制授权。</p>
+    </view>
+
+    <view class="validation-card">
+      <view class="card-title">采集验证</view>
+      <p class="note">L2 验证复用现有接入接口，只核对当前映射的必需点读值、质量与时间；不写设备，不等于部署、投运或控制授权。</p>
+      <view class="actions"><button class="primary" :disabled="!verificationChannel || validating" @click="verifyAcquisition">{{ validating ? "验证中…" : "验证模拟采集" }}</button></view>
+      <view v-if="validationError" class="error" role="alert">{{ validationError }}</view>
+    </view>
+    <view v-if="verificationRecord" class="evidence-card">
+      <view class="card-title">采集验证（已保存）</view>
+      <view class="row"><span>结果</span><span class="src">{{ verificationRecord.level }} · {{ verificationRecord.passed ? "通过" : "未通过" }}<template v-if="!verificationRecord.current"> · 非当前配置</template></span></view>
+      <view class="row"><span>目标</span><span class="src">{{ verificationRecord.device_id }}</span></view>
+      <view class="row"><span>操作者 / 时间</span><span class="src">{{ verificationRecord.actor }} · {{ clock(verificationRecord.at) }}</span></view>
+      <view class="row"><span>Profile / 映射版本</span><span class="src">{{ verificationRecord.profile_version }} · {{ verificationRecord.mapping_version }}</span></view>
+      <view v-if="verificationRecord.reasons?.length" class="row"><span>原因</span><span class="src">{{ verificationRecord.reasons.join("；") }}</span></view>
+      <view v-if="verificationRecord.passed && verificationRecord.current" class="notice" role="status">采集验证通过；证据已保存</view>
+      <view v-else class="notice warn" role="alert">验证未通过或记录已失效；不能据此宣称采集恢复</view>
+    </view>
 
     <view class="runtime-card">
       <view class="card-title">运行状态（真实快照）</view>
@@ -51,10 +79,19 @@ import RebindPanel from "./RebindPanel.vue"
 import { request } from "../../api/client"
 import { PREVIEW_MODE } from "../../api/source"
 import { deliveryPreviewState } from "../../api/preview/delivery"
+import { selectLayer } from "../../stores/session"
 import type { Snapshot, StateValue } from "../../types/api"
 import { clock, deliveryError, statusText } from "./contracts"
 
-type ImportResult = { site_id: string; node_ids?: string[]; version_id?: string }
+type ImportEvidence = {
+  id: string; actor: string; source_package: string; source_version?: string; source_fingerprint: string
+  target: string; time: string; result: string; reason?: string; node_ids: string[]; created: number; channels: number; rules: number
+}
+type ImportResult = { site_id: string; node_ids?: string[]; version_id?: string; evidence?: ImportEvidence }
+type VerificationRecord = {
+  at: string; actor: string; level: string; passed: boolean; reasons?: string[]; basis?: string
+  profile_version?: string; mapping_version?: string; device_id?: string; current: boolean
+}
 type PreflightReport = { site?: string; generated_at?: string; status: string }
 type ChannelQuality = { channel_id?: string; id?: string; node_id?: string }
 const props = defineProps<{
@@ -79,6 +116,10 @@ const rebindOpen = ref(false)
 const refreshing = ref(false)
 const latestPreflight = ref<PreflightReport | null>(null)
 const preflightError = ref("")
+const verificationChannel = ref("")
+const verificationRecord = ref<VerificationRecord | null>(null)
+const validating = ref(false)
+const validationError = ref("")
 
 // Start with the exact created IDs, then include children added later during
 // rebind (new points under an imported channel, or channels under the Site).
@@ -97,6 +138,7 @@ const importedIDs = computed(() => {
   return ids
 })
 const importedIDList = computed(() => [...importedIDs.value])
+const importedChannels = computed(() => (props.snapshot?.nodes || []).filter(node => importedIDs.value.has(node.id) && node.type === "modbus"))
 const runtimeValues = computed(() => props.values.filter(value => importedIDs.value.has(value.point_id)))
 const runtimeChannels = computed(() => (props.quality.channels as ChannelQuality[]).filter(channel => importedIDs.value.has(channel.channel_id || channel.node_id || channel.id || "")))
 const latestSampleTime = computed(() => {
@@ -107,7 +149,50 @@ const preflightText = computed(() => {
   if (preflightError.value) return preflightError.value
   return latestPreflight.value ? `${statusText(latestPreflight.value.status)} · ${clock(latestPreflight.value.generated_at)}` : "当前 Site 尚未保存预检"
 })
-watch(() => props.result.site_id, () => { void loadPreflight() }, { immediate: true })
+watch(() => props.result.site_id, () => {
+  verificationRecord.value = null
+  validationError.value = ""
+  void loadPreflight()
+}, { immediate: true })
+watch(importedChannels, channels => {
+  if (PREVIEW_MODE) return
+  if (!channels.some(channel => channel.id === verificationChannel.value)) verificationChannel.value = channels[0]?.id || ""
+  if (verificationChannel.value) void loadVerification(verificationChannel.value)
+}, { immediate: true })
+async function loadVerification(channelID: string) {
+  if (!channelID || PREVIEW_MODE) return
+  try {
+    const result = await request<{ records?: VerificationRecord[] }>(`/modbus/${encodeURIComponent(channelID)}/units/1/verify`)
+    if (verificationChannel.value === channelID) verificationRecord.value = result.records?.length ? result.records[result.records.length - 1] : null
+  } catch (cause) {
+    if (verificationChannel.value === channelID) validationError.value = deliveryError(cause)
+  }
+}
+function rebindSaved(channelID: string) {
+  verificationChannel.value = channelID
+  verificationRecord.value = null
+  validationError.value = ""
+  emit("refresh")
+  void loadVerification(channelID)
+}
+async function verifyAcquisition() {
+  const channelID = verificationChannel.value
+  if (!channelID || validating.value) return
+  validating.value = true
+  validationError.value = ""
+  try {
+    const result = await request<{ passed: boolean; recorded: boolean; reasons?: string[]; record: VerificationRecord }>(`/modbus/${encodeURIComponent(channelID)}/units/1/verify`, "POST", { level: "L2" })
+    verificationRecord.value = result.record
+    if (!result.recorded) validationError.value = "验证记录保存失败，不能把本次结果当作已保存证据"
+    else if (!result.passed) validationError.value = result.reasons?.join("；") || "采集验证未通过"
+  } catch (cause) {
+    validationError.value = deliveryError(cause)
+  } finally { validating.value = false }
+}
+function openStrategyRebind() {
+  selectLayer(props.result.site_id)
+  uni.navigateTo({ url: "/pages/design/index?step=strategy" })
+}
 async function loadPreflight() {
   preflightError.value = ""
   try {
@@ -124,6 +209,7 @@ function refresh() {
   try {
     emit("refresh")
     void loadPreflight()
+    void loadVerification(verificationChannel.value)
   } finally { refreshing.value = false }
 }
 </script>
@@ -137,12 +223,12 @@ function refresh() {
 .pipeline i { color: var(--faint); font-style: normal; }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 0; }
 .note { margin: 0; color: var(--faint); font-size: 12px; line-height: 1.7; }
-.runtime-card { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,.3); }
+.runtime-card, .evidence-card, .validation-card { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,.3); }
 .card-title { margin-bottom: 6px; font-size: 12px; font-weight: 600; }
 .row { min-width: 0; }
 .src { overflow-wrap: anywhere; }
 @media (max-width: 760px) {
-  .runtime-card .row { align-items: flex-start; flex-direction: column; }
-  .runtime-card .src { max-width: 100%; text-align: left; }
+  .runtime-card .row, .evidence-card .row { align-items: flex-start; flex-direction: column; }
+  .runtime-card .src, .evidence-card .src { max-width: 100%; text-align: left; }
 }
 </style>

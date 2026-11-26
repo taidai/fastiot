@@ -116,6 +116,9 @@ type projectImportEvidence struct {
 	Result            string    `json:"result"`
 	Reason            string    `json:"reason,omitempty"`
 	NodeIDs           []string  `json:"node_ids"`
+	Created           int       `json:"created"`
+	Channels          int       `json:"channels"`
+	Rules             int       `json:"rules"`
 }
 
 type importProjectResult struct {
@@ -1650,6 +1653,7 @@ func (h *Handler) importProjectPackage(identity Identity, pkg projectPackage, pa
 		SourceVersion: pkg.SourceVersion, SourceFingerprint: pkg.SourceFingerprint,
 		Target: result.SiteID, Time: time.Now().UTC(), Result: "success",
 		NodeIDs: append([]string(nil), result.NodeIDs...),
+		Created: result.Created, Channels: result.Channels, Rules: result.Rules,
 	}
 	// 导入即成为可版本化的项目：用既有项目版本机制冻结基线，便于复用与回退。
 	if version, err := h.snapshotSite(identity, result.SiteID, "由项目包导入"); err == nil {
